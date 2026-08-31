@@ -1,0 +1,509 @@
+"""
+Fiş Aktarım Aracı — bağımsız server
+Banka dökümü / Fatura / Çek listesi -> muhasebe fişi (Fiş Aktarım Şablonu).
+Her firma için: mizan + TEK kural dosyası (kural.xlsx) + belgeler + öğrenme.
+
+Klasör yapısı:
+  data/<firma>/
+    mizan.xlsx
+    kural.xlsx                      <- SEZGIN gibi tek dosya (banka/fatura/çek ortak)
+                                       Sayfalar: Talimatlar, Hesap Kodu Eşleştirme,
+                                                 Fiş Aktarım Şablonu (kümülatif)
+    banka/  fatura/  cek/          <- gelen belgeler (excel/pdf/resim)
+    banka_ogrenme.json  ...        <- öğrenilen eşleştirmeler
+    cikti/                          <- üretilen fiş aktarım dosyaları
+    meta.json
+
+  Eski kurulumlarla uyum: kural.xlsx yoksa kural_<tip>.xlsx'e düşer.
+"""
+import io, json, os, re, shutil, unicodedata
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar
+from app.belge_oku import belge_oku
+from app import isleyici
+
+DATA_DIR = Path(os.environ.get("FIS_DATA", "/data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+app = FastAPI(title="Fiş Aktarım Aracı")
+
+TIPLER = ("banka", "fatura", "cek", "fis")
+
+
+def fis_listesi_yolu(d: Path, tip: str) -> Path:
+    """Firma+tip için geçmiş fiş listesi Excel'inin yolu.
+    Öncelik: <tip>/_gecmis.xlsx (yeni yapı).
+    Geriye dönük: kural.xlsx veya kural_<tip>.xlsx varsa oraya düş."""
+    yeni = d / tip / "_gecmis.xlsx"
+    if yeni.exists():
+        return yeni
+    # geriye dönük
+    for eski in [d / "kural.xlsx", d / f"kural_{tip}.xlsx"]:
+        if eski.exists():
+            return eski
+    return yeni  # yoksa yeni yol döndür
+
+
+# Eski kod uyumluluğu için alias
+def kural_yolu(d: Path, tip: str = "banka") -> Path:
+    return fis_listesi_yolu(d, tip)
+
+
+def gecmis_fis_pdf_yolu(d: Path) -> Path:
+    """Firma için geçmiş fiş listesinin PDF yolu."""
+    return d / "gecmis_fisler.pdf"
+
+
+# ----------------------------------------------------------------- yardımcı
+def slugify(s: str) -> str:
+    s = norm(s).lower().replace(" ", "_")
+    return re.sub(r"[^a-z0-9_]", "", s) or "firma"
+
+
+def firma_dir(kod: str) -> Path:
+    d = DATA_DIR / kod
+    if not d.exists():
+        raise HTTPException(404, "Firma yok")
+    return d
+
+
+def _read_json(p: Path, default):
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+    return default
+
+
+def _write_json(p: Path, data):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ----------------------------------------------------------------- firma yönetimi
+@app.get("/api/firmalar")
+def firmalar():
+    out = []
+    for d in sorted(DATA_DIR.iterdir()):
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        meta = _read_json(d / "meta.json", {})
+        # Her tip için fiş listesi var mı
+        fis_listesi_var = {t: (d / t / "_gecmis.xlsx").exists() for t in TIPLER}
+        # Geriye dönük: eski kural dosyaları varsa onlar da fiş listesi sayılır
+        eski_kural_var = (d / "kural.xlsx").exists() or any((d / f"kural_{t}.xlsx").exists() for t in TIPLER)
+        out.append({
+            "kod": d.name,
+            "ad": meta.get("ad", d.name),
+            "mizan_var": (d / "mizan.xlsx").exists(),
+            "gecmis_fis_pdf_var": gecmis_fis_pdf_yolu(d).exists(),
+            "fis_listesi_var": fis_listesi_var,
+            "kural_var": eski_kural_var or any(fis_listesi_var.values()),
+        })
+    return out
+
+
+@app.post("/api/firma")
+def firma_olustur(body: dict):
+    ad = (body.get("ad") or "").strip()
+    if not ad:
+        raise HTTPException(400, "Firma adı gerekli")
+    kod = slugify(ad)
+    d = DATA_DIR / kod
+    d.mkdir(parents=True, exist_ok=True)
+    for t in TIPLER:
+        (d / t).mkdir(exist_ok=True)
+    (d / "cikti").mkdir(exist_ok=True)
+    meta = _read_json(d / "meta.json", {})
+    meta["ad"] = ad
+    meta.setdefault("olusturma", datetime.now().isoformat(timespec="seconds"))
+    _write_json(d / "meta.json", meta)
+    return {"kod": kod, "ad": ad}
+
+
+# ----------------------------------------------------------------- mizan & kural yükleme
+@app.post("/api/firma/{kod}/mizan")
+async def mizan_yukle(kod: str, file: UploadFile = File(...)):
+    d = firma_dir(kod)
+    data = await file.read()
+    (d / "mizan.xlsx").write_bytes(data)
+    hes = mizan_hesaplar(d / "mizan.xlsx")
+    return {"ok": True, "hesap_sayisi": len(hes)}
+
+
+@app.post("/api/firma/{kod}/fis-listesi/{tip}")
+async def fis_listesi_yukle(kod: str, tip: str, file: UploadFile = File(...)):
+    """Firma+tip için Fiş Aktarım Şablonu (veya Yevmiye Defteri) formatında
+    Excel yüklenir. Bu Excel; geçmiş fiş no'ları, hesap eşleştirmelerini
+    ve öğrenmeyi sağlar. Yer: <firma>/<tip>/_gecmis.xlsx
+
+    Parse arka planda başlar; kullanıcı beklemez. Sonuç ilk 'İşle' tıklamasında
+    hazır cache'ten alınır (büyük yevmiye defterleri için 3+ sn beklemek yerine
+    yükleme anında ~100 ms).
+    """
+    if tip not in TIPLER:
+        raise HTTPException(400, "Geçersiz tip")
+    d = firma_dir(kod)
+    (d / tip).mkdir(exist_ok=True)
+    data = await file.read()
+    hedef = d / tip / "_gecmis.xlsx"
+    hedef.write_bytes(data)
+    # eski cache'i sil (yeni dosya için)
+    cache_path = hedef.with_suffix(hedef.suffix + ".cache.json")
+    if cache_path.exists():
+        try: cache_path.unlink()
+        except Exception: pass
+    # eski kural dosyalarını arşivle
+    if (d / "kural.xlsx").exists():
+        (d / "kural.xlsx").rename(d / "kural.xlsx.eski")
+    for t in TIPLER:
+        eski = d / f"kural_{t}.xlsx"
+        if eski.exists():
+            eski.rename(d / f"kural_{t}.xlsx.eski")
+
+    # Parse'ı arka plana at — kullanıcı beklemez
+    import threading
+    from app.kurallar import gecmis_fisler_oku
+    def _arka_plan_parse():
+        try:
+            gecmis_fisler_oku(hedef)  # cache'i yazar
+        except Exception as e:
+            print(f"[fiş listesi arka plan parse hatası] {hedef}: {e}")
+    threading.Thread(target=_arka_plan_parse, daemon=True).start()
+
+    return {"ok": True, "gecmis_satir": None, "son_fis_no": None,
+            "ogrenilen_eslesme": None,
+            "durum": "arka planda işleniyor",
+            "boyut_kb": round(len(data) / 1024, 1)}
+
+
+# Geriye dönük: eski /kural ucunu da destekle
+@app.post("/api/firma/{kod}/kural")
+async def kural_yukle_eski(kod: str, file: UploadFile = File(...)):
+    """[ESKİ] Kural yüklemesi. Yeni akış /fis-listesi/{tip} kullanmalı.
+    Bu uç eski istemciler için tutuldu; yüklenen dosyayı banka+fatura+cek için
+    _gecmis.xlsx olarak kopyalar."""
+    d = firma_dir(kod)
+    data = await file.read()
+    for t in TIPLER:
+        (d / t).mkdir(exist_ok=True)
+        (d / t / "_gecmis.xlsx").write_bytes(data)
+    from app.kurallar import gecmis_fisler_oku
+    g = gecmis_fisler_oku(d / "banka" / "_gecmis.xlsx")
+    return {"ok": True, "hesap_kurali": 0,
+            "talimat": 0,
+            "gecmis_satir": len(g.get("satirlar", []))}
+
+
+@app.post("/api/firma/{kod}/kural/{tip}")
+async def kural_yukle_tipli_eski(kod: str, tip: str, file: UploadFile = File(...)):
+    """[ESKİ] Tip'li kural yüklemesi; artık /fis-listesi/{tip}'e yönleniyor."""
+    return await fis_listesi_yukle(kod, tip, file)
+
+
+@app.post("/api/firma/{kod}/gecmis-fis")
+async def gecmis_fis_yukle(kod: str, file: UploadFile = File(...)):
+    """Geçmiş fiş listesini PDF olarak yükler. Bu PDF fatura eşleştirmesinin ana referansıdır."""
+    d = firma_dir(kod)
+    fname = (file.filename or "").lower()
+    if not fname.endswith(".pdf"):
+        raise HTTPException(400, "Geçmiş fiş listesi PDF olmalı")
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "PDF boş")
+    hedef = gecmis_fis_pdf_yolu(d)
+    hedef.write_bytes(data)
+    from app.kurallar import gecmis_fisler_oku
+    g = gecmis_fisler_oku(hedef)
+    return {"ok": True, "dosya": hedef.name, "fis_sayisi": len(set(r.get("fisno") for r in g.get("satirlar", []))),
+            "satir_sayisi": len(g.get("satirlar", [])), "son_fis_no": g.get("son_fis_no", 0)}
+
+
+@app.delete("/api/firma/{kod}/gecmis-fis")
+def gecmis_fis_sil(kod: str):
+    d = firma_dir(kod)
+    p = gecmis_fis_pdf_yolu(d)
+    if p.exists():
+        p.unlink()
+    return {"ok": True}
+
+
+@app.get("/api/firma/{kod}/durum")
+def firma_durum(kod: str):
+    from app.kurallar import gecmis_fisler_oku
+    d = firma_dir(kod)
+    hes = mizan_hesaplar(d / "mizan.xlsx") if (d / "mizan.xlsx").exists() else []
+    out = {"mizan_hesap": len(hes), "gecmis_fis_pdf": gecmis_fis_pdf_yolu(d).exists(), "tipler": {}}
+    for t in TIPLER:
+        yol = fis_listesi_yolu(d, t)
+        g = gecmis_fisler_oku(yol) if yol.exists() else {"satirlar": [], "son_fis_no": 0, "eslesmeler": {}}
+        # belgeler: _gecmis.xlsx dışındaki dosyalar
+        belgeler = []
+        if (d / t).exists():
+            for f in (d / t).iterdir():
+                if f.is_file() and not f.name.startswith("_"):
+                    belgeler.append(f.name)
+        og = _read_json(d / f"{t}_ogrenme.json", {})
+        out["tipler"][t] = {
+            "fis_listesi_var": yol.exists(),
+            "gecmis_satir": len(g.get("satirlar", [])),
+            "son_fis_no": g.get("son_fis_no", 0),
+            "belge_sayisi": len(belgeler),
+            "belgeler": belgeler,
+            "ogrenilen": len(og),
+        }
+    return out
+
+
+# ----------------------------------------------------------------- belge yükleme
+@app.post("/api/firma/{kod}/belge/{tip}")
+async def belge_yukle(kod: str, tip: str, file: UploadFile = File(...)):
+    if tip not in TIPLER:
+        raise HTTPException(400, "Geçersiz tip")
+    d = firma_dir(kod)
+    hedef = d / tip
+    hedef.mkdir(exist_ok=True)
+    fname = re.sub(r"[^\w.\- ]", "_", file.filename or "belge")
+    (hedef / fname).write_bytes(await file.read())
+    return {"ok": True, "dosya": fname}
+
+
+@app.delete("/api/firma/{kod}/belge/{tip}/{fname}")
+def belge_sil(kod: str, tip: str, fname: str):
+    if tip not in TIPLER or ".." in fname or "/" in fname or "\\" in fname:
+        raise HTTPException(400, "Geçersiz")
+    d = firma_dir(kod)
+    p = d / tip / fname
+    if not p.exists():
+        raise HTTPException(404, "Yok")
+    p.unlink()
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------- işleme
+@app.get("/api/firma/{kod}/onerilen-fisno/{tip}")
+def onerilen_fisno(kod: str, tip: str):
+    """Geçmiş fişlerdeki son numaradan +1 önerir."""
+    if tip not in TIPLER:
+        raise HTTPException(400, "Geçersiz tip")
+    d = firma_dir(kod)
+    from app.kurallar import gecmis_fisler_oku
+    g = gecmis_fisler_oku(gecmis_fis_pdf_yolu(d) if gecmis_fis_pdf_yolu(d).exists() else kural_yolu(d, tip))
+    son = g.get("son_fis_no", 0)
+    return {"son_fis_no": son, "onerilen": son + 1, "gecmis_satir": len(g.get("satirlar", []))}
+
+
+class IsleBody(BaseModel):
+    firma_kod: str
+    tip: str
+    dosyalar: list[str] = []       # işlenecek belgeler (boşsa tümü)
+    fis_baslangic: int = 0         # 0 ise otomatik (son+1)
+    gecmis_ekle: bool = False      # çıktıya geçmiş fişleri de kat
+    yon: str = "alis"              # fatura için: alis | satis
+
+
+@app.post("/api/firma/{kod}/isle/{tip}")
+def isle(kod: str, tip: str, body: IsleBody):
+    """Seçili belgeleri okuyup fiş satırları üretir (önizleme için)."""
+    if tip not in TIPLER:
+        raise HTTPException(400, "Geçersiz tip")
+    d = firma_dir(kod)
+    km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", gecmis_fis_pdf_yolu(d))
+
+    dosyalar = body.dosyalar or [f.name for f in (d / tip).iterdir()
+                                   if f.is_file() and not f.name.startswith("_")]
+    tum_ham = []
+    for fn in dosyalar:
+        p = d / tip / fn
+        if not p.exists():
+            continue
+        okundu = belge_oku(p, fn)
+        tum_ham.append({"dosya": fn, **okundu})
+
+    # fiş başlangıç: 0/negatifse otomatik (geçmiş son+1)
+    fis_bas = body.fis_baslangic
+    if fis_bas <= 0:
+        fis_bas = km.son_fis_no() + 1
+
+    # tip'e göre işleyiciye ver
+    fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon)
+
+    # geçmiş fişleri çıktıya kat (istenirse)
+    gecmis_satir = []
+    if body.gecmis_ekle:
+        for gs in km.gecmis.get("satirlar", []):
+            gecmis_satir.append({
+                "fisno": gs["fisno"], "fis_tarih": "", "fis_aciklama": gs.get("detay", ""),
+                "hesap": gs["hesap"], "evrak_no": "", "evrak_tarih": "",
+                "detay": gs.get("detay", ""), "borc": gs["borc"], "alacak": gs["alacak"],
+                "belge_turu": "MF", "kaynak": "gecmis_kayit",
+            })
+    tum_satir = gecmis_satir + fisler
+
+    tb = round(sum(f["borc"] for f in tum_satir), 2)
+    ta = round(sum(f["alacak"] for f in tum_satir), 2)
+    return {
+        "satirlar": tum_satir,
+        "yeni_satir_sayisi": len(fisler),
+        "gecmis_satir_sayisi": len(gecmis_satir),
+        "toplam_borc": tb, "toplam_alacak": ta, "dengeli": abs(tb - ta) < 0.01,
+        "uyarilar": uyarilar,
+        "kullanilan_fis_bas": fis_bas,
+        "okunan_belgeler": [{"dosya": h["dosya"], "tur": h["tur"], "uyari": h.get("uyari", "")}
+                            for h in tum_ham],
+    }
+
+
+class FisIsleBody(BaseModel):
+    """Fiş sekmesi (elle giriş) için istek gövdesi."""
+    firma_kod: str
+    kalemler: list[dict] = []           # elle girilen kalemler
+    karsi_hesap: str = "198.01.001"     # 198 karşı hesap
+    fis_baslangic: int = 0              # 0 = otomatik
+
+
+@app.post("/api/firma/{kod}/isle-fis")
+def isle_fis_uc(kod: str, body: FisIsleBody):
+    """Fiş sekmesi: elle girilen kalemler → muhasebe fişi satırları (önizleme)."""
+    d = firma_dir(kod)
+    tip = "fis"
+    km = KuralMotoru(d / "mizan.xlsx", None, d / f"{tip}_ogrenme.json",
+                     gecmis_fis_pdf_yolu(d) if gecmis_fis_pdf_yolu(d).exists() else fis_listesi_yolu(d, tip))
+    fis_bas = body.fis_baslangic if body.fis_baslangic > 0 else (km.son_fis_no() + 1)
+    fisler, uyarilar = isleyici.isle_fis(body.kalemler, km, fis_bas, karsi_hesap=body.karsi_hesap)
+    tb = round(sum(f["borc"] for f in fisler), 2)
+    ta = round(sum(f["alacak"] for f in fisler), 2)
+    return {
+        "satirlar": fisler,
+        "toplam_borc": tb, "toplam_alacak": ta, "dengeli": abs(tb - ta) < 0.01,
+        "uyarilar": uyarilar,
+        "kullanilan_fis_bas": fis_bas,
+    }
+
+
+@app.get("/api/firma/{kod}/karsi-hesaplar")
+def karsi_hesaplar(kod: str):
+    """Fiş sekmesi için 198 karşı hesap listesi + varsayılan (ilk alt kırılım)."""
+    d = firma_dir(kod)
+    if not (d / "mizan.xlsx").exists():
+        return {"h198": [], "varsayilan198": ""}
+    hes = mizan_hesaplar(d / "mizan.xlsx")
+    h198 = [{"kod": k, "ad": a} for k, a in hes if k.startswith("198")]
+    # varsayılan: en detaylı ilk 198 alt hesabı
+    altlar = [h for h in h198 if h["kod"].count(".") >= 2]
+    if not altlar:
+        altlar = [h for h in h198 if "." in h["kod"]]
+    varsayilan = altlar[0]["kod"] if altlar else (h198[0]["kod"] if h198 else "")
+    return {"h198": h198, "varsayilan198": varsayilan}
+
+
+class OgretBody(BaseModel):
+    firma_kod: str
+    tip: str
+    aciklama: str
+    kod: str
+
+
+@app.post("/api/firma/{kod}/ogret/{tip}")
+def ogret(kod: str, tip: str, body: OgretBody):
+    if tip not in TIPLER:
+        raise HTTPException(400, "Geçersiz tip")
+    d = firma_dir(kod)
+    km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", gecmis_fis_pdf_yolu(d))
+    km.ogret(body.aciklama, body.kod)
+    return {"ok": True, "ogrenilen": len(km.ogrenme)}
+
+
+@app.get("/api/firma/{kod}/hesaplar")
+def hesaplar(kod: str):
+    """Firmanın tüm hesapları (eşleştirme kutusu için)."""
+    d = firma_dir(kod)
+    hes = mizan_hesaplar(d / "mizan.xlsx") if (d / "mizan.xlsx").exists() else []
+    # Kural dosyası hesapları yalnızca banka/çek için kullanılır.
+    kod_ad = {k: a for k, a in hes}
+    for t in ("banka", "cek"):
+        kp = kural_yolu(d, t)
+        if kp.exists():
+            for h in kural_excel_oku(kp)["hesaplar"]:
+                kod_ad.setdefault(h["kod"], h["ad"])
+    return {"hesaplar": [{"kod": k, "ad": a} for k, a in sorted(kod_ad.items())]}
+
+
+class ExportBody(BaseModel):
+    firma_kod: str
+    tip: str
+    satirlar: list[dict]           # (düzenlenmiş) fiş satırları
+    donem: str = ""
+
+
+@app.post("/api/firma/{kod}/export")
+def export(kod: str, body: ExportBody, format: str = "xlsx"):
+    d = firma_dir(kod)
+    if not body.satirlar:
+        raise HTTPException(400, "Satır yok")
+    if format == "xml":
+        data = isleyici.fis_xml(body.satirlar)
+        fname = f"FIS_{body.tip}_{datetime.now():%Y%m%d_%H%M%S}.xml"
+        (d / "cikti" / fname).write_bytes(data)
+        return StreamingResponse(io.BytesIO(data), media_type="application/xml",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    bio = isleyici.fis_xlsx(body.satirlar)
+    fname = f"FIS_{body.tip}_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    (d / "cikti" / fname).write_bytes(bio.getvalue()); bio.seek(0)
+
+    # Banka/çek tarafında mevcut kural dosyasına kümülatif aktarım devam eder.
+    # Fatura tarafında kural listesi yoktur; öğrenme fatura_ogrenme.json üzerinden yürür.
+    if body.tip != "fatura":
+        try:
+            from app.kurallar import kural_dosyasina_fis_ekle
+            yeni = [r for r in body.satirlar if r.get("kaynak") != "gecmis_kayit"]
+            if yeni:
+                kural_dos = kural_yolu(d, body.tip)
+                if kural_dos.exists():
+                    kural_dosyasina_fis_ekle(kural_dos, yeni)
+        except Exception as e:
+            print(f"[uyarı] kural.xlsx'e ekleme başarısız: {e}")
+
+    return StreamingResponse(bio,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@app.get("/api/firma/{kod}/ciktilar")
+def ciktilar(kod: str):
+    d = firma_dir(kod)
+    cd = d / "cikti"
+    if not cd.exists():
+        return []
+    out = []
+    for f in cd.iterdir():
+        if f.suffix in (".xlsx", ".xml"):
+            st = f.stat()
+            out.append({"dosya": f.name,
+                        "tarih": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+                        "boyut": st.st_size})
+    out.sort(key=lambda x: x["tarih"], reverse=True)
+    return out
+
+
+@app.get("/api/firma/{kod}/cikti/{fname}")
+def cikti_indir(kod: str, fname: str):
+    d = firma_dir(kod)
+    if ".." in fname or "/" in fname or "\\" in fname:
+        raise HTTPException(400, "Geçersiz")
+    p = d / "cikti" / fname
+    if not p.exists():
+        raise HTTPException(404, "Yok")
+    return FileResponse(p, filename=fname)
+
+
+# ----------------------------------------------------------------- statik
+app.mount("/", StaticFiles(directory=str(Path(__file__).parent / "static"), html=True), name="static")

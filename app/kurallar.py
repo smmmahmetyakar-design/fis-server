@@ -1,0 +1,738 @@
+"""
+Kural motoru — firma bazlı hesap eşleştirme.
+İki kaynak:
+  1) Firma kural Excel'i (SEZGIN_OZBAY gibi): "Hesap Kodu Eşleştirme" + "Talimatlar"
+  2) Öğrenilen JSON (data/<firma>/<tip>_ogrenme.json): anahtar kelime -> hesap kodu
+
+Belge işleme sırasında bir açıklama/satır için hesap kodu ararken:
+  banka/çek: öğrenilen eşleşmeler -> geçmiş fişler -> Excel kuralları -> tahmin.
+  fatura: cari/gider/gelir/KDV için doğrudan geçmiş fişler referans alınır;
+           geçmişte kayıt yoksa mizan varsayılanları kullanılır.
+"""
+import json, re, unicodedata
+from pathlib import Path
+import openpyxl
+
+# Bellek cache: {kaynak_str: (mtime, sonuc_dict)}
+# Fiş listesi Excel'i her istekte yeniden diskten JSON okumasın diye RAM'de tutar.
+_bellek_cache = {}
+
+
+def norm(s: str) -> str:
+    """Türkçe duyarsız normalize: büyük harf, aksan yok, sadece harf/rakam/boşluk."""
+    if s is None:
+        return ""
+    s = str(s)
+    repl = {"İ": "I", "I": "I", "ı": "I", "Ş": "S", "ş": "S", "Ğ": "G", "ğ": "G",
+            "Ü": "U", "ü": "U", "Ö": "O", "ö": "O", "Ç": "C", "ç": "C"}
+    for a, b in repl.items():
+        s = s.replace(a, b)
+    s = s.upper()
+    s = re.sub(r"[^A-Z0-9 ]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+STOP = {"ANONIM", "SIRKETI", "LIMITED", "LTD", "STI", "SAN", "TIC", "VE", "A", "S",
+        "AS", "TICARET", "SANAYI", "MItedh", "HIZM", "HIZMETLERI", "MALI", "STI."}
+
+
+def kelimeler(s: str) -> set:
+    return {w for w in norm(s).split() if w not in STOP and len(w) > 2}
+
+
+# ----------------------------------------------------------------- mizan
+_mizan_bellek_cache = {}
+
+def mizan_hesaplar(mizan_path: Path):
+    """Mizandaki tüm hesapları [(kod, ad)] döndürür. Başlık satırını otomatik bulur.
+    Bellek cache: dosya mtime değişmezse Excel yeniden okunmaz (~1 ms yerine ~1500 ms)."""
+    if not mizan_path.exists():
+        return []
+    kaynak_str = str(mizan_path)
+    mtime = mizan_path.stat().st_mtime
+    if kaynak_str in _mizan_bellek_cache:
+        cached_mtime, cached_out = _mizan_bellek_cache[kaynak_str]
+        if cached_mtime == mtime:
+            return cached_out
+    wb = openpyxl.load_workbook(mizan_path, data_only=True)
+    ws = wb[wb.sheetnames[0]]
+    out = []
+    for r in range(1, ws.max_row + 1):
+        k = ws.cell(r, 1).value
+        a = ws.cell(r, 2).value
+        if k is None or a is None:
+            continue
+        k = str(k).strip(); a = str(a).strip()
+        # hesap kodu deseni: rakam ve nokta
+        if re.match(r"^\d{3}(\.\d+)*$", k):
+            out.append((k, a))
+    _mizan_bellek_cache[kaynak_str] = (mtime, out)
+    return out
+
+
+# ----------------------------------------------------------------- kural excel
+def kural_excel_oku(kural_path: Path | None):
+    """
+    Firma kural Excel'inden hesap eşleştirme kurallarını okur.
+    "Hesap Kodu Eşleştirme" sayfası: Kod | Ad | İşlem Türü/Kullanım
+    Döndürür: {
+      "hesaplar": [{kod, ad, kullanim}],
+      "anahtar_kod": {anahtar_kelime: kod},   # kullanım açıklamasından türetilir
+      "talimatlar": [ham metin satırları],
+    }
+    """
+    sonuc = {"hesaplar": [], "anahtar_kod": {}, "talimatlar": []}
+    if not kural_path or not kural_path.exists():
+        return sonuc
+    wb = openpyxl.load_workbook(kural_path, data_only=True)
+
+    # hesap kodu eşleştirme sayfası
+    for sn in wb.sheetnames:
+        if "eslest" in norm(sn).lower() or "hesap kodu" in norm(sn).lower():
+            ws = wb[sn]
+            for r in range(1, ws.max_row + 1):
+                kod = ws.cell(r, 1).value
+                ad = ws.cell(r, 2).value
+                kull = ws.cell(r, 3).value
+                if kod and re.match(r"^\d{3}(\.\d+)*$", str(kod).strip()):
+                    sonuc["hesaplar"].append({
+                        "kod": str(kod).strip(),
+                        "ad": str(ad).strip() if ad else "",
+                        "kullanim": str(kull).strip() if kull else "",
+                    })
+
+    # talimatlar sayfası (ham metin — ileride kural motoru için referans)
+    for sn in wb.sheetnames:
+        if "talimat" in norm(sn).lower():
+            ws = wb[sn]
+            for r in range(1, ws.max_row + 1):
+                a = ws.cell(r, 1).value
+                b = ws.cell(r, 2).value
+                if a or b:
+                    sonuc["talimatlar"].append({
+                        "konu": str(a).strip() if a else "",
+                        "aciklama": str(b).strip() if b else "",
+                    })
+
+    return sonuc
+
+
+# ----------------------------------------------------------------- geçmiş fişler
+
+def _tr_num(s):
+    """Türkçe muhasebe tutarını float'a çevirir."""
+    if s is None:
+        return 0.0
+    s = str(s).strip().replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def gecmis_fisler_oku_pdf(pdf_path: Path):
+    """
+    Geçmiş fiş listesini PDF'den okur.
+    Beklenen rapor düzeni Logo/Luca tarzı fiş listesidir:
+      Fiş No / Tarih / Belge Düzenleme Nedeni
+      HESAP KODU ... BORÇ ALACAK
+      hesap kodu ... borç alacak
+    Metin tabanlı PDF tercih edilir; taranmış PDF için OCR fallback kullanılır.
+    """
+    sonuc = {"satirlar": [], "son_fis_no": 0, "eslesmeler": {}}
+    if not pdf_path or not pdf_path.exists():
+        return sonuc
+
+    try:
+        import pdfplumber
+    except Exception:
+        return sonuc
+
+    lines = []
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages:
+                txt = page.extract_text() or ""
+                if txt.strip():
+                    lines.extend(txt.splitlines())
+    except Exception:
+        return sonuc
+
+    # Taranmış PDF ise mevcut belge okuyucusunun OCR yolunu kullan.
+    if not lines:
+        try:
+            from app.belge_oku import pdf_ocr
+            raw = pdf_ocr(pdf_path).get("ham_metin", "")
+            lines = raw.splitlines()
+        except Exception:
+            return sonuc
+
+    current_fis = ""
+    current_date = ""
+    current_aciklama = ""
+    max_fis = 0
+
+    date_re = re.compile(r"\b\d{2}/\d{2}/\d{4}\b")
+    fis_re = re.compile(r"Fiş\s*No\s*:\s*(\S+)", re.I)
+    neden_re = re.compile(r"Belge Düzenleme Nedeni\s*:\s*(.*)$", re.I)
+    row_re = re.compile(
+        r"^(\d{3}(?:\.\d+)+)\s+(.+?)\s+(\d{2}/\d{2}/\d{4})\s+(.*?)\s+"
+        r"([\d.]+,\d{2})\s+([\d.]+,\d{2})\s*$"
+    )
+
+    # Bazı PDF'lerde hesap adı/açıklama satır sonundan taşar. Hesap koduyla başlayan
+    # satırları biriktirip tutarlarla biten mantıksal satıra dönüştürüyoruz.
+    logical = []
+    buf = ""
+    for raw in lines:
+        line = " ".join(str(raw).split()).strip()
+        if not line:
+            continue
+        is_new_account = bool(re.match(r"^\d{3}(?:\.\d+)+\s+", line))
+        is_control = (bool(fis_re.search(line)) or line.upper().startswith("TARİH") or
+                      "HESAP KODU" in norm(line) or line.startswith("FİŞ TOPLAM") or
+                      line.startswith("FIS TOPLAM") or line.startswith("DÜZENLEYEN") or
+                      line.startswith("DUZENLEYEN"))
+        if is_new_account:
+            if buf:
+                logical.append(buf)
+            buf = line
+        elif buf and not is_control:
+            buf += " " + line
+        else:
+            if buf:
+                logical.append(buf); buf = ""
+            logical.append(line)
+    if buf:
+        logical.append(buf)
+
+    for line in logical:
+        m = fis_re.search(line)
+        if m:
+            current_fis = m.group(1).strip()
+            mm = re.match(r"0*(\d+)", current_fis)
+            if mm:
+                max_fis = max(max_fis, int(mm.group(1)))
+            continue
+
+        if line.upper().startswith("TARİH"):
+            md = date_re.search(line)
+            if md:
+                current_date = md.group(0)
+            mn = neden_re.search(line)
+            if mn:
+                current_aciklama = mn.group(1).strip()
+            continue
+
+        mn = neden_re.search(line)
+        if mn:
+            current_aciklama = mn.group(1).strip()
+            continue
+
+        if "HESAP KODU" in norm(line) or line.startswith("FİŞ TOPLAM") or line.startswith("FIS TOPLAM"):
+            continue
+        if line.startswith("DÜZENLEYEN") or line.startswith("DUZENLEYEN"):
+            continue
+
+        m = row_re.match(line)
+        if not m:
+            mc = re.match(r"^(\d{3}(?:\.\d+)+)\s+(.*?)\s+(\d{2}/\d{2}/\d{4})\s+(.*?)\s+([\d.]+,\d{2})\s+([\d.]+,\d{2})$", line)
+            if mc:
+                m = mc
+        if not m or not current_fis:
+            continue
+
+        hesap = m.group(1).strip(); orta = m.group(2).strip(); tarih = m.group(3).strip()
+        detay = m.group(4).strip(); borc = _tr_num(m.group(5)); alacak = _tr_num(m.group(6))
+        detay_full = f"{orta} {detay}".strip()
+
+        sonuc["satirlar"].append({
+            "fisno": current_fis, "tarih": tarih, "hesap": hesap,
+            "detay": detay_full, "fis_aciklama": current_aciklama,
+            "borc": borc, "alacak": alacak,
+        })
+        if detay_full and not hesap.startswith(("102", "100")):
+            sonuc["eslesmeler"][norm(f"{current_aciklama} {detay_full}")] = hesap
+
+    sonuc["son_fis_no"] = max_fis
+    return sonuc
+
+
+def _yevmiye_defteri_oku(wb):
+    """
+    Logo/Luca 'Yevmiye Defteri' raporunu parse eder.
+    Format:
+      Fiş başlığı satırı: "00001-----00001-----AÇILIŞ-----01/01/2026"
+      Yaprak hesap satırları (kod 2+ noktalı): kod | ad | detay | tutar | '' | ''
+      Ara satırlar (kod 0-1 noktalı): kod | ad | '' | özet_borç veya özet_alacak | ...
+    Tek geçişli okuma (read_only workbook uyumlu, hızlı).
+
+    Çıktı: standart {"satirlar": [...], "son_fis_no": N, "eslesmeler": {...}}
+    """
+    def _sayi_local(v):
+        if v is None or v == "":
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        try:
+            s = str(v).replace(".", "").replace(",", ".") if ("," in str(v) and str(v).count(".") > 1) else str(v).replace(",", ".")
+            return float(s)
+        except Exception:
+            return None
+
+    sonuc = {"satirlar": [], "son_fis_no": 0, "eslesmeler": {}}
+    if not wb.sheetnames:
+        return None
+    ws = wb[wb.sheetnames[0]]
+    bas_re = re.compile(r'^0*(\d+)-{2,}0*(\d+)-{2,}(.+?)-{2,}(\d{1,2}/\d{1,2}/\d{4})\s*$')
+
+    # Tek geçişte tüm satırları belleğe al (sadece 7 sütun lazım)
+    tum_satirlar = []
+    for row in ws.iter_rows(min_col=1, max_col=7, values_only=True):
+        tum_satirlar.append(row)
+
+    # Fiş başlıklarını bul
+    fis_baslari = []  # (satir_indeksi, fis_no, aciklama, tarih_iso)
+    for idx, row in enumerate(tum_satirlar):
+        v = row[0] if row else None
+        if v and isinstance(v, str):
+            m = bas_re.match(v.strip())
+            if m:
+                gun, ay, yil = m.group(4).split("/")
+                tarih_iso = f"{yil}-{int(ay):02d}-{int(gun):02d}"
+                fis_baslari.append((idx, int(m.group(1)), m.group(3).strip(), tarih_iso))
+
+    if not fis_baslari:
+        return None
+
+    max_fis = 0
+    for i, (bas_idx, fis_no, aciklama, tarih_iso) in enumerate(fis_baslari):
+        max_fis = max(max_fis, fis_no)
+        son_idx = fis_baslari[i + 1][0] if i + 1 < len(fis_baslari) else len(tum_satirlar)
+
+        # Fiş bloğu içindeki hesap satırlarını topla
+        blok = []
+        mod = None
+        for idx in range(bas_idx + 1, son_idx):
+            row = tum_satirlar[idx]
+            if not row:
+                continue
+            kod = str(row[0] or "").strip()
+            if not kod or not re.match(r'^\d', kod):
+                continue
+            derinlik = kod.count(".")
+            if derinlik == 0:
+                # Ana hesap: yön belirler (sütun 4 = borç, sütun 5 = alacak)
+                b = _sayi_local(row[4]) if len(row) > 4 else None
+                a = _sayi_local(row[5]) if len(row) > 5 else None
+                if b and b > 0:
+                    mod = "borc"
+                elif a and a > 0:
+                    mod = "alacak"
+                continue
+            blok.append((kod, row, mod))
+
+        # Yaprakları belirle: başka bir kodun prefix'i olmayanlar
+        kodlar = [k for k, _, _ in blok]
+        kod_seti = set(kodlar)
+        for kod, row, kayit_mod in blok:
+            if kayit_mod is None:
+                continue
+            prefix = kod + "."
+            if any(k.startswith(prefix) for k in kod_seti if k != kod):
+                continue
+            tutar = 0
+            for ci in (3, 4, 5):
+                if len(row) > ci:
+                    v = _sayi_local(row[ci])
+                    if v:
+                        tutar = v; break
+            if tutar == 0:
+                continue
+            detay = str(row[2] or "").strip() if len(row) > 2 else ""
+            borc = tutar if kayit_mod == "borc" else 0.0
+            alacak = tutar if kayit_mod == "alacak" else 0.0
+            sonuc["satirlar"].append({
+                "fisno": f"{fis_no:05d}",
+                "hesap": kod,
+                "detay": detay,
+                "fis_aciklama": aciklama,
+                "borc": borc,
+                "alacak": alacak,
+                "fis_tarih": tarih_iso,
+            })
+            if detay and not kod.startswith(("102", "100")):
+                sonuc["eslesmeler"][norm(detay)] = kod
+
+    sonuc["son_fis_no"] = max_fis
+    return sonuc
+
+
+def gecmis_fisler_oku(kaynak_path: Path):
+    """Geçmiş fiş listesini PDF'den okur; eski Excel kaynağı için geriye dönük uyum.
+    Excel'de önce 'Fiş Aktarım Şablonu' sayfası aranır; bulunamazsa yevmiye defteri
+    (Logo/Luca standart raporu) olarak parse edilir.
+    3 seviye cache: bellek (en hızlı, ~1 ms) → diskteki .cache.json → Excel parse."""
+    if kaynak_path and kaynak_path.suffix.lower() == ".pdf":
+        return gecmis_fisler_oku_pdf(kaynak_path)
+
+    sonuc = {"satirlar": [], "son_fis_no": 0, "eslesmeler": {}}
+    if not kaynak_path or not kaynak_path.exists():
+        return sonuc
+
+    kaynak_str = str(kaynak_path)
+    kaynak_mtime = kaynak_path.stat().st_mtime
+
+    # 1. BELLEK CACHE (en hızlı)
+    global _bellek_cache
+    if kaynak_str in _bellek_cache:
+        cached_mtime, cached_data = _bellek_cache[kaynak_str]
+        if cached_mtime == kaynak_mtime:
+            return cached_data
+
+    # 2. DİSK CACHE (.cache.json)
+    cache_path = kaynak_path.with_suffix(kaynak_path.suffix + ".cache.json")
+    if cache_path.exists():
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            if cache.get("_mtime") == kaynak_mtime:
+                cache.pop("_mtime", None)
+                _bellek_cache[kaynak_str] = (kaynak_mtime, cache)
+                return cache
+        except Exception:
+            pass
+
+    # 3. Excel parse (en yavaş) — devamında cache oluşturulacak
+    try:
+        # NOT: read_only bazı Logo/Luca çıktılarında iter_rows'un erken durmasına
+        # neden oluyor; normal modda okunur ama iter_rows ile hızlı geçilir.
+        wb = openpyxl.load_workbook(kaynak_path, data_only=True)
+    except Exception:
+        return sonuc
+
+    def _cache_yaz(sonuc_dict):
+        """Sonucu bellek + disk cache'e yazar."""
+        # Bellek cache
+        _bellek_cache[kaynak_str] = (kaynak_mtime, sonuc_dict)
+        # Disk cache (JSON)
+        try:
+            veri = {"_mtime": kaynak_mtime, **sonuc_dict}
+            cache_path.write_text(json.dumps(veri, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+
+    ws = None
+    for sn in wb.sheetnames:
+        if "aktarim" in norm(sn).lower() or "fis" in norm(sn).lower():
+            ws = wb[sn]; break
+    if ws is None:
+        # "Fiş Aktarım Şablonu" sayfası yok — yevmiye defteri olabilir
+        yev = _yevmiye_defteri_oku(wb)
+        if yev:
+            _cache_yaz(yev)
+            return yev
+        return sonuc
+
+    # Tek geçişte tüm satırları belleğe al (read_only uyumlu, hızlı)
+    tum_satirlar = []
+    for row in ws.iter_rows(values_only=True):
+        tum_satirlar.append(row)
+
+    bas = None; sut = {}
+    for r_idx in range(min(5, len(tum_satirlar))):
+        row = tum_satirlar[r_idx]
+        for c_idx, v in enumerate(row):
+            vn = norm(str(v or ""))
+            if vn == "FIS NO": sut["fisno"] = c_idx
+            elif vn == "FIS TARIHI": sut["tarih"] = c_idx
+            elif vn == "HESAP KODU": sut["hesap"] = c_idx
+            elif "DETAY" in vn: sut["detay"] = c_idx
+            elif vn == "BORC": sut["borc"] = c_idx
+            elif vn == "ALACAK": sut["alacak"] = c_idx
+            elif vn == "FIS ACIKLAMA": sut["fis_aciklama"] = c_idx
+        if "fisno" in sut and "hesap" in sut:
+            bas = r_idx; break
+    if bas is None:
+        return sonuc
+
+    def gc(row, key):
+        c = sut.get(key)
+        return row[c] if c is not None and c < len(row) else None
+
+    max_fis = 0
+    for r_idx in range(bas + 1, len(tum_satirlar)):
+        row = tum_satirlar[r_idx]
+        fisno = gc(row, "fisno"); hesap = gc(row, "hesap")
+        if fisno is None or hesap is None: continue
+        fstr = str(fisno).strip(); hstr = str(hesap).strip()
+        if not fstr or not hstr: continue
+        detay = str(gc(row, "detay") or gc(row, "fis_aciklama") or "").strip()
+        borc = gc(row, "borc") or 0; alacak = gc(row, "alacak") or 0
+        sonuc["satirlar"].append({"fisno": fstr, "hesap": hstr, "detay": detay,
+                                  "fis_aciklama": str(gc(row, "fis_aciklama") or ""),
+                                  "borc": float(borc or 0), "alacak": float(alacak or 0)})
+        m = re.match(r"0*(\d+)", fstr)
+        if m: max_fis = max(max_fis, int(m.group(1)))
+        if detay and not hstr.startswith(("102", "100")):
+            sonuc["eslesmeler"][norm(detay)] = hstr
+    sonuc["son_fis_no"] = max_fis
+    _cache_yaz(sonuc)
+    return sonuc
+
+def kural_dosyasina_fis_ekle(kural_path: Path, yeni_satirlar: list):
+    """
+    Üretilen fişleri kural.xlsx'in 'Fiş Aktarım Şablonu' sayfasına ekler (kümülatif).
+    Dosya yoksa oluşturur; sayfa yoksa ekler.
+    yeni_satirlar: isleyici.fis_xlsx ile aynı sözlük formatı.
+    """
+    import openpyxl
+    from datetime import datetime as _dt
+
+    basliklar = ["Fiş No", "Fiş Tarihi", "Fiş Açıklama", "Hesap Kodu", "Evrak No",
+                 "Evrak Tarihi", "Detay Açıklama", "Borç", "Alacak", "Miktar",
+                 "Belge Türü", "Para Birimi", "Kur", "Döviz Tutar"]
+
+    if kural_path.exists():
+        wb = openpyxl.load_workbook(kural_path)
+    else:
+        wb = openpyxl.Workbook()
+        # varsayılan boş Sheet'i sil
+        if "Sheet" in wb.sheetnames and len(wb.sheetnames) == 1:
+            del wb["Sheet"]
+
+    # "Fiş Aktarım" sayfasını bul veya oluştur
+    hedef = None
+    for sn in wb.sheetnames:
+        if "aktarim" in norm(sn).lower() or "aktar" in norm(sn).lower():
+            hedef = wb[sn]; break
+    if hedef is None:
+        hedef = wb.create_sheet("Fiş Aktarım Şablonu")
+        hedef.append(basliklar)
+
+    # başlık yoksa ekle
+    ilk_satir = [hedef.cell(1, c).value for c in range(1, len(basliklar) + 1)]
+    if not ilk_satir[0] or "FIS" not in norm(str(ilk_satir[0])):
+        hedef.insert_rows(1)
+        for c, b in enumerate(basliklar, 1):
+            hedef.cell(1, c).value = b
+
+    def dt(iso):
+        try:
+            y, m, d = map(int, iso.split("-")); return _dt(y, m, d)
+        except Exception:
+            return iso
+
+    for r in yeni_satirlar:
+        evno = r.get("evrak_no", "")
+        try:
+            evno = int(evno) if str(evno).isdigit() else evno
+        except Exception:
+            pass
+        hedef.append([
+            r.get("fisno", ""), dt(r.get("fis_tarih", "")), r.get("fis_aciklama", ""),
+            r.get("hesap", ""), evno, dt(r.get("evrak_tarih", "")), r.get("detay", ""),
+            r.get("borc") or None, r.get("alacak") or None, None,
+            r.get("belge_turu", "MF"), "", "", "",
+        ])
+    wb.save(kural_path)
+
+
+# ----------------------------------------------------------------- öğrenme JSON
+def ogrenme_oku(path: Path) -> dict:
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def ogrenme_yaz(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+# ----------------------------------------------------------------- eşleştirme
+class KuralMotoru:
+    """
+    Bir firma + belge tipi (banka/fatura/cek) için hesap eşleştirme yapar.
+    """
+    def __init__(self, mizan_path: Path, kural_path: Path | None, ogrenme_path: Path, gecmis_pdf_path: Path | None = None):
+        self.hesaplar = mizan_hesaplar(mizan_path)                 # [(kod, ad)]
+        self.kural = kural_excel_oku(kural_path) if kural_path else {"hesaplar": [], "anahtar_kod": {}, "talimatlar": []}
+        self.ogrenme = ogrenme_oku(ogrenme_path)                  # {anahtar: kod}
+        self.ogrenme_path = ogrenme_path
+        # geçmiş fişlerden öğrenilen eşleşmeler (kural excel'deki Fiş Aktarım sayfası)
+        self.gecmis = gecmis_fisler_oku(gecmis_pdf_path if gecmis_pdf_path and gecmis_pdf_path.exists() else kural_path)
+        # hızlı arama için kod->ad
+        self.kod_ad = {k: a for k, a in self.hesaplar}
+        for h in self.kural["hesaplar"]:
+            self.kod_ad.setdefault(h["kod"], h["ad"])
+
+    def son_fis_no(self):
+        """Geçmiş fişlerdeki en yüksek fiş numarası."""
+        return self.gecmis.get("son_fis_no", 0)
+
+    def hesap_adi(self, kod: str) -> str:
+        return self.kod_ad.get(kod, "")
+
+    def fatura_gecmis_eslestir(self, cari_ad: str, yon: str = "alis"):
+        """
+        Fatura için geçmişte gerçekten kesilmiş/kaydedilmiş fişlerden hesap seçer.
+        Kural Excel'i bu yöntemde kullanılmaz.
+
+        Döndürür: {
+          "cari": hesap kodu,
+          "ana": gider/gelir hesap kodu,
+          "kdv": [KDV hesap kodları],
+          "tevkifat": [tevkifat hesap kodları],
+          "kaynak": "gecmis_fatura" | ""
+        }
+        Aynı cari için birden fazla geçmiş kayıt varsa en sık kullanılan hesap seçilir;
+        eşitlikte son görülen kayıt tercih edilir.
+        """
+        sonuc = {"cari": "", "ana": "", "kdv": [], "tevkifat": [], "kaynak": ""}
+        q = norm(cari_ad)
+        if not q:
+            return sonuc
+
+        # Cari adının tamamı veya anlamlı kelimeleriyle geçmiş satırları bul.
+        qwords = kelimeler(cari_ad)
+        aday = []
+        for idx, r in enumerate(self.gecmis.get("satirlar", [])):
+            metin = norm(f"{r.get('detay','')} {r.get('fis_aciklama','')}")
+            if not metin:
+                continue
+            rw = kelimeler(metin)
+            if q in metin:
+                sc = 100 + len(qwords)
+            else:
+                ortak = len(qwords & rw)
+                if not qwords or ortak == 0:
+                    continue
+                sc = ortak / len(qwords)
+                if sc < 0.60:
+                    continue
+            aday.append((sc, idx, r))
+
+        if not aday:
+            return sonuc
+
+        # Önce tam/kuvvetli eşleşme, sonra son kayıt.
+        aday.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        satirlar = [x[2] for x in aday]
+
+        def say_sec(rows, kod_filtresi, borc_mu=None):
+            say = {}
+            son = {}
+            for i, r in enumerate(rows):
+                kod = str(r.get("hesap", "")).strip()
+                if not kod or not kod_filtresi(kod):
+                    continue
+                if borc_mu is True and float(r.get("borc", 0) or 0) <= 0:
+                    continue
+                if borc_mu is False and float(r.get("alacak", 0) or 0) <= 0:
+                    continue
+                say[kod] = say.get(kod, 0) + 1
+                son[kod] = i
+            if not say:
+                return ""
+            return max(say, key=lambda k: (say[k], son[k]))
+
+        if yon == "alis":
+            sonuc["cari"] = say_sec(satirlar, lambda k: k.startswith(("320", "329", "331", "335")), borc_mu=False)
+            # Gider/stok hesabı: borç tarafında, cari/KDV/vergi/banka hesaplarını dışla.
+            def ana(k):
+                return (not k.startswith(("100", "101", "102", "120", "121", "191", "192", "193", "194", "195",
+                                          "300", "320", "329", "331", "335", "360", "361", "370", "380", "391")))
+            sonuc["ana"] = say_sec(satirlar, ana, borc_mu=True)
+            sonuc["kdv"] = list(dict.fromkeys(str(r.get("hesap", "")).strip() for r in satirlar
+                                               if str(r.get("hesap", "")).strip().startswith("191") and float(r.get("borc", 0) or 0) > 0))
+            sonuc["tevkifat"] = list(dict.fromkeys(str(r.get("hesap", "")).strip() for r in satirlar
+                                                     if str(r.get("hesap", "")).strip().startswith("191") and
+                                                     str(r.get("hesap", "")).strip() not in sonuc["kdv"] and
+                                                     float(r.get("borc", 0) or 0) > 0))
+        else:
+            sonuc["cari"] = say_sec(satirlar, lambda k: k.startswith(("120", "121")), borc_mu=True)
+            sonuc["ana"] = say_sec(satirlar, lambda k: k.startswith(("600", "601", "602", "603", "610", "611", "612")), borc_mu=False)
+            sonuc["kdv"] = list(dict.fromkeys(str(r.get("hesap", "")).strip() for r in satirlar
+                                               if str(r.get("hesap", "")).strip().startswith("391") and float(r.get("alacak", 0) or 0) > 0))
+            sonuc["tevkifat"] = list(dict.fromkeys(str(r.get("hesap", "")).strip() for r in satirlar
+                                                     if str(r.get("hesap", "")).strip().startswith("391") and
+                                                     str(r.get("hesap", "")).strip() not in sonuc["kdv"] and
+                                                     float(r.get("alacak", 0) or 0) > 0))
+
+        if any(sonuc[k] for k in ("cari", "ana", "kdv", "tevkifat")):
+            sonuc["kaynak"] = "gecmis_fatura"
+        return sonuc
+
+    def eslestir(self, aciklama: str):
+        """
+        Bir açıklama metni için hesap kodu tahmini yapar.
+        Döndürür: (kod, kaynak) — kaynak: 'ogrenme' | 'excel' | 'tahmin' | ''
+        """
+        nq = norm(aciklama)
+        if not nq:
+            return "", ""
+
+        # 1) öğrenilen eşleşme: anahtar tam geçiyorsa VEYA anahtar kelimelerinin
+        #    çoğu açıklamada varsa
+        gw = kelimeler(aciklama)
+        best_og = None; best_og_sc = 0
+        for anahtar, kod in self.ogrenme.items():
+            if not anahtar:
+                continue
+            if anahtar in nq:
+                return kod, "ogrenme"
+            aw = kelimeler(anahtar)
+            if aw:
+                ort = len(gw & aw) / len(aw)   # anahtarın ne kadarı eşleşti
+                if ort >= 0.6 and len(gw & aw) > best_og_sc:
+                    best_og_sc = len(gw & aw); best_og = kod
+        if best_og:
+            return best_og, "ogrenme"
+
+        # 1.5) geçmiş fişlerden öğrenilen eşleşmeler (gerçek kullanım)
+        gecmis_es = self.gecmis.get("eslesmeler", {})
+        best_g = None; best_g_sc = 0
+        for anahtar, kod in gecmis_es.items():
+            if not anahtar:
+                continue
+            if anahtar in nq or nq in anahtar:
+                return kod, "gecmis"
+            aw = kelimeler(anahtar)
+            if aw:
+                ort = len(gw & aw) / len(aw)
+                if ort >= 0.6 and len(gw & aw) > best_g_sc:
+                    best_g_sc = len(gw & aw); best_g = kod
+        if best_g:
+            return best_g, "gecmis"
+
+        # 2) excel kurallarındaki hesap adları / kullanım açıklamaları ile eşleşme
+        best = None; bs = 0
+        for h in self.kural["hesaplar"]:
+            hedef = kelimeler(h["ad"] + " " + h.get("kullanim", ""))
+            sc = len(gw & hedef)
+            if sc > bs:
+                bs = sc; best = h["kod"]
+        if bs >= 1:
+            return best, "excel"
+
+        # 3) mizan hesap adlarıyla zayıf eşleşme
+        best = None; bs = 0
+        for kod, ad in self.hesaplar:
+            sc = len(gw & kelimeler(ad))
+            if sc > bs:
+                bs = sc; best = kod
+        if bs >= 2:
+            return best, "tahmin"
+
+        return "", ""
+
+    def ogret(self, aciklama: str, kod: str):
+        """Bir açıklama -> kod eşleşmesini öğrenir (kalıcı)."""
+        anahtar = norm(aciklama)
+        if not anahtar or not kod:
+            return
+        self.ogrenme[anahtar] = kod
+        ogrenme_yaz(self.ogrenme_path, self.ogrenme)

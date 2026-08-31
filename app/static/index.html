@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fiş Aktarım Aracı</title>
+<style>
+  :root{--ana:#1F4E78;--yesil:#27ae60;--bg:#f4f6fb;--kenar:#d9d2c5;--muted:#7c7263}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI",system-ui,sans-serif;background:var(--bg);color:#222}
+  header{background:var(--ana);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{margin:0;font-size:18px}
+  .firma-sel{margin-left:auto;display:flex;gap:8px;align-items:center}
+  select,input{padding:7px 9px;border:1px solid var(--kenar);border-radius:6px;font-size:14px;font-family:inherit}
+  .wrap{max-width:1100px;margin:16px auto;padding:0 16px}
+  .card{background:#fff;border:1px solid #e7e1d5;border-radius:10px;padding:16px 18px;margin-bottom:16px}
+  .card h2{margin:0 0 12px;font-size:15px;color:var(--ana)}
+  .tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+  .tab{padding:9px 18px;border:1px solid var(--kenar);border-radius:8px 8px 0 0;background:#ece7db;cursor:pointer;font-weight:600;font-size:14px}
+  .tab.active{background:#fff;border-bottom-color:#fff;color:var(--ana)}
+  .btn{padding:8px 14px;border:none;border-radius:7px;font-weight:600;cursor:pointer;font-size:14px}
+  .btn-ana{background:var(--ana);color:#fff}
+  .btn-yesil{background:var(--yesil);color:#fff}
+  .btn-gri{background:#e5e0d4;color:#333}
+  .btn-x{background:#c0392b;color:#fff;padding:4px 9px}
+  .btn-edit{background:#e67e22;color:#fff}
+  .flex{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  label{font-size:12px;color:var(--muted);display:block;margin-bottom:3px}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th,td{border:1px solid #e2ddd0;padding:5px 7px;text-align:right}
+  th{background:#f0ece2}
+  td.l,th.l{text-align:left}
+  tr.warn td{background:#fff6e6}
+  tfoot .tot{font-weight:700;background:#eef4ee}
+  .hint{color:var(--muted);font-size:12.5px}
+  .pill{display:inline-block;padding:2px 9px;border-radius:11px;font-size:11px;background:#e6efe8;color:#2c5338}
+  .pill.off{background:#f0e2e0;color:#8a3d34}
+  .dosya-satir{display:flex;align-items:center;gap:10px;padding:6px 8px;border-bottom:1px solid #efe9dc}
+  .dosya-satir:last-child{border:none}
+  .kaynak{font-size:10px;padding:1px 6px;border-radius:8px}
+  .kaynak.ogrenme{background:#dcedc8;color:#33691e}
+  .kaynak.excel{background:#c8e0f0;color:#1f4e78}
+  .kaynak.tahmin{background:#fff0c8;color:#8a6d1a}
+  .kaynak.banka,.kaynak.kdv,.kaynak.cek{background:#e8e8e8;color:#555}
+  .kaynak.gecmis{background:#e0d4ed;color:#5e3a87}
+  .kaynak.gecmis_kayit{background:#f0ebe0;color:#7c6a3d}
+  .detay-hucre{max-height:56px;overflow-y:auto;line-height:1.35;white-space:pre-wrap;word-break:break-word}
+  td textarea{border:1px solid #cec6b5;border-radius:4px;box-sizing:border-box}
+  td input[list="hesapDL"]{border:1px solid #cec6b5;border-radius:4px;padding:3px 5px}
+  .uyari{color:#a23b2e;font-size:12px;margin-top:6px}
+  .yukle-kutu{border:2px dashed var(--kenar);border-radius:8px;padding:14px;text-align:center;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>📄 Fiş Aktarım Aracı</h1>
+  <div class="firma-sel">
+    <label style="color:#fff;margin:0">Firma:</label>
+    <select id="firmaSel" style="min-width:220px"><option value="">— firma seç —</option></select>
+    <button class="btn btn-gri" onclick="yeniFirma()">+ Yeni</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="tabs">
+    <div class="tab active" data-tip="banka" onclick="sekmeSec('banka')">🏦 Banka Dökümü</div>
+    <div class="tab" data-tip="fatura" onclick="sekmeSec('fatura')">🧾 Fatura</div>
+    <div class="tab" data-tip="cek" onclick="sekmeSec('cek')">📃 Çek Listesi</div>
+    <div class="tab" data-tip="fis" onclick="sekmeSec('fis')">📝 Fiş</div>
+  </div>
+
+  <div id="faturaYon" class="card" style="display:none;padding:10px 18px">
+    <div class="flex" style="align-items:center">
+      <label style="margin:0;font-weight:600;color:#333">Fatura Yönü:</label>
+      <label style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:normal;color:#333"><input type="radio" name="fatYon" value="alis" checked style="width:auto"> Alış (gider + 191 borç / 320 cari alacak)</label>
+      <label style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:normal;color:#333"><input type="radio" name="fatYon" value="satis" style="width:auto"> Satış (120 cari borç / gelir + 391 alacak)</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>1) Mizan & Fiş Listesi</h2>
+    <div class="flex">
+      <div>
+        <label>Mizan (tüm hesaplar)</label>
+        <input type="file" id="mizanFile" accept=".xlsx,.xls">
+        <button class="btn btn-ana" onclick="mizanYukle()">Yükle</button>
+        <span id="mizanPill" class="pill off">mizan yok</span>
+      </div>
+    </div>
+    <div id="fisListesiAlani" class="flex" style="margin-top:12px">
+      <div>
+        <label>Excel Fiş Listesi — <span id="fisListesiTip">seçili sekme için</span> geçmiş fişler & öğrenme kaynağı</label>
+        <input type="file" id="fisListesiFile" accept=".xlsx,.xls">
+        <button class="btn btn-ana" onclick="fisListesiYukle()">Yükle</button>
+        <span id="fisListesiPill" class="pill off">fiş listesi yok</span>
+        <div class="hint" style="margin-top:4px">Fiş Aktarım Şablonu formatında (14 sütun) Excel. Bu sekme için geçmiş fişler, son fiş no ve hesap eşleştirmeleri buradan okunur.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="belgeKarti">
+    <h2>2) Belge Yükle (<span id="belgeTip">banka</span>) — Excel / PDF / Resim</h2>
+    <div class="yukle-kutu">
+      <input type="file" id="belgeFile" accept=".xlsx,.xls,.pdf,.png,.jpg,.jpeg" multiple>
+      <button class="btn btn-ana" onclick="belgeYukle()">Yükle</button>
+      <div class="hint" style="margin-top:6px">Birden çok dosya seçebilirsiniz. PDF/resim OCR ile okunur (Türkçe).</div>
+    </div>
+    <div id="belgeListe" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card" id="isleKarti">
+    <h2>3) İşle & Fiş Üret</h2>
+    <div class="flex">
+      <div><label>Başlangıç Fiş No <span id="fisOner" class="hint"></span></label><input id="fisBas" type="number" value="0" min="0" style="width:130px"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#333;align-self:flex-end;margin-bottom:2px">
+        <input type="checkbox" id="gecmisEkle" style="width:auto"> Çıktıya geçmiş fişleri de kat
+      </label>
+      <button class="btn btn-yesil" onclick="isle()" style="align-self:flex-end">⚙ İşle (Önizle)</button>
+      <button class="btn btn-edit" id="duzenleBtn" onclick="duzenleToggle()" style="display:none;align-self:flex-end">✎ Düzenle</button>
+      <button class="btn btn-ana" onclick="disaAktar('xlsx')" style="align-self:flex-end">⬇ Excel</button>
+      <button class="btn btn-ana" onclick="disaAktar('xml')" style="background:#2f5d6e;align-self:flex-end">⬇ XML</button>
+      <span id="durum" class="hint" style="align-self:flex-end"></span>
+    </div>
+    <div class="hint" style="margin-top:6px">Fiş No 0 = otomatik (geçmiş son fiş no + 1'den devam).</div>
+    <div id="onizle" style="margin-top:12px;overflow-x:auto"></div>
+  </div>
+
+  <!-- FİŞ SEKMESİ: elle giriş (masraf-server tarzı) -->
+  <div class="card" id="fisKarti" style="display:none">
+    <h2>Masraf Fişi Girişi (elle)</h2>
+    <div class="flex">
+      <div><label>Tarih</label><input type="date" id="fisTarih" style="width:150px"></div>
+      <div><label>Fiş No</label><input id="fisEvrakNo" placeholder="1" style="width:80px"></div>
+      <div style="flex:1"><label>Firma</label><input id="fisFirma" placeholder="ör. OPET PETROL" autocomplete="off" style="width:100%"></div>
+      <div><label>Genel Toplam</label><input id="fisToplam" type="number" step="0.01" style="width:110px"></div>
+      <div>
+        <label>KDV Oranı %</label>
+        <select id="fisOran" style="width:90px">
+          <option value="1.01">%1</option>
+          <option value="1.08">%8</option>
+          <option value="1.10">%10</option>
+          <option value="1.20" selected>%20</option>
+        </select>
+      </div>
+      <div style="flex:1.5"><label>Hesap / Gider Türü</label>
+        <input list="fisHesapDL" id="fisHesapAra" placeholder="kod veya ad ara..." style="width:100%">
+        <datalist id="fisHesapDL"></datalist>
+      </div>
+    </div>
+    <div class="flex" style="margin-top:10px">
+      <button class="btn btn-yesil" onclick="fisEkle()">+ Listeye Ekle</button>
+      <button class="btn btn-gri" id="fisKalemBtn" onclick="fisKalemIptal()" style="display:none">İptal (kalem modu)</button>
+      <span id="fisKalemDurum" class="hint"></span>
+    </div>
+
+    <h3 style="margin-top:20px;font-size:14px;color:#333">Girilen Fiş Kalemleri</h3>
+    <div id="fisTabloKaydir" style="max-height:420px;overflow-y:auto;border:1px solid #e7e1d5;border-radius:6px;margin-top:6px">
+      <table id="fisTablo" style="font-size:12px;margin:0"><thead><tr style="position:sticky;top:0;background:#efe9dc;z-index:2"><th>Sıra</th><th>Tarih</th><th>No</th><th class="l">Firma</th><th>Matrah</th><th>Oran</th><th>KDV</th><th>Toplam</th><th class="l">Hesap</th><th></th></tr></thead>
+      <tbody id="fisTbody"><tr><td colspan="10" style="text-align:center;padding:16px;color:#999">Kalem ekleyin</td></tr></tbody>
+      <tfoot id="fisTfoot"></tfoot></table>
+    </div>
+
+    <h3 style="margin-top:20px;font-size:14px;color:#333">Muhasebe Fişi Ayarları</h3>
+    <div class="flex">
+      <div>
+        <label>Karşı Hesap (198)</label>
+        <select id="fisKarsi" style="width:280px"><option value="">— firma seç —</option></select>
+      </div>
+      <div><label>Başlangıç Fiş No</label><input id="fisBaslangic" type="number" value="0" min="0" style="width:120px"><span id="fisSonNo" class="hint" style="margin-left:8px"></span></div>
+      <button class="btn btn-yesil" onclick="fisIsle()" style="align-self:flex-end">⚙ Önizle</button>
+      <button class="btn btn-edit" id="fisDuzenleBtn" onclick="fisDuzenleToggle()" style="display:none;align-self:flex-end">✎ Düzenle</button>
+      <button class="btn btn-ana" onclick="fisDisaAktar()" style="align-self:flex-end">⬇ Excel</button>
+      <span id="fisDurum" class="hint" style="align-self:flex-end"></span>
+    </div>
+    <div id="fisOnizle" style="margin-top:12px;overflow-x:auto"></div>
+  </div>
+
+  <div class="card">
+    <h2>Kayıtlı Çıktılar</h2>
+    <div id="ciktilar" class="hint">—</div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
+
+function sekmeSec(tip){
+  aktifTip=tip;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tip===tip));
+  $('belgeTip').textContent=tip;
+  $('fisListesiTip').textContent=(tip==='banka'?'banka':tip==='fatura'?'fatura':tip==='cek'?'çek':'fiş');
+  $('faturaYon').style.display = (tip==='fatura') ? 'block' : 'none';
+  // Fiş sekmesi: belge/işle kartlarını gizle, fiş kartını göster
+  const fisMod = (tip==='fis');
+  $('belgeKarti').style.display = fisMod ? 'none' : '';
+  $('isleKarti').style.display = fisMod ? 'none' : '';
+  $('fisKarti').style.display = fisMod ? '' : 'none';
+  satirlar=[]; duzenleMod=false; $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
+  if(firmaKod) firmaDurum();
+  if(fisMod && firmaKod) fisSekmeHazirla();
+}
+
+async function loadFirmalar(){
+  const list=await (await fetch('/api/firmalar')).json();
+  $('firmaSel').innerHTML='<option value="">— firma seç —</option>'+list.map(f=>`<option value="${f.kod}">${f.ad}</option>`).join('');
+}
+$('firmaSel').onchange=e=>{firmaKod=e.target.value;if(firmaKod){firmaDurum();loadHesaplar();}};
+
+async function yeniFirma(){
+  const ad=(prompt('Firma adı:')||'').trim(); if(!ad)return;
+  const r=await (await fetch('/api/firma',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ad})})).json();
+  await loadFirmalar(); $('firmaSel').value=r.kod; firmaKod=r.kod; firmaDurum(); loadHesaplar();
+}
+
+async function loadHesaplar(){
+  try{ hesaplar=(await (await fetch(`/api/firma/${firmaKod}/hesaplar`)).json()).hesaplar; }catch(e){ hesaplar=[]; }
+}
+
+async function firmaDurum(){
+  const d=await (await fetch(`/api/firma/${firmaKod}/durum`)).json();
+  const mp=$('mizanPill');
+  if(d.mizan_hesap){mp.className='pill';mp.textContent=d.mizan_hesap+' hesap';}
+  else{mp.className='pill off';mp.textContent='mizan yok';}
+  const t=d.tipler[aktifTip]||{};
+  const kp=$('fisListesiPill');
+  if(t.fis_listesi_var){
+    kp.className='pill'; kp.textContent=`${t.gecmis_satir||0} geçmiş satır · son no ${t.son_fis_no||0} · ${t.ogrenilen||0} öğrenilen`;
+  } else {
+    kp.className='pill off'; kp.textContent='fiş listesi yok';
+  }
+  // belge listesi
+  const bl=$('belgeListe');
+  if(t.belgeler&&t.belgeler.length){
+    bl.innerHTML=t.belgeler.map(f=>`<div class="dosya-satir"><span style="flex:1">📎 ${f}</span><button class="btn btn-x" onclick="belgeSil('${f.replace(/'/g,"")}')">🗑</button></div>`).join('');
+  }else bl.innerHTML='<div class="hint">Henüz belge yok.</div>';
+  loadCiktilar();
+  // fiş no önerisi
+  try{
+    const on=await (await fetch(`/api/firma/${firmaKod}/onerilen-fisno/${aktifTip}`)).json();
+    if(on.gecmis_satir>0){
+      $('fisOner').textContent=`(geçmiş: ${on.gecmis_satir} satır, son no ${on.son_fis_no} → öneri ${on.onerilen})`;
+    }else{
+      $('fisOner').textContent='(geçmiş fiş yok)';
+    }
+  }catch(e){ $('fisOner').textContent=''; }
+}
+
+async function mizanYukle(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const f=$('mizanFile').files[0]; if(!f){alert('Dosya seç');return;}
+  const fd=new FormData(); fd.append('file',f);
+  await fetch(`/api/firma/${firmaKod}/mizan`,{method:'POST',body:fd});
+  firmaDurum(); loadHesaplar();
+}
+async function fisListesiYukle(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const f=$('fisListesiFile').files[0]; if(!f){alert('Dosya seç');return;}
+  const fd=new FormData(); fd.append('file',f);
+  $('fisListesiPill').className='pill'; $('fisListesiPill').textContent='yükleniyor...';
+  const r=await (await fetch(`/api/firma/${firmaKod}/fis-listesi/${aktifTip}`,{method:'POST',body:fd})).json();
+  $('fisListesiFile').value='';
+  if(r.ok){
+    // Yükleme başarılı; parse arka planda dönüyor. Pill "işleniyor" göstersin;
+    // firmaDurum periyodik yenilesin.
+    $('fisListesiPill').textContent=`${r.boyut_kb} KB · arka planda işleniyor...`;
+    // 1.5 saniye aralıklarla durumu yenile; parse bitince pill gerçek değerleri gösterir
+    let sayac=0;
+    const yenile=async()=>{
+      sayac++;
+      await firmaDurum();
+      const pilltext=$('fisListesiPill').textContent||'';
+      if(!pilltext.includes('işleniyor') && !pilltext.includes('yükleniyor')){
+        return; // parse bitti (pill artık "3502 satır ..." gösteriyor)
+      }
+      if(sayac<40) setTimeout(yenile, 1500); // 60 sn'ye kadar dene
+    };
+    setTimeout(yenile, 1500);
+  }
+  loadHesaplar();
+}
+
+async function belgeYukle(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const files=$('belgeFile').files; if(!files.length){alert('Dosya seç');return;}
+  $('durum').textContent='yükleniyor...';
+  for(const f of files){
+    const fd=new FormData(); fd.append('file',f);
+    await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}`,{method:'POST',body:fd});
+  }
+  $('durum').textContent=''; $('belgeFile').value=''; firmaDurum();
+}
+async function belgeSil(fn){
+  if(!confirm('Silinsin mi?\n'+fn))return;
+  await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}/${encodeURIComponent(fn)}`,{method:'DELETE'});
+  firmaDurum();
+}
+
+function nf(n){return (Math.round((n||0)*100)/100).toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2});}
+
+async function isle(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  $('durum').textContent='işleniyor (OCR sürebilir)...';
+  const yon = aktifTip==='fatura' ? (document.querySelector('input[name="fatYon"]:checked')||{value:'alis'}).value : 'alis';
+  const r=await (await fetch(`/api/firma/${firmaKod}/isle/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,yon})})).json();
+  $('durum').textContent='';
+  satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false;
+  $('duzenleBtn').style.display=satirlar.length?'inline-block':'none';
+  render(r);
+}
+function totals(){
+  const b=satirlar.reduce((a,s)=>a+(parseFloat(s.borc)||0),0);
+  const al=satirlar.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0);
+  return {b,al,dengeli:Math.abs(b-al)<0.01};
+}
+function render(r){
+  if(!satirlar.length){$('onizle').innerHTML='<div class="hint">Sonuç yok. Belge yükleyip işleyin.</div>';return;}
+  const t=totals(); const dz=duzenleMod;
+  let h='';
+  if(r&&r.okunan_belgeler) h+='<div class="hint" style="margin-bottom:8px">Okunan: '+r.okunan_belgeler.map(b=>`${b.dosya} (${b.tur})`).join(', ')+'</div>';
+  // Düzenleme modunda tüm satırların paylaştığı hesap listesi (arama kutusu için)
+  if(dz){
+    h+='<datalist id="hesapDL">'+hesaplar.map(x=>`<option value="${x.kod}">${x.kod} — ${x.ad}</option>`).join('')+'</datalist>';
+  }
+  h+=`<table><thead><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
+  h+=satirlar.map((s,i)=>{
+    if(dz){
+      const hesapAdi = (hesaplar.find(x=>x.kod===s.hesap)||{}).ad||'';
+      return `<tr class="${s.hesap?'':'warn'}">
+        <td><input value="${s.fisno||''}" onchange="edit(${i},'fisno',this.value)" style="width:70px"></td>
+        <td><input value="${s.fis_tarih||''}" onchange="edit(${i},'fis_tarih',this.value)" style="width:96px"></td>
+        <td class="l">
+          <input list="hesapDL" value="${s.hesap||''}" placeholder="kod veya ad ara..." onchange="edit(${i},'hesap',this.value)" style="width:170px" title="${hesapAdi.replace(/"/g,'&quot;')}">
+          ${hesapAdi?`<div class="hint" style="font-size:10px;margin-top:1px">${hesapAdi.slice(0,32)}</div>`:''}
+        </td>
+        <td><input value="${s.borc||0}" onchange="edit(${i},'borc',this.value)" style="width:80px;text-align:right"></td>
+        <td><input value="${s.alacak||0}" onchange="edit(${i},'alacak',this.value)" style="width:80px;text-align:right"></td>
+        <td class="l"><textarea onchange="edit(${i},'detay',this.value)" rows="2" style="width:100%;min-height:34px;max-height:110px;resize:vertical;font-family:inherit;font-size:12px;padding:3px 5px">${(s.detay||'').replace(/</g,'&lt;')}</textarea></td>
+        <td><button class="btn btn-x" onclick="satirSil(${i})">🗑</button></td>
+      </tr>`;
+    }
+    return `<tr class="${s.hesap?'':'warn'}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
+  }).join('');
+  h+=`</tbody><tfoot><tr class="tot"><td colspan="3" class="l">TOPLAM</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table>`;
+  if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';
+  if(dz) h+='<div class="hint" style="margin-top:6px">Hesabı yanlış eşleşenleri düzeltin; "Bitir"e basınca eşleştirmeler öğrenilir. Sonra Excel/XML alın.</div>';
+  $('onizle').innerHTML=h;
+}
+function edit(i,alan,deger){
+  if(alan==='borc'||alan==='alacak') deger=parseFloat((deger||'').toString().replace(',','.'))||0;
+  const eski=satirlar[i].hesap;
+  satirlar[i][alan]=deger;
+  // hesap elle değişince öğret
+  if(alan==='hesap' && deger && deger!==eski && satirlar[i].detay){
+    fetch(`/api/firma/${firmaKod}/ogret/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,aciklama:satirlar[i].detay,kod:deger})}).catch(()=>{});
+  }
+  if(duzenleMod) render();
+}
+function satirSil(i){satirlar.splice(i,1);render();}
+function duzenleToggle(){
+  if(!satirlar.length){alert('Önce İşle');return;}
+  duzenleMod=!duzenleMod;
+  $('duzenleBtn').textContent=duzenleMod?'✔ Bitir':'✎ Düzenle';
+  render();
+  if(!duzenleMod){ firmaDurum(); } // öğrenilenler güncellensin
+}
+async function disaAktar(format){
+  if(!satirlar.length){alert('Önce İşle');return;}
+  $('durum').textContent=format+' hazırlanıyor...';
+  const r=await fetch(`/api/firma/${firmaKod}/export?format=${format}`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,satirlar,donem:''})});
+  const blob=await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=`FIS_${aktifTip}.${format}`; a.click();
+  $('durum').textContent=''; loadCiktilar();
+}
+
+async function loadCiktilar(){
+  if(!firmaKod){$('ciktilar').textContent='—';return;}
+  const list=await (await fetch(`/api/firma/${firmaKod}/ciktilar`)).json();
+  if(!list.length){$('ciktilar').textContent='Henüz çıktı yok.';return;}
+  $('ciktilar').innerHTML=list.map(f=>{
+    const d=new Date(f.tarih); const p=n=>String(n).padStart(2,'0');
+    const ts=`${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    return `<div class="dosya-satir"><a href="/api/firma/${firmaKod}/cikti/${encodeURIComponent(f.dosya)}" style="flex:1;color:var(--ana);text-decoration:none">📄 ${f.dosya}</a><span class="hint">${ts} · ${(f.boyut/1024).toFixed(0)} KB</span></div>`;
+  }).join('');
+}
+
+// =================== FİŞ SEKMESİ (masraf-server tarzı elle giriş) ===================
+let fisKalemler = [];       // girilen kalemler
+let fisEditGrup = null;     // kalem ekleme modu (aynı fişe kalem)
+let fisOnizleSatir = [];    // önizleme sonrası muhasebe fişi satırları
+let fisDuzenleMod = false;
+
+function fisSekmeHazirla(){
+  // hesap arama listesini doldur
+  const dl=$('fisHesapDL');
+  dl.innerHTML=hesaplar.map(h=>`<option value="${h.kod}">${h.kod} — ${h.ad}</option>`).join('');
+  // 198 karşı hesap listesi
+  fetch(`/api/firma/${firmaKod}/karsi-hesaplar`).then(r=>r.json()).then(kh=>{
+    const sel=$('fisKarsi');
+    sel.innerHTML='<option value="">— seç —</option>'+
+      (kh.h198||[]).map(h=>`<option value="${h.kod}" ${h.kod===kh.varsayilan198?'selected':''}>${h.kod} — ${h.ad}</option>`).join('');
+  }).catch(()=>{});
+  // son fiş no önerisi
+  fetch(`/api/firma/${firmaKod}/onerilen-fisno/fis`).then(r=>r.json()).then(on=>{
+    if(on.gecmis_satir>0) $('fisSonNo').textContent=`(geçmiş son no: ${on.son_fis_no})`;
+    else $('fisSonNo').textContent='';
+  }).catch(()=>{});
+  // bugün tarihini varsayılan yap
+  if(!$('fisTarih').value){ const t=new Date(); $('fisTarih').value=`${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`; }
+  fisRender();
+}
+
+function fisEkle(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const tarih=$('fisTarih').value;
+  const no=$('fisEvrakNo').value.trim();
+  const firma=$('fisFirma').value.trim();
+  const toplam=parseFloat(($('fisToplam').value||'').replace(',','.'));
+  const oranF=parseFloat($('fisOran').value);
+  const kod=$('fisHesapAra').value.trim();
+  const ad=(hesaplar.find(h=>h.kod===kod)||{}).ad||'';
+  if(!tarih||!firma||!toplam){alert('Tarih, Firma ve Genel Toplam zorunlu');return;}
+  const matrah=Math.round((toplam/oranF)*100)/100;
+  const kdv=Math.round((toplam-matrah)*100)/100;
+  // grup: kalem ekleme modundaysa o grup; değilse aynı no'lu var mı bakılır; yoksa yeni grup
+  let grup=fisEditGrup;
+  if(!grup){
+    if(no){ const ayni=fisKalemler.find(r=>(r.no||'')===no); if(ayni) grup=ayni.grup; }
+    if(!grup) grup='g'+Date.now()+Math.random().toString(36).slice(2,5);
+  }
+  fisKalemler.push({tarih,no,firma,toplam,oranFactor:oranF,matrah,kdv,kod,ad,grup});
+  // temizle: normal ekleme sonrası tarih odağı, kalem modunda tutar odağı
+  const kalemModuydu=!!fisEditGrup;
+  if(kalemModuydu){
+    fisEditGrup=grup;
+    $('fisToplam').value=''; $('fisHesapAra').value='';
+    $('fisToplam').focus();
+    $('fisKalemDurum').textContent='Kalem modu: aynı fişe ekleniyor.';
+    $('fisKalemBtn').style.display='inline-block';
+  } else {
+    fisEditGrup=null;
+    $('fisEvrakNo').value=''; $('fisFirma').value=''; $('fisToplam').value=''; $('fisHesapAra').value='';
+    $('fisTarih').focus();
+    $('fisKalemDurum').textContent=''; $('fisKalemBtn').style.display='none';
+  }
+  fisRender();
+}
+
+function fisKalemIptal(){
+  fisEditGrup=null; $('fisKalemDurum').textContent=''; $('fisKalemBtn').style.display='none';
+  $('fisTarih').focus();
+}
+
+function fisKalemEkle(grup){
+  const g=fisKalemler.filter(r=>r.grup===grup);
+  if(!g.length)return;
+  fisEditGrup=grup;
+  const ilk=g[0];
+  $('fisTarih').value=ilk.tarih; $('fisEvrakNo').value=ilk.no||''; $('fisFirma').value=ilk.firma;
+  $('fisToplam').value=''; $('fisHesapAra').value='';
+  $('fisKalemDurum').textContent=`Kalem modu: "${ilk.firma}" fişine kalem ekleniyor.`;
+  $('fisKalemBtn').style.display='inline-block';
+  $('fisToplam').focus();
+}
+
+function fisSil(idx){
+  fisKalemler.splice(idx,1); fisRender();
+}
+
+function fisRender(){
+  const tb=$('fisTbody'), tf=$('fisTfoot');
+  if(!fisKalemler.length){ tb.innerHTML='<tr><td colspan="10" style="text-align:center;padding:16px;color:#999">Kalem ekleyin</td></tr>'; tf.innerHTML=''; return; }
+  // gruplama
+  const gruplar={}, sira=[];
+  fisKalemler.forEach((r,i)=>{ const g=r.grup||i; if(!gruplar[g]){gruplar[g]=[];sira.push(g);} gruplar[g].push({...r,_i:i}); });
+  let html=''; let no=0;
+  sira.forEach((g,gi)=>{
+    const gr=gruplar[g]; no++;
+    const gT=gr.reduce((a,r)=>a+(r.toplam||0),0);
+    const cls=gi%2===0?'grp-a':'grp-b';
+    gr.forEach((r,ki)=>{
+      const ilk=ki===0;
+      const oranPct=Math.round((r.oranFactor-1)*100);
+      html+=`<tr class="${cls}">
+        <td>${ilk?no:''}</td>
+        <td>${ilk?(r.tarih||'').split('-').reverse().join('.'):''}</td>
+        <td>${ilk?(r.no||''):''}</td>
+        <td class="l">${ilk?r.firma:'<span style="color:#8a7d63;font-size:11px;font-style:italic">↳ kalem</span>'}</td>
+        <td>${nf(r.matrah)}</td><td>%${oranPct}</td><td>${nf(r.kdv)}</td><td>${nf(r.toplam)}</td>
+        <td class="l"><small>${r.kod||''}${r.ad?' — '+r.ad.slice(0,20):''}</small></td>
+        <td><button class="btn btn-x" onclick="fisSil(${r._i})" title="Sil">🗑</button></td>
+      </tr>`;
+    });
+    html+=`<tr class="${cls}"><td colspan="3"></td><td class="l"><button class="btn" style="background:#e8e2d2;color:#5a5238;padding:2px 10px;font-size:11px" onclick="fisKalemEkle('${g}')">+ kalem</button></td>`;
+    if(gr.length>1) html+=`<td colspan="3" style="font-size:11px;color:#666">${gr.length} kalem</td><td style="font-weight:600">${nf(gT)}</td><td colspan="2"></td>`;
+    else html+=`<td colspan="6"></td>`;
+    html+=`</tr>`;
+  });
+  tb.innerHTML=html;
+  const sM=fisKalemler.reduce((a,r)=>a+(r.matrah||0),0);
+  const sK=fisKalemler.reduce((a,r)=>a+(r.kdv||0),0);
+  const sT=fisKalemler.reduce((a,r)=>a+(r.toplam||0),0);
+  tf.innerHTML=`<tr class="tot"><td colspan="4" class="l">TOPLAM (${sira.length} fiş)</td><td>${nf(sM)}</td><td></td><td>${nf(sK)}</td><td>${nf(sT)}</td><td colspan="2"></td></tr>`;
+}
+
+async function fisIsle(){
+  if(!fisKalemler.length){alert('Kalem yok');return;}
+  const karsi=$('fisKarsi').value;
+  if(!karsi){alert('198 karşı hesap seç');return;}
+  const body={firma_kod:firmaKod, kalemler:fisKalemler,
+              karsi_hesap:karsi, fis_baslangic:parseInt($('fisBaslangic').value)||0};
+  $('fisDurum').textContent='hazırlanıyor...';
+  const r=await (await fetch(`/api/firma/${firmaKod}/isle-fis`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  $('fisDurum').textContent='';
+  fisOnizleSatir=r.satirlar.map(s=>({...s})); fisDuzenleMod=false;
+  $('fisDuzenleBtn').style.display=fisOnizleSatir.length?'inline-block':'none';
+  fisOnizleRender(r);
+}
+
+function fisOnizleRender(r){
+  if(!fisOnizleSatir.length){ $('fisOnizle').innerHTML=''; return; }
+  const t={b:0,al:0}; fisOnizleSatir.forEach(s=>{t.b+=(+s.borc||0); t.al+=(+s.alacak||0);});
+  const dz=fisDuzenleMod;
+  let h='';
+  if(dz) h+='<datalist id="fisHesapDL2">'+hesaplar.map(x=>`<option value="${x.kod}">${x.kod} — ${x.ad}</option>`).join('')+'</datalist>';
+  h+=`<table style="font-size:12px"><thead><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th></tr></thead><tbody>`;
+  h+=fisOnizleSatir.map((s,i)=>{
+    if(dz){
+      return `<tr>
+        <td><input value="${s.fisno||''}" onchange="fisEdit(${i},'fisno',this.value)" style="width:100px"></td>
+        <td><input value="${s.fis_tarih||''}" onchange="fisEdit(${i},'fis_tarih',this.value)" style="width:96px"></td>
+        <td class="l"><input list="fisHesapDL2" value="${s.hesap||''}" onchange="fisEdit(${i},'hesap',this.value)" style="width:150px"></td>
+        <td><input value="${s.borc||0}" onchange="fisEdit(${i},'borc',this.value)" style="width:80px;text-align:right"></td>
+        <td><input value="${s.alacak||0}" onchange="fisEdit(${i},'alacak',this.value)" style="width:80px;text-align:right"></td>
+        <td class="l"><input value="${(s.detay||'').replace(/"/g,'&quot;')}" onchange="fisEdit(${i},'detay',this.value)" style="width:100%"></td>
+      </tr>`;
+    }
+    return `<tr class="${s.hesap?'':'warn'}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.detay||''}</td></tr>`;
+  }).join('');
+  const dengeli=Math.abs(t.b-t.al)<0.01;
+  h+=`</tbody><tfoot><tr class="tot"><td colspan="3" class="l">TOPLAM</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td></tr></tfoot></table>`;
+  if(r&&r.uyarilar&&r.uyarilar.length) h+='<div style="color:#a23b2e;font-size:12px;margin-top:6px">⚠ '+r.uyarilar.slice(0,6).join(' · ')+'</div>';
+  $('fisOnizle').innerHTML=h;
+}
+
+function fisEdit(i,alan,deger){
+  if(alan==='borc'||alan==='alacak') deger=parseFloat((deger||'').toString().replace(',','.'))||0;
+  fisOnizleSatir[i][alan]=deger;
+  if(fisDuzenleMod) fisOnizleRender();
+}
+
+function fisDuzenleToggle(){
+  if(!fisOnizleSatir.length){alert('Önce Önizle');return;}
+  fisDuzenleMod=!fisDuzenleMod;
+  $('fisDuzenleBtn').textContent=fisDuzenleMod?'✔ Bitir':'✎ Düzenle';
+  fisOnizleRender();
+}
+
+async function fisDisaAktar(){
+  if(!fisOnizleSatir.length){alert('Önce Önizle');return;}
+  $('fisDurum').textContent='hazırlanıyor...';
+  const r=await fetch(`/api/firma/${firmaKod}/export?format=xlsx`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({firma_kod:firmaKod,tip:'fis',satirlar:fisOnizleSatir,donem:''})});
+  const blob=await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=`FIS_${new Date().toISOString().slice(0,10)}.xlsx`; a.click();
+  $('fisDurum').textContent=''; loadCiktilar();
+}
+
+loadFirmalar();
+</script>
+</body>
+</html>
