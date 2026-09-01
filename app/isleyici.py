@@ -266,15 +266,14 @@ def _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar):
 
     # IBAN → banka kodu → ana banka eşleşmesi
     IBAN_BANKA_KODU = {
-        "0010": "ZIRAAT", "0012": "HALKBANK", "0015": "VAKIF",
-        "0032": "TEB", "0046": "AKBANK", "0059": "TURK TICARET",
-        "0062": "GARANTI", "0064": "ISBANK", "0067": "YAPI KREDI",
-        "0092": "AKTIF", "0099": "ODEA", "0103": "FIBABANK",
-        "0111": "QNB", "0123": "HSBC", "0124": "ALTERNATIF",
-        "0125": "BURGAN", "0134": "DENIZBANK", "0135": "ANADOLUBANK",
-        "0143": "ING", "0146": "ODEABANK", "0203": "ALBARAKA",
-        "0206": "KUVEYT TURK", "0210": "TURKIYE FINANS",
-        "0146": "ODEABANK",
+        "00010": "ZIRAAT", "00012": "HALKBANK", "00015": "VAKIF",
+        "00032": "TEB", "00046": "AKBANK", "00059": "TURK TICARET",
+        "00062": "GARANTI", "00064": "ISBANK", "00067": "YAPI KREDI",
+        "00092": "AKTIF", "00099": "ODEA", "00103": "FIBABANK",
+        "00111": "QNB", "00123": "HSBC", "00124": "ALTERNATIF",
+        "00125": "BURGAN", "00134": "DENIZBANK", "00135": "ANADOLUBANK",
+        "00143": "ING", "00146": "ODEABANK", "00203": "ALBARAKA",
+        "00206": "KUVEYT TURK", "00210": "TURKIYE FINANS",
     }
 
     # 1. Belge ipuçlarını topla
@@ -331,7 +330,7 @@ def _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar):
     tespit_banka = None
     iban_bulundu = None
     # TR + 2 kontrol basamağı + 5 boşluk/harf + toplam 26 hane
-    iban_re = _re.compile(r'TR\s*\d{2}\s*(\d{4})\s*\d')
+    iban_re = _re.compile(r'TR\s*\d{2}\s*(\d{5})\s*\d')
     for m in iban_re.finditer(metin_ham):
         banka_kod = m.group(1)
         if banka_kod in IBAN_BANKA_KODU:
@@ -1085,7 +1084,7 @@ def fis_xlsx(satirlar):
 
     for r in satirlar:
         evno = r.get("evrak_no", "")
-        evno = int(evno) if str(evno).isdigit() else evno
+        evno = str(evno) if evno else ""
         ws.append([
             r.get("fisno", ""), dt(r.get("fis_tarih", "")), r.get("fis_aciklama", ""),
             r.get("hesap", ""), evno, dt(r.get("evrak_tarih", "")), r.get("detay", ""),
@@ -1097,6 +1096,7 @@ def fis_xlsx(satirlar):
         for c in row:
             c.border = bd
         row[1].number_format = "dd/mm/yyyy"; row[5].number_format = "dd/mm/yyyy"
+        row[4].number_format = "@"  # Evrak No metin
         row[7].number_format = "#,##0.00"; row[8].number_format = "#,##0.00"
         if not row[3].value:
             row[3].fill = sfill

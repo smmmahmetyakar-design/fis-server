@@ -368,11 +368,128 @@ def _yevmiye_defteri_oku(wb):
     return sonuc
 
 
+def _mikro_fis_listesi_oku(wb):
+    """Mikro/Zirve tipi fiş listesi formatı. Sayfa: 'fis_listesi'.
+    Fiş başlığı: Tarih : dd/mm/yyyy | Belge Düzenleme Nedeni : ... | Fiş No : 00001
+    Sonra: HESAP KODU | HESAP ADI | AÇIKLAMA | BORÇ | ALACAK satırları.
+    FİŞ TOPLAM ile biter."""
+    def _sayi(v):
+        if v is None or v == "": return None
+        if isinstance(v, (int, float)): return float(v)
+        try: return float(str(v).replace(",", "."))
+        except: return None
+
+    sonuc = {"satirlar": [], "son_fis_no": 0, "eslesmeler": {}}
+    ws = None
+    for sn in wb.sheetnames:
+        if "fis_listesi" in norm(sn).replace(" ", "_").lower() or "fis listesi" in norm(sn).lower():
+            ws = wb[sn]; break
+    if ws is None:
+        ws = wb[wb.sheetnames[0]]
+
+    tum = []
+    for row in ws.iter_rows(values_only=True):
+        tum.append(row)
+
+    # Format kontrolü
+    format_var = False
+    for row in tum[:100]:
+        for c in (row or ()):
+            if c and str(c).strip() in ("Fiş No", "FİŞ NO", "FIS NO"):
+                format_var = True; break
+        if format_var: break
+    if not format_var:
+        return None
+
+    # Fiş bloklarını bul
+    fis_baslari = []
+    for i, row in enumerate(tum):
+        if not row: continue
+        for j, c in enumerate(row):
+            if c is None: continue
+            cs = str(c).strip()
+            if cs not in ("Fiş No", "FİŞ NO", "FIS NO"): continue
+            fno_str = None
+            for k in range(j+1, len(row)):
+                v = row[k]
+                if v is not None and str(v).strip() and str(v).strip() != ":":
+                    fno_str = str(v).strip(); break
+            if not fno_str: continue
+            tarih_iso = ""; aciklama = ""
+            for ui in range(max(0, i-3), i+1):
+                uprow = tum[ui]
+                if not uprow: continue
+                for uj, uc in enumerate(uprow):
+                    if uc is None: continue
+                    ucs = str(uc).strip()
+                    if ucs == "Tarih":
+                        for uk in range(uj+1, len(uprow)):
+                            uv = uprow[uk]
+                            if uv and str(uv).strip() and str(uv).strip() != ":":
+                                m = re.match(r'(\d{1,2})[./](\d{1,2})[./](\d{4})', str(uv).strip())
+                                if m: tarih_iso = f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+                                break
+                    elif "Belge D" in ucs or "Nedeni" in ucs:
+                        for uk in range(uj+1, len(uprow)):
+                            uv = uprow[uk]
+                            if uv and str(uv).strip() and str(uv).strip() != ":":
+                                aciklama = str(uv).strip(); break
+            m = re.match(r'0*(\d+)', fno_str)
+            if m: fis_baslari.append((i, int(m.group(1)), tarih_iso, aciklama))
+            break
+
+    if not fis_baslari:
+        return None
+
+    max_fis = 0
+    for idx, (bas_i, fis_no, tarih_iso, aciklama) in enumerate(fis_baslari):
+        max_fis = max(max_fis, fis_no)
+        son_i = fis_baslari[idx+1][0] if idx+1 < len(fis_baslari) else len(tum)
+        baslik_i = None; sut = {}
+        for i in range(bas_i, min(bas_i+10, son_i)):
+            row = tum[i]
+            if not row: continue
+            for j, c in enumerate(row):
+                if c is None: continue
+                cs = norm(str(c))
+                if cs == "HESAP KODU": sut["hesap"] = j; baslik_i = i
+                elif cs == "HESAP ADI": sut["ad"] = j
+                elif cs == "ACIKLAMA": sut["detay"] = j
+                elif cs == "BORC": sut["borc"] = j
+                elif cs == "ALACAK": sut["alacak"] = j
+            if baslik_i is not None and "hesap" in sut and "borc" in sut: break
+        if baslik_i is None: continue
+        for i in range(baslik_i+1, son_i):
+            row = tum[i]
+            if not row: continue
+            hkod = row[sut["hesap"]] if sut["hesap"] < len(row) else None
+            if hkod is None: continue
+            hkod_s = str(hkod).strip()
+            if not hkod_s: continue
+            if "TOPLAM" in norm(hkod_s): break
+            if not re.match(r'^\d{3}(\.\d+)*$', hkod_s): continue
+            b = _sayi(row[sut["borc"]]) or 0 if "borc" in sut and sut["borc"] < len(row) else 0
+            a = _sayi(row[sut["alacak"]]) or 0 if "alacak" in sut and sut["alacak"] < len(row) else 0
+            if b == 0 and a == 0: continue
+            detay = str(row[sut["detay"]] or "").strip() if "detay" in sut and sut["detay"] < len(row) else ""
+            sonuc["satirlar"].append({
+                "fisno": f"{fis_no:05d}", "hesap": hkod_s, "detay": detay,
+                "fis_aciklama": aciklama, "borc": float(b), "alacak": float(a),
+                "fis_tarih": tarih_iso,
+            })
+            if detay and not hkod_s.startswith(("102", "100", "108")):
+                sonuc["eslesmeler"][norm(detay)] = hkod_s
+
+    sonuc["son_fis_no"] = max_fis
+    return sonuc
+
+
 def gecmis_fisler_oku(kaynak_path: Path):
-    """Geçmiş fiş listesini PDF'den okur; eski Excel kaynağı için geriye dönük uyum.
-    Excel'de önce 'Fiş Aktarım Şablonu' sayfası aranır; bulunamazsa yevmiye defteri
-    (Logo/Luca standart raporu) olarak parse edilir.
-    3 seviye cache: bellek (en hızlı, ~1 ms) → diskteki .cache.json → Excel parse."""
+    """Geçmiş fiş listesini okur. Üç format desteklenir:
+    1) Mikro/Zirve tipi ('fis_listesi' sayfası)
+    2) Fiş Aktarım Şablonu (14 sütunlu standart)
+    3) Logo/Luca Yevmiye Defteri
+    3 seviye cache: bellek → disk JSON → Excel parse."""
     if kaynak_path and kaynak_path.suffix.lower() == ".pdf":
         return gecmis_fisler_oku_pdf(kaynak_path)
 
@@ -422,15 +539,26 @@ def gecmis_fisler_oku(kaynak_path: Path):
             pass
 
     ws = None
+    # Öncelik 1: Mikro/Zirve (fis_listesi sayfası)
     for sn in wb.sheetnames:
-        if "aktarim" in norm(sn).lower() or "fis" in norm(sn).lower():
+        if "fis_listesi" in norm(sn).replace(" ", "_").lower() or "fis listesi" in norm(sn).lower():
+            mikro = _mikro_fis_listesi_oku(wb)
+            if mikro and mikro.get("satirlar"):
+                _cache_yaz(mikro); return mikro
+            break
+    # Öncelik 2: Fiş Aktarım Şablonu
+    for sn in wb.sheetnames:
+        if "aktarim" in norm(sn).lower() or ("fis" in norm(sn).lower() and "listesi" not in norm(sn).lower()):
             ws = wb[sn]; break
     if ws is None:
-        # "Fiş Aktarım Şablonu" sayfası yok — yevmiye defteri olabilir
+        # Öncelik 3: Logo/Luca Yevmiye Defteri
         yev = _yevmiye_defteri_oku(wb)
         if yev:
-            _cache_yaz(yev)
-            return yev
+            _cache_yaz(yev); return yev
+        # Son çare: Mikro tekrar dene (sayfa adı farklı olabilir)
+        mikro = _mikro_fis_listesi_oku(wb)
+        if mikro and mikro.get("satirlar"):
+            _cache_yaz(mikro); return mikro
         return sonuc
 
     # Tek geçişte tüm satırları belleğe al (read_only uyumlu, hızlı)
