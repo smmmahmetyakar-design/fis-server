@@ -137,28 +137,107 @@ def _tablo_satirlari(hamlar):
 
 
 def _ham_metin_satirlari(hamlar):
-    """OCR/PDF ham metninden (tarih ... açıklama ... tutar) desenli satırları çıkarır."""
+    """OCR/PDF ham metninden ekstre satırlarını çıkarır.
+    Sağlam desen: satır tarihi ile başlarsa veri satırıdır. Bir sonraki tarih
+    satırına kadar olan devam satırları açıklamanın parçasıdır.
+    YKB tarzı çok satırlı ekstrelerde açıklama önceki satır(lar)a taşabilir —
+    bu durumda önceki devam satırları da açıklamaya eklenir.
+    Tutar tanıma: 'İşlem Tutarı' + 'Bakiye' varsa (2 tutar), sondan biri BAKİYE'dir;
+    işlem tutarı sondan bir öncesidir.
+    """
     kayitlar = []
-    tarih_re = re.compile(r"\b(\d{1,2}[./]\d{1,2}[./]\d{2,4})\b")
-    tutar_re = re.compile(r"-?\d{1,3}(?:[.\s]\d{3})*(?:[.,]\d{2})|-?\d+[.,]\d{2}")
+    # dd/mm/yyyy, dd.mm.yyyy, dd-mm-yyyy tam tarih deseni (satır başında)
+    tarih_bas_re = re.compile(r"^\s*(\d{1,2}[./\-]\d{1,2}[./\-](?:20)?\d{2})(?:\s|$)")
+    tutar_re = re.compile(r"-?\d{1,3}(?:[.\s]\d{3})*[.,]\d{2}")
+
     for h in hamlar:
         metin = h.get("ham_metin", "")
         if not metin:
             continue
-        for hat in metin.splitlines():
-            hat = hat.strip()
-            if not hat:
-                continue
-            tm = tarih_re.search(hat)
-            tutarlar = tutar_re.findall(hat)
-            if not tm or not tutarlar:
+        hatlar = [ln.rstrip() for ln in metin.splitlines()]
+        # veri satırlarının indekslerini bul (tarihle başlayanlar)
+        veri_idx = []
+        for i, ln in enumerate(hatlar):
+            if tarih_bas_re.match(ln):
+                veri_idx.append(i)
+        if not veri_idx:
+            continue
+
+        for k, i in enumerate(veri_idx):
+            hat = hatlar[i]
+            tm = tarih_bas_re.match(hat)
+            if not tm:
                 continue
             tarih = _tarih_iso(tm.group(1))
-            tutar = _sayi(tutarlar[-1])
+            if not tarih:
+                continue
+            # bu satırdaki tutarları bul (TL gibi para birimi yazısını da temizle)
+            sat_temiz = re.sub(r"\bTL\b|\bTRY\b", "", hat)
+            tutarlar = tutar_re.findall(sat_temiz)
+            if not tutarlar:
+                continue
+            # Sondan bir öncesi = işlem tutarı (2+ tutar varsa), tek varsa o
+            if len(tutarlar) >= 2:
+                islem_str = tutarlar[-2]
+            else:
+                islem_str = tutarlar[-1]
+            tutar = _sayi(islem_str)
             if tutar is None or tutar == 0:
                 continue
-            acik = hat[tm.end():]
-            acik = acik.replace(tutarlar[-1], "").strip(" \t-|")
+
+            # açıklama: satırın kendisinden tarih ve tutarları çıkar
+            acik_parts = []
+            # bu satırın tarih sonrası kısmı
+            sonrasi = hat[tm.end():]
+            # tüm tutarları temizle
+            for t in tutarlar:
+                sonrasi = sonrasi.replace(t, " ")
+            sonrasi = re.sub(r"\bTL\b|\bTRY\b", " ", sonrasi)
+            # HH:MM:SS saat kalıbını temizle (YKB'de tarihten sonra saat var)
+            sonrasi = re.sub(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", " ", sonrasi)
+            sonrasi = re.sub(r"\s+", " ", sonrasi).strip(" \t-|:")
+            if sonrasi:
+                acik_parts.append(sonrasi)
+
+            # Önceki devam satırları (bir önceki veri satırı ile bu arası)
+            onceki_veri_idx = veri_idx[k - 1] if k > 0 else -1
+            for j in range(onceki_veri_idx + 1, i):
+                ln = hatlar[j].strip()
+                if not ln:
+                    continue
+                # başlık/altbilgi filtrele
+                if tarih_bas_re.match(ln):
+                    continue
+                # sadece işaretler/çizgiler
+                if re.match(r"^[-\s|]+$", ln):
+                    continue
+                # başlık satırı (Tarih | Saat | ... | Bakiye)
+                nl = norm(ln)
+                if "TARIH" in nl and "BAKIYE" in nl:
+                    continue
+                if "HESAP HAREKETLERI" in nl or "MUSTERI ADI" in nl or "MUSTERI NUMARASI" in nl or "IBAN" in nl or "SUBE" in nl.split() or "HESAP ADI" in nl or "TARIH ARALIGI" in nl or "KULLANILABILIR BAKIYE" in nl:
+                    continue
+                if nl.startswith(("YAPI VE KREDI", "TICARET SICIL", "MERSIS", "ISLETMENIN")):
+                    continue
+                # tutar satırı ise geç (ama içinde harf varsa geçme, açıklama olabilir)
+                if tutar_re.search(ln) and not re.search(r"[A-Za-zĞÜŞİÖÇğüşıöç]{4,}", ln):
+                    continue
+                # "- - - - Diğer Bekleyen İşlemler 0,00 TL -" gibi placeholder satırlar
+                if "BEKLEYEN ISLEM" in nl or re.match(r"^-\s+-\s+-\s+-", ln):
+                    continue
+                acik_parts.append(ln)
+
+            # Sonraki satır her zaman başka kaydın parçasıdır — dokunma.
+            acik = " ".join(acik_parts).strip()
+            # Sütun adı kalıntılarını temizle (her yerde)
+            for kalinti in ["Para Gönder", "Yatırım Fonu", "Internet - Mobil", "Internet Mobil",
+                            "Şube", "ATM", "EFT", "Havale", "Diğer"]:
+                # başta ise
+                acik = re.sub(rf"^{re.escape(kalinti)}\s+", "", acik, flags=re.IGNORECASE)
+                # ortada ise (etrafında boşluk varsa)
+                acik = re.sub(rf"\s+{re.escape(kalinti)}\s+", " ", acik, flags=re.IGNORECASE)
+            acik = re.sub(r"\s+", " ", acik).strip(" -")
+
             kayitlar.append({"tarih": tarih, "aciklama": acik, "tutar": tutar,
                              "dosya": h.get("dosya", "")})
     return kayitlar
@@ -177,22 +256,42 @@ def _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar):
     """Belge içeriğinden ve dosya adından banka+hesap numarası ipuçları çıkarır,
     mizandaki en uygun 102 alt hesabını seçer.
     hesaplar_list: [{"kod": "102.01.08", "ad": "DENİZBANK-354"}, ...]
+
+    Tanıma öncelik sırası:
+    1. IBAN (TR + 2 kontrol + 5-8. hane = banka kodu) — en güvenilir
+    2. Metin/dosya adında banka adı (varyantlarıyla)
+    3. Bulunamazsa mizandaki ilk 102 hesabı
     """
-    # 1. Belge ipuçlarını topla (ham metin + tablo başlıkları + dosya adı)
+    import re as _re
+
+    # IBAN → banka kodu → ana banka eşleşmesi
+    IBAN_BANKA_KODU = {
+        "0010": "ZIRAAT", "0012": "HALKBANK", "0015": "VAKIF",
+        "0032": "TEB", "0046": "AKBANK", "0059": "TURK TICARET",
+        "0062": "GARANTI", "0064": "ISBANK", "0067": "YAPI KREDI",
+        "0092": "AKTIF", "0099": "ODEA", "0103": "FIBABANK",
+        "0111": "QNB", "0123": "HSBC", "0124": "ALTERNATIF",
+        "0125": "BURGAN", "0134": "DENIZBANK", "0135": "ANADOLUBANK",
+        "0143": "ING", "0146": "ODEABANK", "0203": "ALBARAKA",
+        "0206": "KUVEYT TURK", "0210": "TURKIYE FINANS",
+        "0146": "ODEABANK",
+    }
+
+    # 1. Belge ipuçlarını topla
     ipuclari = []
     for h in hamlar:
         dosya = h.get("dosya", "")
         ipuclari.append(dosya)
-        # Ham metin varsa ilk 500 karakter (başlık bölgesi)
         if h.get("ham_metin"):
-            ipuclari.append(h["ham_metin"][:500])
-        # Tablo satırlarının ilk 15'i (başlık bölgesi)
+            # daha çok başlık bölümünden yararlan
+            ipuclari.append(h["ham_metin"][:1200])
         for tab in h.get("tablolar", []):
-            for r in tab[:15]:
+            for r in tab[:20]:
                 for c in r:
                     if c:
                         ipuclari.append(str(c))
-    metin = norm(" ".join(ipuclari))
+    metin_ham = " ".join(ipuclari)
+    metin = norm(metin_ham)
 
     # 2. Mizanda 102 ile başlayan tüm hesaplar
     banka_hesaplari = [(h["kod"], norm(h["ad"])) for h in hesaplar_list if h["kod"].startswith("102")]
@@ -203,62 +302,80 @@ def _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar):
     # 3. Banka adı listesi + varyantları
     banka_adaylari = [
         ("DENIZBANK", ["DENIZ"]),
-        ("ISBANK", ["IS BANK", "TURKIYE IS"]),
+        ("ISBANK", ["IS BANK", "TURKIYE IS", "ISBANKASI", "IS BANKASI"]),
         ("ZIRAAT", ["TC ZIRAAT", "ZIRAAT BANK"]),
-        ("VAKIF", ["VAKIFBANK", "VAKIF BANK"]),
-        ("GARANTI", ["GARANTI BBVA"]),
-        ("YAPI KREDI", ["YKB", "YAPIKREDI"]),
-        ("HALKBANK", ["HALK BANK", "TC HALK"]),
+        ("VAKIF", ["VAKIFBANK", "VAKIF BANK", "VAKIFLAR"]),
+        ("GARANTI", ["GARANTI BBVA", "GARANTI BANK"]),
+        ("YAPI KREDI", ["YKB", "YAPIKREDI", "YAPI VE KREDI"]),
+        ("HALKBANK", ["HALK BANK", "TC HALK", "HALKBANKA"]),
         ("AKBANK", []),
         ("QNB", ["FINANSBANK", "FINANS BANK"]),
         ("ING", ["ING BANK"]),
         ("HSBC", []),
         ("TEB", []),
         ("SEKERBANK", []),
+        ("KUVEYT TURK", ["KUVEYTTURK"]),
+        ("TURKIYE FINANS", ["TURKIYEFINANS"]),
+        ("ALBARAKA", []),
     ]
 
-    # Belgede hangi banka geçiyor tespit et
-    tespit_banka = None
-    for ana, varyantlar in banka_adaylari:
-        if ana in metin or any(v in metin for v in varyantlar):
-            tespit_banka = ana; break
-
     # 4. Hesap numarası ipuçlarını çıkar (dosya adında "354", metinde "9290 - 60363919 - 354" gibi)
-    import re as _re
     hesap_no_ipuclari = set()
-    # dosya adından: DENIZBANK-9290-354 gibi rakamlar
     for h in hamlar:
         for parca in _re.findall(r'\d{3,}', h.get("dosya", "")):
             hesap_no_ipuclari.add(parca)
-    # metin içi kısa numaralar (3-6 basamaklı) — sonda hesap numarası genelde
-    for m in _re.finditer(r'(\d{3,6})(?!\d)', metin[:2000]):
+    for m in _re.finditer(r'(\d{3,8})(?!\d)', metin[:3000]):
         hesap_no_ipuclari.add(m.group(1))
 
-    # 5. Uygun hesabı seç
+    # 5. IBAN'ı yakala — banka kodunu çıkar
+    tespit_banka = None
+    iban_bulundu = None
+    # TR + 2 kontrol basamağı + 5 boşluk/harf + toplam 26 hane
+    iban_re = _re.compile(r'TR\s*\d{2}\s*(\d{4})\s*\d')
+    for m in iban_re.finditer(metin_ham):
+        banka_kod = m.group(1)
+        if banka_kod in IBAN_BANKA_KODU:
+            tespit_banka = IBAN_BANKA_KODU[banka_kod]
+            iban_bulundu = m.group(0)
+            break
+
+    # 6. IBAN yoksa metin/dosya adında banka adı ara
+    if not tespit_banka:
+        for ana, varyantlar in banka_adaylari:
+            if ana in metin or any(v in metin for v in varyantlar):
+                tespit_banka = ana; break
+
+    # 7. Uygun hesabı seç
     if tespit_banka:
-        # Banka adı eşleşen hesapları filtrele
+        # Tespit edilen banka için varyantlar
+        varyant_listesi = [tespit_banka]
+        for ana, vv in banka_adaylari:
+            if ana == tespit_banka:
+                varyant_listesi.extend(vv)
+                break
+
+        # Hesap adında tespit edilen bankanın adı veya varyantı geçenler
         eslesenler = [(k, ad) for k, ad in banka_hesaplari
-                      if tespit_banka in ad or any(v in ad for _, vv in banka_adaylari for v in vv if _ == tespit_banka and v in ad)]
-        # Basitleştir: sadece tespit_banka içeren adlar
-        eslesenler = [(k, ad) for k, ad in banka_hesaplari if tespit_banka in ad]
+                      if any(v in ad for v in varyant_listesi)]
 
         if eslesenler:
             # Birden fazla eşleşme varsa hesap numarası ipuçları ile daralt
             if len(eslesenler) > 1 and hesap_no_ipuclari:
                 for k, ad in eslesenler:
-                    # hesap adında geçen rakamlar
                     hesap_rakamlari = set(_re.findall(r'\d{3,}', ad))
                     if hesap_rakamlari & hesap_no_ipuclari:
                         return k
-            # Birden fazla eşleşme ve ipuçları eşleştiremediyse ilki
             return eslesenler[0][0]
 
-    # 6. Hiçbir banka tespit edilemedi — ilk 102 alt hesabını al
+        # Banka tespit edildi ama mizanda bu bankaya ait 102 alt hesap yok
+        uyarilar.append(f"Belge {tespit_banka} bankasından ama mizanda uygun 102 hesabı yok, varsayılan kullanıldı")
+
+    # 8. Hiçbir banka tespit edilemedi — ilk 102 alt hesabını al
     for k, ad in banka_hesaplari:
-        if k.count(".") >= 2:  # 102.01.001 gibi alt hesap
+        if k.count(".") >= 2:
             uyarilar.append(f"Banka tanınamadı, mizandaki ilk 102 alt hesabı ({k}) kullanıldı")
             return k
-    uyarilar.append(f"Uygun 102 hesabı bulunamadı, 102.01.001 varsayıldı")
+    uyarilar.append("Uygun 102 hesabı bulunamadı, 102.01.001 varsayıldı")
     return "102.01.001"
 
 
@@ -267,9 +384,22 @@ def isle_banka(hamlar, km, fis0):
     Banka dökümü -> her hareket bir fiş.
     Bankaya para GİRİŞİ (alacak, +): banka borç / karşı alacak
     Bankadan ÇIKIŞ (borç, -): karşı borç / banka alacak
-    Banka hesabı belge içeriği + mizan üzerinden akıllı seçilir.
+    Her belge için AYRI banka hesabı akıllı seçilir (birden çok banka
+    ekstresi aynı anda yüklenmişse her biri kendi 102 hesabına gider).
     """
     uyarilar = []
+    hesaplar_list = [{"kod": k, "ad": a} for k, a in km.hesaplar]
+
+    # Her belge için ayrı banka hesabı belirle
+    dosya_to_hesap = {}
+    for h in hamlar:
+        dosya = h.get("dosya", "")
+        # Tek dosyayı liste olarak vererek _banka_hesabi_bul'u çalıştır
+        hesap = _banka_hesabi_bul([h], hesaplar_list, uyarilar)
+        dosya_to_hesap[dosya] = hesap
+
+    # Tüm kayıtları topla, her kaydın hangi dosyadan geldiğini bildiği için
+    # o dosyanın banka hesabına yazılır
     kayitlar = _kayitlar(hamlar)
     if not kayitlar:
         for h in hamlar:
@@ -277,15 +407,14 @@ def isle_banka(hamlar, km, fis0):
                 uyarilar.append(f"{h.get('dosya')}: tablo çıkarılamadı, ham metin var — elle düzenleme gerekebilir")
         return [], uyarilar
 
-    # banka ana hesabını akıllı seç
-    hesaplar_list = [{"kod": k, "ad": a} for k, a in km.hesaplar]
-    banka_hesap = _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar)
-
-    banka_ad = km.hesap_adi(banka_hesap) or "BANKA"
     fisler = []
     fis = fis0
     for k in sorted(kayitlar, key=lambda x: x["tarih"] or ""):
         fisno = f"{fis:05d}"
+        # Bu kaydın geldiği dosyayı belirle, ona ait banka hesabını al
+        banka_hesap = dosya_to_hesap.get(k.get("dosya", ""), "102.01.001")
+        banka_ad = km.hesap_adi(banka_hesap) or "BANKA"
+
         karsi, kaynak = km.eslestir(k["aciklama"])
         if not karsi:
             karsi = ""  # boş bırak, önizlemede sarı/uyarı
