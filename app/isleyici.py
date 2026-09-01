@@ -276,20 +276,28 @@ def _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar):
         "00206": "KUVEYT TURK", "00210": "TURKIYE FINANS",
     }
 
-    # 1. Belge ipuçlarını topla
-    ipuclari = []
+    # 1. Belge ipuçlarını topla — BAŞLIK ve İŞLEM ayrı tutulur
+    # IBAN sadece başlık alanından alınır (işlem açıklamalarındaki karşı taraf IBAN'ları karıştırmasın)
+    baslik_ipuclari = []  # sadece dosya adı + ilk 10 satır (başlık bölgesi)
+    tum_ipuclari = []     # tüm metin (banka adı aramak için)
     for h in hamlar:
         dosya = h.get("dosya", "")
-        ipuclari.append(dosya)
+        baslik_ipuclari.append(dosya)
+        tum_ipuclari.append(dosya)
         if h.get("ham_metin"):
-            # daha çok başlık bölümünden yararlan
-            ipuclari.append(h["ham_metin"][:1200])
+            baslik_ipuclari.append(h["ham_metin"][:600])
+            tum_ipuclari.append(h["ham_metin"][:600])
         for tab in h.get("tablolar", []):
-            for r in tab[:20]:
+            for i, r in enumerate(tab[:20]):
                 for c in r:
                     if c:
-                        ipuclari.append(str(c))
-    metin_ham = " ".join(ipuclari)
+                        s = str(c)
+                        tum_ipuclari.append(s)
+                        if i < 10:  # ilk 10 satır başlık
+                            baslik_ipuclari.append(s)
+    baslik_ham = " ".join(baslik_ipuclari)
+    baslik_norm = norm(baslik_ham)
+    metin_ham = " ".join(tum_ipuclari)
     metin = norm(metin_ham)
 
     # 2. Mizanda 102 ile başlayan tüm hesaplar
@@ -326,22 +334,24 @@ def _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar):
     for m in _re.finditer(r'(\d{3,8})(?!\d)', metin[:3000]):
         hesap_no_ipuclari.add(m.group(1))
 
-    # 5. IBAN'ı yakala — banka kodunu çıkar
+    # 5. IBAN'ı yakala — SADECE BAŞLIK bölgesinden (işlem açıklamalarındaki
+    # karşı taraf IBAN'ları yanlış banka tespitine yol açmasın)
     tespit_banka = None
     iban_bulundu = None
-    # TR + 2 kontrol basamağı + 5 boşluk/harf + toplam 26 hane
-    iban_re = _re.compile(r'TR\s*\d{2}\s*(\d{5})\s*\d')
-    for m in iban_re.finditer(metin_ham):
-        banka_kod = m.group(1)
+    # IBAN: TR + 2 kontrol + 5 banka kodu — ama boşluklu yazılabilir (TR14 0006 4000...)
+    # Bu yüzden 4+1 olarak yakala (boşluk arada olabilir)
+    iban_re = _re.compile(r'TR\s*(\d{2})\s*(\d{4})\s*(\d)')
+    for m in iban_re.finditer(baslik_ham):
+        banka_kod = m.group(2) + m.group(3)  # 4+1 = 5 haneli banka kodu
         if banka_kod in IBAN_BANKA_KODU:
             tespit_banka = IBAN_BANKA_KODU[banka_kod]
             iban_bulundu = m.group(0)
             break
 
-    # 6. IBAN yoksa metin/dosya adında banka adı ara
+    # 6. IBAN yoksa BAŞLIK metninde banka adı ara (tüm metin değil)
     if not tespit_banka:
         for ana, varyantlar in banka_adaylari:
-            if ana in metin or any(v in metin for v in varyantlar):
+            if ana in baslik_norm or any(v in baslik_norm for v in varyantlar):
                 tespit_banka = ana; break
 
     # 7. Uygun hesabı seç
