@@ -418,24 +418,33 @@ def isle_banka(hamlar, km, fis0):
 
     fisler = []
     fis = fis0
-    for k in sorted(kayitlar, key=lambda x: x["tarih"] or ""):
-        fisno = f"{fis:05d}"
-        # Bu kaydın geldiği dosyayı belirle, ona ait banka hesabını al
+
+    # Aynı bankanın aynı tarihteki hareketlerini TEK FİŞTE topla
+    from collections import defaultdict
+    gruplar = defaultdict(list)  # anahtar: (banka_hesap, tarih)
+    for k in kayitlar:
         banka_hesap = dosya_to_hesap.get(k.get("dosya", ""), "102.01.001")
+        tarih = k.get("tarih", "") or ""
+        gruplar[(banka_hesap, tarih)].append(k)
+
+    # Tarihe göre sırala, sonra banka hesabına göre
+    for (banka_hesap, tarih), grup_kayitlar in sorted(gruplar.items(), key=lambda x: (x[0][1], x[0][0])):
+        fisno = f"{fis:05d}"
         banka_ad = km.hesap_adi(banka_hesap) or "BANKA"
 
-        karsi, kaynak = km.eslestir(k["aciklama"])
-        if not karsi:
-            karsi = ""  # boş bırak, önizlemede sarı/uyarı
-            uyarilar.append(f"{k['aciklama'][:30]}: hesap eşleşmedi")
-        tutar = abs(k["tutar"])
-        evno = k.get("referans", "")
-        if k["tutar"] >= 0:  # giriş: banka borç / karşı alacak
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, tutar, 0, evrak_no=evno, detay=k["aciklama"], kaynak="banka"))
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, 0, tutar, evrak_no=evno, detay=k["aciklama"], kaynak=kaynak))
-        else:               # çıkış: karşı borç / banka alacak
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, tutar, 0, evrak_no=evno, detay=k["aciklama"], kaynak=kaynak))
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, 0, tutar, evrak_no=evno, detay=k["aciklama"], kaynak="banka"))
+        for k in grup_kayitlar:
+            karsi, kaynak = km.eslestir(k["aciklama"])
+            if not karsi:
+                karsi = ""
+                uyarilar.append(f"{k['aciklama'][:30]}: hesap eşleşmedi")
+            tutar = abs(k["tutar"])
+            evno = k.get("referans", "")
+            if k["tutar"] >= 0:  # giriş: banka borç / karşı alacak
+                fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, tutar, 0, evrak_no=evno, detay=k["aciklama"], kaynak="banka"))
+                fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, 0, tutar, evrak_no=evno, detay=k["aciklama"], kaynak=kaynak))
+            else:               # çıkış: karşı borç / banka alacak
+                fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, tutar, 0, evrak_no=evno, detay=k["aciklama"], kaynak=kaynak))
+                fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, 0, tutar, evrak_no=evno, detay=k["aciklama"], kaynak="banka"))
         fis += 1
     return fisler, uyarilar
 
