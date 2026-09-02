@@ -83,9 +83,9 @@ def _tablo_satirlari(hamlar):
                     elif "ISLEM TUTARI" in c or "TUTAR TL" in c or c == "TUTAR" or c == "MIKTAR" or c.startswith("TUTAR"):
                         hh["tutar"] = j
                     elif "GELIR" in c and "TUTAR" in c:
-                        hh["alacak"] = j  # Gelir Tutar = alacak (para giriyor)
+                        hh["borc"] = j    # Gelir Tutar = para girişi (bankaya gelen)
                     elif "GIDER" in c and "TUTAR" in c:
-                        hh["borc"] = j    # Gider Tutar = borç (para çıkıyor)
+                        hh["alacak"] = j  # Gider Tutar = para çıkışı (bankadan giden)
                     elif "BORC" in c:
                         hh["borc"] = j
                     elif "ALACAK" in c:
