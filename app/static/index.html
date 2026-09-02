@@ -185,6 +185,7 @@
 const $=id=>document.getElementById(id);
 let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
 let suzgec='hepsi'; // 'hepsi' | 'eslesmeyen' | 'eslesen'
+let bankaSuzgec='hepsi'; // 'hepsi' | banka hesap kodu (ör. '102.01.004')
 
 function sekmeSec(tip){
   aktifTip=tip;
@@ -306,7 +307,7 @@ async function isle(){
   const r=await (await fetch(`/api/firma/${firmaKod}/isle/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,yon})})).json();
   $('durum').textContent='';
-  satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false; suzgec='hepsi';
+  satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false; suzgec='hepsi'; bankaSuzgec='hepsi';
   $('duzenleBtn').style.display=satirlar.length?'inline-block':'none';
   render(r);
 }
@@ -321,20 +322,48 @@ function render(r){
   let h='';
   if(r&&r.okunan_belgeler) h+='<div class="hint" style="margin-bottom:8px">Okunan: '+r.okunan_belgeler.map(b=>`${b.dosya} (${b.tur})`).join(', ')+'</div>';
 
-  // Süzgeç butonları
+  // Süzgeç butonları — Eşleşme durumu
   const eslesmeyen=satirlar.filter(s=>!s.hesap).length;
   const eslesen=satirlar.length-eslesmeyen;
-  h+=`<div style="margin-bottom:8px;display:flex;gap:6px;align-items:center">
-    <span style="font-size:12px;color:#666">Süzgeç:</span>
+  h+=`<div style="margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+    <span style="font-size:12px;color:#666">Durum:</span>
     <button class="btn ${suzgec==='hepsi'?'btn-ana':''}" onclick="suzgecDegistir('hepsi')" style="padding:3px 10px;font-size:12px">Hepsi (${satirlar.length})</button>
     <button class="btn ${suzgec==='eslesmeyen'?'btn-ana':''}" onclick="suzgecDegistir('eslesmeyen')" style="padding:3px 10px;font-size:12px;${eslesmeyen?'background:#d4a017;color:#fff':''}">⚠ Eşleşmeyen (${eslesmeyen})</button>
     <button class="btn ${suzgec==='eslesen'?'btn-ana':''}" onclick="suzgecDegistir('eslesen')" style="padding:3px 10px;font-size:12px">✓ Eşleşen (${eslesen})</button>
   </div>`;
 
+  // Süzgeç butonları — Banka bazlı
+  // fis_aciklama alanından benzersiz banka isimlerini çıkar
+  const bankaSet = new Map();
+  satirlar.forEach(s=>{
+    // banka satırlarını bul (kaynak=banka olan veya 102 ile başlayan hesaplar)
+    if(s.kaynak==='banka' || (s.hesap && s.hesap.startsWith('102'))){
+      const ad = s.fis_aciklama || s.hesap || '?';
+      if(!bankaSet.has(ad)) bankaSet.set(ad, 0);
+      bankaSet.set(ad, bankaSet.get(ad)+1);
+    }
+  });
+  if(bankaSet.size > 1){
+    h+=`<div style="margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:12px;color:#666">Banka:</span>
+      <button class="btn ${bankaSuzgec==='hepsi'?'btn-ana':''}" onclick="bankaSuzgecDegistir('hepsi')" style="padding:3px 10px;font-size:12px">Tümü</button>`;
+    for(const [ad, sayi] of bankaSet){
+      const kisaAd = ad.length > 20 ? ad.slice(0,18)+'…' : ad;
+      h+=`<button class="btn ${bankaSuzgec===ad?'btn-ana':''}" onclick="bankaSuzgecDegistir('${ad.replace(/'/g,"\\'")}')" style="padding:3px 10px;font-size:12px">${kisaAd} (${sayi})</button>`;
+    }
+    h+=`</div>`;
+  }
+
   // Filtre uygula
   let gosterilecek = satirlar.map((s,i)=>({...s,_idx:i}));
   if(suzgec==='eslesmeyen') gosterilecek=gosterilecek.filter(s=>!s.hesap);
   else if(suzgec==='eslesen') gosterilecek=gosterilecek.filter(s=>!!s.hesap);
+  // Banka filtresi: seçilen bankanın fis_aciklama'sına sahip fişleri göster
+  if(bankaSuzgec!=='hepsi'){
+    const fisNolar = new Set();
+    gosterilecek.forEach(s=>{ if(s.fis_aciklama===bankaSuzgec) fisNolar.add(s.fisno); });
+    gosterilecek = gosterilecek.filter(s=>fisNolar.has(s.fisno));
+  }
 
   // Düzenleme modunda tüm satırların paylaştığı hesap listesi (arama kutusu için)
   if(dz){
@@ -360,12 +389,13 @@ function render(r){
     }
     return `<tr class="${s.hesap?'':'warn'}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
   }).join('');
-  h+=`</tbody><tfoot><tr class="tot"><td colspan="3" class="l">TOPLAM (${suzgec==='hepsi'?'tümü':suzgec==='eslesmeyen'?'eşleşmeyen':'eşleşen'})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table>`;
+  h+=`</tbody><tfoot><tr class="tot"><td colspan="3" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';
   if(dz) h+='<div class="hint" style="margin-top:6px">Hesabı yanlış eşleşenleri düzeltin; "Bitir"e basınca eşleştirmeler öğrenilir. Sonra Excel/XML alın.</div>';
   $('onizle').innerHTML=h;
 }
 function suzgecDegistir(yeni){ suzgec=yeni; render(); }
+function bankaSuzgecDegistir(yeni){ bankaSuzgec=yeni; render(); }
 function edit(i,alan,deger){
   if(alan==='borc'||alan==='alacak') deger=parseFloat((deger||'').toString().replace(',','.'))||0;
   const eski=satirlar[i].hesap;
