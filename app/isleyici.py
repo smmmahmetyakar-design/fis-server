@@ -1083,188 +1083,208 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
 def isle_cek(hamlar, km, fis0):
     """
     Çek listesi -> muhasebe fişi.
-    Excel'den okunan çek listesinde şu sütunlar beklenir:
-    - Tarih (alım veya çıkış tarihi)
-    - Vade
-    - Tutar
-    - Banka (çekin bankası)
-    - Kimden Alındı / Kime Verildi (cari ismi)
-    - Çek No
-    - Tür/Yön (GİRİŞ / ÇIKIŞ veya tutar işareti)
 
-    ÇEK GİRİŞİ: 101.01.001 TL ÇEKLER borç / cari alacak
-    ÇEK ÇIKIŞI: cari borç / 101.01.001 TL ÇEKLER alacak
+    Beklenen Excel formatı (her satır bir çek):
+      NO | ALIM TARİH | KİMDEN ALINDI | BANKA | ŞUBE | VADE | ÇEK NO | TUTARI | KİME VERİLDİ | ÇIKIŞ TARİH
 
-    Detay format: TARİH-BANKA-VADEVDLİ-KİMDEN(-KİME)
+    Her çek 2 fiş üretir:
+      GİRİŞ (alım tarihinde): 101.01.001 borç / kimden_hesap alacak
+      ÇIKIŞ (çıkış tarihinde): kime_hesap borç / 101.01.001 alacak
+
+    KİME VERİLDİ = "KASA" veya boş ise sadece GİRİŞ fişi üretilir.
     """
-    import re as _re
     uyarilar = []
-    CEK_HESAP = "101.01.001"  # TL Çekler ana hesap
-    FALLBACK = "198.01.001"   # eşleşme bulunamazsa
+    CEK_HESAP = "101.01.001"
 
-    # Çek listesini oku — tablo satırlarından
-    kayitlar = _kayitlar(hamlar)
-    if not kayitlar:
-        uyarilar.append("Çek listesi tablo olarak okunamadı (Excel bekleniyor)")
-        return [], uyarilar
+    # Çek satırlarını oku (özel parser — _kayitlar yerine doğrudan tablo)
+    cekler_ham = _cek_listesi_oku(hamlar)
+    # Mükerrer çek filtresi (çek no + tutar aynıysa tekini tut)
+    gorulen_cek = set()
+    cekler = []
+    for c in cekler_ham:
+        key = (c.get("cek_no",""), c["tutar"])
+        if key in gorulen_cek:
+            continue
+        gorulen_cek.add(key)
+        cekler.append(c)
+    if len(cekler) < len(cekler_ham):
+        uyarilar.append(f"{len(cekler_ham)-len(cekler)} mükerrer çek silindi")
 
-    # Çek listesi özel sütunlarını ham tablodan çıkar
-    # Standart _kayitlar sadece tarih/tutar/aciklama verir
-    # Ama çek için vade, banka, kimden/kime, çek no da lazım
-    # Ham tablodan ekstra sütunları çıkaralım
-    cek_detaylar = _cek_detay_oku(hamlar)
+    if not cekler:
+        # Fallback: _kayitlar ile dene (basit format)
+        kayitlar = _kayitlar(hamlar)
+        if not kayitlar:
+            uyarilar.append("Çek listesi okunamadı")
+            return [], uyarilar
+        # Basit format: her satır tek fiş (giriş varsayılır)
+        fisler = []
+        fis = fis0
+        for k in sorted(kayitlar, key=lambda x: x["tarih"] or ""):
+            fisno = f"{fis:05d}"
+            cari, kaynak = km.eslestir(k["aciklama"])
+            tutar = abs(k["tutar"])
+            if tutar == 0: continue
+            fisler.append(_sat(fisno, k["tarih"], "ÇEK GİRİŞİ", CEK_HESAP, tutar, 0,
+                evrak_no=k.get("referans",""), detay=k["aciklama"], kaynak="cek"))
+            fisler.append(_sat(fisno, k["tarih"], "ÇEK GİRİŞİ", cari or "", 0, tutar,
+                evrak_no=k.get("referans",""), detay=k["aciklama"], kaynak=kaynak))
+            fis += 1
+        return fisler, uyarilar
 
     fisler = []
     fis = fis0
 
-    for i, k in enumerate(sorted(kayitlar, key=lambda x: x["tarih"] or "")):
-        fisno = f"{fis:05d}"
-        tutar = abs(k["tutar"])
+    for c in cekler:
+        tutar = c["tutar"]
         if tutar == 0:
             continue
+        cek_no = c.get("cek_no", "")
+        banka = c.get("banka", "")
+        vade = c.get("vade", "")
+        kimden = c.get("kimden", "")
+        kime = c.get("kime", "")
+        alim_tarih = c.get("alim_tarih", "")
+        cikis_tarih = c.get("cikis_tarih", "")
 
-        # Çek detaylarından ekstra bilgi al (varsa)
-        detay = cek_detaylar[i] if i < len(cek_detaylar) else {}
-        vade = detay.get("vade", "")
-        banka = detay.get("banka", "")
-        kimden = detay.get("kimden", "")
-        kime = detay.get("kime", "")
-        cek_no = detay.get("cek_no", k.get("referans", ""))
-        tur = detay.get("tur", "")  # GİRİŞ / ÇIKIŞ
-
-        # Tür tespiti: açıkça belirtilmemişse tutar işaretinden veya açıklamadan
-        if not tur:
-            acik_upper = (k.get("aciklama", "") or "").upper()
-            if "ÇIKIŞ" in acik_upper or "CIKIS" in acik_upper or "VERİL" in acik_upper:
-                tur = "ÇIKIŞ"
-            elif "GİRİŞ" in acik_upper or "GIRIS" in acik_upper or "ALIN" in acik_upper:
-                tur = "GİRİŞ"
-            elif k["tutar"] < 0:
-                tur = "ÇIKIŞ"
-            else:
-                tur = "GİRİŞ"
-
-        # Cari hesap bul
-        arama_ismi = kimden or kime or k.get("aciklama", "")
-        cari, kaynak = km.eslestir(arama_ismi)
-        if not cari:
-            cari = ""
-            uyarilar.append(f"{arama_ismi[:30]}: hesap eşleşmedi")
-
-        # Detay açıklama formatı
-        tarih_fmt = _tarih_gg(k["tarih"])
+        # Detay formatı
+        alim_fmt = _tarih_gg(alim_tarih)
         vade_fmt = _tarih_gg(vade)
         kimden_temiz = _isim_temizle(kimden)
         kime_temiz = _isim_temizle(kime)
 
-        if tur == "GİRİŞ":
-            fis_aciklama = "ÇEK GİRİŞİ"
-            if tarih_fmt and banka and vade_fmt:
-                detay_str = f"{tarih_fmt}-{banka}-{vade_fmt}VDLİ-{kimden_temiz}"
-            else:
-                detay_str = k.get("aciklama", "") or f"{kimden_temiz}"
-            # 101 borç / cari alacak
-            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, CEK_HESAP, tutar, 0,
-                evrak_no=cek_no, detay=detay_str, kaynak="cek"))
-            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, cari, 0, tutar,
-                evrak_no=cek_no, detay=detay_str, kaynak=kaynak))
-        else:  # ÇIKIŞ
-            fis_aciklama = "ÇEK ÇIKIŞI"
-            if tarih_fmt and banka and vade_fmt:
-                detay_str = f"{tarih_fmt}-{banka}-{vade_fmt}VDLİ-{kimden_temiz}-{kime_temiz}"
-            else:
-                detay_str = k.get("aciklama", "") or f"{kime_temiz}"
-            # cari borç / 101 alacak
-            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, cari, tutar, 0,
-                evrak_no=cek_no, detay=detay_str, kaynak=kaynak))
-            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, CEK_HESAP, 0, tutar,
-                evrak_no=cek_no, detay=detay_str, kaynak="cek"))
+        # -- GİRİŞ FİŞİ (alım tarihinde) --
+        giris_detay = f"{alim_fmt}-{banka}-{vade_fmt}VDLİ-{kimden_temiz}" if alim_fmt and banka else kimden
+        kimden_hesap, kimden_kaynak = km.eslestir(kimden)
+        if not kimden_hesap:
+            kimden_hesap = ""
+            uyarilar.append(f"GİRİŞ {kimden[:25]}: hesap eşleşmedi")
+
+        fisno = f"{fis:05d}"
+        fisler.append(_sat(fisno, alim_tarih, "ÇEK GİRİŞİ", CEK_HESAP, tutar, 0,
+            evrak_no=cek_no, detay=giris_detay, kaynak="cek"))
+        fisler.append(_sat(fisno, alim_tarih, "ÇEK GİRİŞİ", kimden_hesap, 0, tutar,
+            evrak_no=cek_no, detay=giris_detay, kaynak=kimden_kaynak))
         fis += 1
+
+        # -- ÇIKIŞ FİŞİ (çıkış tarihinde) -- sadece kime verilmişse
+        kime_upper = kime.strip().upper()
+        if kime_upper and kime_upper not in ("KASA", "KASAYA", "KASADA", ""):
+            if not cikis_tarih:
+                cikis_tarih = alim_tarih  # çıkış tarihi yoksa alım tarihi kullan
+
+            cikis_detay = f"{_tarih_gg(cikis_tarih)}-{banka}-{vade_fmt}VDLİ-{kimden_temiz}-{kime_temiz}" if banka else f"{kimden_temiz}-{kime_temiz}"
+
+            # Özel durumlar: FİRMA ORTAĞINA ÇIKIŞ / ORTAKTAN GİRİŞ
+            kime_arama = kime
+            if "ORTA" in kime_upper and ("ÇIKIŞ" in kime_upper or "CIKIS" in kime_upper):
+                kime_arama = "ŞİRKET ORTAĞINA ÇIKIŞ"
+            elif "FAKTORİNG" in kime_upper or "FAKTORING" in kime_upper:
+                kime_arama = kime  # faktoring şirketi adıyla ara
+
+            kime_hesap, kime_kaynak = km.eslestir(kime_arama)
+            if not kime_hesap:
+                kime_hesap = ""
+                uyarilar.append(f"ÇIKIŞ {kime[:25]}: hesap eşleşmedi")
+
+            fisno = f"{fis:05d}"
+            fisler.append(_sat(fisno, cikis_tarih, "ÇEK ÇIKIŞI", kime_hesap, tutar, 0,
+                evrak_no=cek_no, detay=cikis_detay, kaynak=kime_kaynak))
+            fisler.append(_sat(fisno, cikis_tarih, "ÇEK ÇIKIŞI", CEK_HESAP, 0, tutar,
+                evrak_no=cek_no, detay=cikis_detay, kaynak="cek"))
+            fis += 1
+
     return fisler, uyarilar
 
 
 def _tarih_gg(tarih_str):
-    """ISO tarih (2026-07-01) → gg.aa.yyyy formatına çevirir."""
-    if not tarih_str:
-        return ""
+    """ISO tarih (2026-07-01) → gg.aa.yyyy"""
+    if not tarih_str: return ""
     import re
     m = re.match(r'(\d{4})-(\d{2})-(\d{2})', str(tarih_str))
-    if m:
-        return f"{m.group(3)}.{m.group(2)}.{m.group(1)}"
+    if m: return f"{m.group(3)}.{m.group(2)}.{m.group(1)}"
     m = re.match(r'(\d{1,2})[./](\d{1,2})[./](\d{4})', str(tarih_str))
-    if m:
-        return f"{int(m.group(1)):02d}.{int(m.group(2)):02d}.{m.group(3)}"
+    if m: return f"{int(m.group(1)):02d}.{int(m.group(2)):02d}.{m.group(3)}"
     return str(tarih_str)
 
 
 def _isim_temizle(isim):
-    """İsimden boşlukları kaldır, büyük harf yap."""
-    if not isim:
-        return ""
+    """İsimden boşlukları kaldır, büyük harf."""
+    if not isim: return ""
     return str(isim).strip().upper().replace(" ", "")
 
 
-def _cek_detay_oku(hamlar):
-    """Çek listesi Excel'inden ekstra sütunları (vade, banka, kimden, kime, çek no, tür) çıkarır."""
+def _cek_listesi_oku(hamlar):
+    """Çek listesi Excel'inden satırları özel formatta okur.
+    Sütunlar: NO | ALIM TARİH | KİMDEN ALINDI | BANKA | ŞUBE | VADE | ÇEK NO | TUTARI | KİME VERİLDİ | ÇIKIŞ TARİH
+    """
     import re as _re
-    detaylar = []
+    from datetime import datetime
+
+    def _tarih_iso(v):
+        if not v: return ""
+        if isinstance(v, datetime): return v.strftime("%Y-%m-%d")
+        s = str(v).strip()
+        m = _re.match(r'(\d{1,2})[./](\d{1,2})[./](\d{4})', s)
+        if m: return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+        return s
+
+    def _sayi(v):
+        if v is None: return 0
+        if isinstance(v, (int, float)): return float(v)
+        try: return float(str(v).replace(",", ".").replace(" ", ""))
+        except: return 0
+
+    cekler = []
     for h in hamlar:
         for tab in h.get("tablolar", []):
             # Başlık satırını bul
             harita = {}
             baslik_r = -1
-            for ri, row in enumerate(tab[:15]):
+            for ri, row in enumerate(tab[:10]):
                 for ci, c in enumerate(row):
-                    if c is None:
-                        continue
+                    if c is None: continue
                     cn = norm(str(c))
-                    if "VADE" in cn:
-                        harita["vade"] = ci
-                    elif "BANKA" in cn:
-                        harita["banka"] = ci
-                    elif "KIMDEN" in cn or "ALINDI" in cn or "KESIDECI" in cn:
-                        harita["kimden"] = ci
-                    elif "KIME" in cn or "VERILDI" in cn:
-                        harita["kime"] = ci
-                    elif "CEK NO" in cn or "CEK NUMARASI" in cn or "SENET NO" in cn:
-                        harita["cek_no"] = ci
-                    elif "TUR" in cn and len(cn) < 12:
-                        harita["tur"] = ci
-                    elif cn in ("YON", "ISLEM", "GIRIS CIKIS"):
-                        harita["tur"] = ci
-                if harita:
-                    baslik_r = ri
-                    break
+                    if "ALIM" in cn and "TARIH" in cn: harita["alim_tarih"] = ci
+                    elif "KIMDEN" in cn or "ALINDI" in cn: harita["kimden"] = ci
+                    elif cn.strip() in ("BANKA", "BANKA "): harita["banka"] = ci
+                    elif "SUBE" in cn: harita["sube"] = ci
+                    elif "VADE" in cn: harita["vade"] = ci
+                    elif "CEK NO" in cn or "CEK NUMARASI" in cn or "SENET NO" in cn: harita["cek_no"] = ci
+                    elif "TUTAR" in cn or "BEDEL" in cn: harita["tutar"] = ci
+                    elif "KIME" in cn or "VERILDI" in cn: harita["kime"] = ci
+                    elif "CIKIS" in cn and "TARIH" in cn: harita["cikis_tarih"] = ci
+                    elif cn == "NO": harita["no"] = ci
+                if "kimden" in harita and "tutar" in harita:
+                    baslik_r = ri; break
+
             if baslik_r < 0:
                 continue
 
-            # Tarih formatı düzeltme
-            def _tarih_iso(v):
-                if not v:
-                    return ""
-                s = str(v).strip()
-                m = _re.match(r'(\d{1,2})[./](\d{1,2})[./](\d{4})', s)
-                if m:
-                    return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
-                return s
+            def g(row, alan):
+                ci = harita.get(alan)
+                if ci is not None and ci < len(row): return row[ci]
+                return None
 
             for ri in range(baslik_r + 1, len(tab)):
                 row = tab[ri]
-                d = {}
-                for alan, ci in harita.items():
-                    if ci < len(row) and row[ci]:
-                        val = str(row[ci]).strip()
-                        if alan == "vade":
-                            val = _tarih_iso(val)
-                        elif alan == "tur":
-                            val = val.upper()
-                            if "ÇIKIŞ" in val or "CIKIS" in val:
-                                val = "ÇIKIŞ"
-                            elif "GİRİŞ" in val or "GIRIS" in val:
-                                val = "GİRİŞ"
-                        d[alan] = val
-                detaylar.append(d)
-    return detaylar
+                tutar = _sayi(g(row, "tutar"))
+                kimden = str(g(row, "kimden") or "").strip()
+                if tutar == 0 and not kimden: continue
+                # TOPLAM satırını atla
+                if "TOPLAM" in norm(kimden): continue
+
+                cekler.append({
+                    "alim_tarih": _tarih_iso(g(row, "alim_tarih")),
+                    "kimden": kimden,
+                    "banka": str(g(row, "banka") or "").strip().upper(),
+                    "sube": str(g(row, "sube") or "").strip(),
+                    "vade": _tarih_iso(g(row, "vade")),
+                    "cek_no": str(g(row, "cek_no") or "").strip(),
+                    "tutar": tutar,
+                    "kime": str(g(row, "kime") or "").strip(),
+                    "cikis_tarih": _tarih_iso(g(row, "cikis_tarih")),
+                })
+    return cekler
 
 
 def isle_fis(kalemler, km, fis0=1, karsi_hesap="198.01.001"):
