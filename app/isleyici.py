@@ -82,6 +82,10 @@ def _tablo_satirlari(hamlar):
                     # tutar (İş Bankası: "İşlem Tutarı", Denizbank: "Tutar (TL)")
                     elif "ISLEM TUTARI" in c or "TUTAR TL" in c or c == "TUTAR" or c == "MIKTAR" or c.startswith("TUTAR"):
                         hh["tutar"] = j
+                    elif "GELIR" in c and "TUTAR" in c:
+                        hh["alacak"] = j  # Gelir Tutar = alacak (para giriyor)
+                    elif "GIDER" in c and "TUTAR" in c:
+                        hh["borc"] = j    # Gider Tutar = borç (para çıkıyor)
                     elif "BORC" in c:
                         hh["borc"] = j
                     elif "ALACAK" in c:
@@ -120,6 +124,11 @@ def _tablo_satirlari(hamlar):
                     ham_tarih = ht
                 tarih = _tarih_iso(ham_tarih)
                 acik = str(g("aciklama") or "").strip()
+                # Bazı formatlarda açıklama bir sütun kaymış olabiliyor (başlık sütun 10, veri sütun 11)
+                if not acik and "aciklama" in harita:
+                    j_next = harita["aciklama"] + 1
+                    if j_next < len(row):
+                        acik = str(row[j_next] or "").strip()
                 if "borc" in harita or "alacak" in harita:
                     borc = _sayi(g("borc")) or 0
                     alacak = _sayi(g("alacak")) or 0
@@ -246,11 +255,31 @@ def _ham_metin_satirlari(hamlar):
 
 
 def _kayitlar(hamlar):
-    """Önce tablo, tablo yoksa ham metin (OCR) satırları."""
+    """Önce tablo, tablo yoksa ham metin (OCR) satırları.
+    Mükerrer kayıtları otomatik filtreler (aynı tarih + tutar + açıklama)."""
     k = _tablo_satirlari(hamlar)
     if not k:
         k = _ham_metin_satirlari(hamlar)
-    return k
+    if not k:
+        return k
+    # Mükerrer filtresi: aynı (tarih, tutar, açıklama[:40]) birden fazla varsa tekini tut
+    gorulen = set()
+    temiz = []
+    mukerrer_sayisi = 0
+    for kayit in k:
+        anahtar = (
+            kayit.get("tarih", ""),
+            round(kayit.get("tutar", 0), 2),
+            (kayit.get("aciklama", "") or "")[:40],
+        )
+        if anahtar in gorulen:
+            mukerrer_sayisi += 1
+            continue
+        gorulen.add(anahtar)
+        temiz.append(kayit)
+    if mukerrer_sayisi > 0:
+        print(f"[mükerrer filtre] {mukerrer_sayisi} mükerrer satır silindi, {len(temiz)} benzersiz kaldı")
+    return temiz
 
 
 # ----------------------------------------------------------------- BANKA
