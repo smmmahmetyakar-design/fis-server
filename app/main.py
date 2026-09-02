@@ -505,5 +505,17 @@ def cikti_indir(kod: str, fname: str):
     return FileResponse(p, filename=fname)
 
 
+@app.delete("/api/firma/{kod}/cikti/{fname}")
+def cikti_sil(kod: str, fname: str):
+    d = firma_dir(kod)
+    if ".." in fname or "/" in fname or "\\" in fname:
+        raise HTTPException(400, "Geçersiz")
+    p = d / "cikti" / fname
+    if not p.exists():
+        raise HTTPException(404, "Yok")
+    p.unlink()
+    return {"ok": True, "silinen": fname}
+
+
 # ----------------------------------------------------------------- statik
 app.mount("/", StaticFiles(directory=str(Path(__file__).parent / "static"), html=True), name="static")

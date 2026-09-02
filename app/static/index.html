@@ -432,8 +432,13 @@ async function loadCiktilar(){
   $('ciktilar').innerHTML=list.map(f=>{
     const d=new Date(f.tarih); const p=n=>String(n).padStart(2,'0');
     const ts=`${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
-    return `<div class="dosya-satir"><a href="/api/firma/${firmaKod}/cikti/${encodeURIComponent(f.dosya)}" style="flex:1;color:var(--ana);text-decoration:none">📄 ${f.dosya}</a><span class="hint">${ts} · ${(f.boyut/1024).toFixed(0)} KB</span></div>`;
+    return `<div class="dosya-satir" style="display:flex;align-items:center;gap:8px"><a href="/api/firma/${firmaKod}/cikti/${encodeURIComponent(f.dosya)}" style="flex:1;color:var(--ana);text-decoration:none">📄 ${f.dosya}</a><span class="hint">${ts} · ${(f.boyut/1024).toFixed(0)} KB</span><button class="btn btn-x" onclick="ciktiSil('${f.dosya.replace(/'/g,"\\'")}')" title="Sil" style="padding:2px 8px;font-size:12px;color:#c0392b;border:1px solid #e0c9c9;background:#fff;cursor:pointer">🗑</button></div>`;
   }).join('');
+}
+async function ciktiSil(dosya){
+  if(!confirm('Bu çıktıyı silmek istediğinize emin misiniz?\n'+dosya)) return;
+  await fetch(`/api/firma/${firmaKod}/cikti/${encodeURIComponent(dosya)}`,{method:'DELETE'});
+  loadCiktilar();
 }
 
 // =================== FİŞ SEKMESİ (masraf-server tarzı elle giriş) ===================
