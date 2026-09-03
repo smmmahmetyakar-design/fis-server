@@ -500,7 +500,7 @@ def isle_banka(hamlar, km, fis0):
         for k in grup_kayitlar:
             karsi, kaynak = km.eslestir(k["aciklama"])
             if not karsi:
-                karsi = ""
+                karsi = "198.01.001"
                 uyarilar.append(f"{k['aciklama'][:30]}: hesap eşleşmedi")
             tutar = abs(k["tutar"])
             evno = k.get("referans", "")
@@ -1162,7 +1162,7 @@ def isle_cek(hamlar, km, fis0):
         giris_detay = f"{alim_fmt}-{banka}-{vade_fmt}VDLİ-{kimden_temiz}" if alim_fmt and banka else kimden
         kimden_hesap, kimden_kaynak = km.eslestir(kimden)
         if not kimden_hesap:
-            kimden_hesap = ""
+            kimden_hesap = "198.01.001"
             uyarilar.append(f"GİRİŞ {kimden[:25]}: hesap eşleşmedi")
 
         fisno = f"{fis:05d}"
@@ -1189,7 +1189,7 @@ def isle_cek(hamlar, km, fis0):
 
             kime_hesap, kime_kaynak = km.eslestir(kime_arama)
             if not kime_hesap:
-                kime_hesap = ""
+                kime_hesap = "198.01.001"
                 uyarilar.append(f"ÇIKIŞ {kime[:25]}: hesap eşleşmedi")
 
             fisno = f"{fis:05d}"
