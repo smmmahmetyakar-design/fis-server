@@ -952,8 +952,8 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
         gecmis_kdv = gecmis_es.get("kdv", [])
 
         # varsayılanlar
-        vars_cari = "320.01.001" if yon == "alis" else "120.01.001"
-        vars_gider = "740.01.001" if yon == "alis" else "600.01.001"
+        vars_cari = "198.01.001" if yon == "alis" else "198.01.001"
+        vars_gider = "198.01.001" if yon == "alis" else "198.01.001"
 
         # cari doğru öneke uymuyorsa varsayılan
         if yon == "alis":
@@ -992,9 +992,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
             fak_kod = _bsmv_hesabi(hes_list)  # 780.02.xxx öncelikli
             if yon == "alis":
                 fisler.append(sat(fak_kod, toplam, 0))
-                fisler.append(sat(cari_kod or "320.01.001", 0, toplam))
+                fisler.append(sat(cari_kod or "198.01.001", 0, toplam))
             else:
-                fisler.append(sat(cari_kod or "120.01.001", toplam, 0))
+                fisler.append(sat(cari_kod or "198.01.001", toplam, 0))
                 fisler.append(sat(fak_kod, 0, toplam))
             fis += 1
             continue
@@ -1007,12 +1007,12 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
                 matrah = k["matrah"]; kdv = k["kdv"]
                 if yon == "alis":
                     # alışta: gider + %20 KDV borç
-                    fisler.append(sat(gider_kod or "740.01.001", matrah, 0, f" (%{oran})"))
+                    fisler.append(sat(gider_kod or "198.01.001", matrah, 0, f" (%{oran})"))
                     kdv_kod = gecmis_kdv_sec(oran, "alis") or "191.02"
                     fisler.append(sat(kdv_kod, kdv, 0, f" (%{oran} KDV)"))
                 else:  # satış
                     kdv_kod = gecmis_kdv_sec(oran, "satis") or "391.02"
-                    fisler.append(sat("600.01.001", 0, matrah, f" (%{oran})"))
+                    fisler.append(sat("198.01.001", 0, matrah, f" (%{oran})"))
                     fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
 
             # tevkifat: satışta 391 alacaktan düşülür (biz KDV'nin bir kısmını
@@ -1022,14 +1022,14 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
                 # alışta sorumlu sıfatıyla ödenecek KDV borç
                 if tevk_kod:
                     fisler.append(sat(tevk_kod, f["tevkifat"], 0, " (tevkifat KDV)"))
-                fisler.append(sat(cari_kod or "320.01.001", 0, toplam))
+                fisler.append(sat(cari_kod or "198.01.001", 0, toplam))
             else:
                 # satışta: tevkifat KDV BORÇ (bizde iade edilecek KDV)
                 # Ödenecek Tutar = toplam - tevkifat, bu kadar 120 borç
                 if tevk_kod:
                     fisler.append(sat(tevk_kod, f["tevkifat"], 0, " (tevkifat/iade KDV)"))
                 odenecek = round(toplam - f["tevkifat"], 2)
-                fisler.append(sat(cari_kod or "120.01.001", odenecek, 0, " (ödenecek)"))
+                fisler.append(sat(cari_kod or "198.01.001", odenecek, 0, " (ödenecek)"))
             fis += 1
             continue
 
@@ -1040,19 +1040,19 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
             if yon == "alis":
                 fisler.append(sat(gider_kod or "", toplam, 0))
             else:
-                fisler.append(sat("600.01.001", 0, toplam))
+                fisler.append(sat("198.01.001", 0, toplam))
         for k in f["kalemler"]:
             oran = k["oran"]
             matrah = k["matrah"]; kdv = k["kdv"]
             if oran == 0:
                 # KDV'siz kalem
                 if yon == "alis":
-                    fisler.append(sat(gider_kod or "740.01.001", matrah, 0))
+                    fisler.append(sat(gider_kod or "198.01.001", matrah, 0))
                 else:
-                    fisler.append(sat("600.01.001", 0, matrah))
+                    fisler.append(sat("198.01.001", 0, matrah))
                 continue
             if yon == "alis":
-                fisler.append(sat(gider_kod or "740.01.001", matrah, 0, f" (%{oran})"))
+                fisler.append(sat(gider_kod or "198.01.001", matrah, 0, f" (%{oran})"))
                 kdv_kod = gecmis_kdv_sec(oran, "alis")
                 if not kdv_kod:
                     uyarilar.append(f"{cari_ad[:20]}: %{oran} için 191 indirilecek KDV bulunamadı")
@@ -1063,7 +1063,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
                 if not kdv_kod:
                     uyarilar.append(f"{cari_ad[:20]}: %{oran} için 391 hesaplanan KDV bulunamadı")
                     kdv_kod = "391.02"
-                fisler.append(sat("600.01.001", 0, matrah, f" (%{oran})"))
+                fisler.append(sat("198.01.001", 0, matrah, f" (%{oran})"))
                 fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
 
         # ek vergi (BSMV %5) — TTNET, faktoring karışık faturaları için
@@ -1076,9 +1076,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
 
         # karşı taraf (tek satır)
         if yon == "alis":
-            fisler.append(sat(cari_kod or "320.01.001", 0, toplam))
+            fisler.append(sat(cari_kod or "198.01.001", 0, toplam))
         else:
-            fisler.append(sat(cari_kod or "120.01.001", toplam, 0))
+            fisler.append(sat(cari_kod or "198.01.001", toplam, 0))
 
         fis += 1
 
