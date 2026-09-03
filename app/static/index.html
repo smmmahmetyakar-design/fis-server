@@ -374,13 +374,20 @@ function render(r){
     const i=s._idx;
     if(dz){
       const hesapAdi = (hesaplar.find(x=>x.kod===s.hesap)||{}).ad||'';
+      // Hesap seçim listesi: arama yapılabilir input + dropdown butonu
+      let hesapSecHTML = `<div style="position:relative;display:inline-block;width:100%">
+        <input list="hesapDL" value="${s.hesap||''}" placeholder="kod veya ad ara..." onchange="edit(${i},'hesap',this.value)" style="width:140px;padding-right:24px" title="${hesapAdi.replace(/"/g,'&quot;')}">
+        <select onchange="edit(${i},'hesap',this.value);this.previousElementSibling.value=this.value" style="position:absolute;right:0;top:0;width:24px;height:100%;opacity:0.01;cursor:pointer">
+          <option value="">-- Seç --</option>
+          ${hesaplar.map(x=>`<option value="${x.kod}" ${x.kod===s.hesap?'selected':''}>${x.kod} — ${x.ad}</option>`).join('')}
+        </select>
+        <span style="position:absolute;right:4px;top:50%;transform:translateY(-50%);pointer-events:none;font-size:10px;color:#888">▼</span>
+      </div>
+      ${hesapAdi?`<div class="hint" style="font-size:10px;margin-top:1px">${hesapAdi.slice(0,32)}</div>`:''}`;
       return `<tr class="${s.hesap?'':'warn'}">
         <td><input value="${s.fisno||''}" onchange="edit(${i},'fisno',this.value)" style="width:70px"></td>
         <td><input value="${s.fis_tarih||''}" onchange="edit(${i},'fis_tarih',this.value)" style="width:96px"></td>
-        <td class="l">
-          <input list="hesapDL" value="${s.hesap||''}" placeholder="kod veya ad ara..." onchange="edit(${i},'hesap',this.value)" style="width:170px" title="${hesapAdi.replace(/"/g,'&quot;')}">
-          ${hesapAdi?`<div class="hint" style="font-size:10px;margin-top:1px">${hesapAdi.slice(0,32)}</div>`:''}
-        </td>
+        <td class="l">${hesapSecHTML}</td>
         <td><input value="${s.evrak_no||''}" onchange="edit(${i},'evrak_no',this.value)" style="width:160px;font-size:11px"></td>
         <td><input value="${s.borc||0}" onchange="edit(${i},'borc',this.value)" style="width:80px;text-align:right"></td>
         <td><input value="${s.alacak||0}" onchange="edit(${i},'alacak',this.value)" style="width:80px;text-align:right"></td>
