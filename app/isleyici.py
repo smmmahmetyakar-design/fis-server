@@ -563,49 +563,55 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
             # başlık satırını bul: içinde "FATURA NO" geçen ilk satır
             bas_idx = None; sut = {}
             for i, row in enumerate(tablo[:5]):
-                nrow = [norm(str(c)) for c in row]
+                nrow = [norm(str(c).replace("\n"," ")) for c in row]
                 for j, c in enumerate(nrow):
-                    if c == "FATURA NO":
+                    if c == "FATURA NO" or "FATURA" in c and ("NO" in c or "NUMARASI" in c):
                         sut["fatura_no"] = j
-                    elif c == "FATURA TARIHI":
+                    elif c == "FATURA TARIHI" or ("FATURA" in c and "TARIH" in c):
                         sut["tarih"] = j
-                    elif c in ("GONDERICI ADI", "ALICI ADI"):
+                    elif c in ("GONDERICI ADI", "ALICI ADI", "ACIKLAMA"):
                         sut["cari_ad"] = j
                     elif c == "SENARYO":
                         sut["senaryo"] = j
-                    elif c in ("TUR",):
+                    elif c in ("TUR", "FATURA TURU"):
                         sut["tur"] = j
-                    elif c == "TOPLAM TUTAR":
+                    elif c == "TOPLAM TUTAR" or c == "TOPLAM":
                         sut["toplam"] = j
                     elif c == "KDV TOPLAMI":
                         sut["kdv_top"] = j
-                    elif c == "KDV 1":
+                    elif "VKN" in c or "TCKN" in c:
+                        sut["vkn"] = j
+                    # KDV sütunları: hem "KDV 20" hem "%20'lik KDV" formatı
+                    elif c == "KDV 1" or ("1LIK" in c.replace(" ","") and "KDV" in c and "MATRAH" not in c):
                         sut["kdv_1"] = j
-                    elif c == "KDV 8":
+                    elif c == "KDV 8" or ("8LIK" in c.replace("'","").replace(" ","") and "KDV" in c and "MATRAH" not in c):
                         sut["kdv_8"] = j
-                    elif c == "KDV 10":
+                    elif c == "KDV 10" or ("10LUK" in c.replace("'","").replace(" ","") and "KDV" in c and "MATRAH" not in c) or ("10LIK" in c.replace("'","").replace(" ","") and "KDV" in c and "MATRAH" not in c):
                         sut["kdv_10"] = j
-                    elif c == "KDV 18":
+                    elif c == "KDV 18" or ("18LIK" in c.replace("'","").replace(" ","") and "KDV" in c and "MATRAH" not in c):
                         sut["kdv_18"] = j
-                    elif c == "KDV 20":
+                    elif c == "KDV 20" or ("20LIK" in c.replace("'","").replace(" ","") and "KDV" in c and "MATRAH" not in c):
                         sut["kdv_20"] = j
-                    elif c == "KDV 1 MATRAH":
+                    elif c == "KDV 1 MATRAH" or ("1LIK" in c.replace("'","").replace(" ","") and "MATRAH" in c):
                         sut["mat_1"] = j
-                    elif c == "KDV 8 MATRAH":
+                    elif c == "KDV 8 MATRAH" or ("8LIK" in c.replace("'","").replace(" ","") and "MATRAH" in c):
                         sut["mat_8"] = j
-                    elif c == "KDV 10 MATRAH":
+                    elif c == "KDV 10 MATRAH" or ("10LUK" in c.replace("'","").replace(" ","") and "MATRAH" in c) or ("10LIK" in c.replace("'","").replace(" ","") and "MATRAH" in c):
                         sut["mat_10"] = j
-                    elif c == "KDV 18 MATRAH":
+                    elif c == "KDV 18 MATRAH" or ("18LIK" in c.replace("'","").replace(" ","") and "MATRAH" in c):
                         sut["mat_18"] = j
-                    elif c == "KDV 20 MATRAH":
+                    elif c == "KDV 20 MATRAH" or ("20LIK" in c.replace("'","").replace(" ","") and "MATRAH" in c):
                         sut["mat_20"] = j
-                    elif c == "TEVKIFAT TOPLAMI":
+                    elif c == "TEVKIFAT TOPLAMI" or "TEVKIFAT" in c and "ORAN" in c:
                         sut["tevkifat"] = j
                     elif c == "ILK TEVKIFAT KODU":
                         sut["tevkifat_kod"] = j
                     elif c == "EK VERGILER":
                         sut["ek_vergi"] = j
-                if "fatura_no" in sut and "tarih" in sut and "cari_ad" in sut:
+                    elif "OZEL" in c and "MATRAH" in c:
+                        sut["ozel_matrah"] = j
+                # GİB formatında fatura_no+tarih+cari_ad yeterli; eLogo'da fatura_no+tarih+cari_ad
+                if ("fatura_no" in sut or "tarih" in sut) and ("cari_ad" in sut or "toplam" in sut):
                     bas_idx = i; break
             if bas_idx is None:
                 continue
