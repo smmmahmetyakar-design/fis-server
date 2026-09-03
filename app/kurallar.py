@@ -707,22 +707,15 @@ class KuralMotoru:
     def fatura_gecmis_eslestir(self, cari_ad: str, yon: str = "alis"):
         """
         Fatura için geçmişte gerçekten kesilmiş/kaydedilmiş fişlerden hesap seçer.
-        Kural Excel'i bu yöntemde kullanılmaz.
-
-        Döndürür: {
-          "cari": hesap kodu,
-          "ana": gider/gelir hesap kodu,
-          "kdv": [KDV hesap kodları],
-          "tevkifat": [tevkifat hesap kodları],
-          "kaynak": "gecmis_fatura" | ""
-        }
-        Aynı cari için birden fazla geçmiş kayıt varsa en sık kullanılan hesap seçilir;
-        eşitlikte son görülen kayıt tercih edilir.
+        Bulunan hesap kodları mizanda kontrol edilir — mizanda yoksa kullanılmaz.
         """
         sonuc = {"cari": "", "ana": "", "kdv": [], "tevkifat": [], "kaynak": ""}
         q = norm(cari_ad)
         if not q:
             return sonuc
+
+        # Mizan hesap kodları seti
+        mizan_kodlari = {k for k, _ in self.hesaplar}
 
         # Cari adının tamamı veya anlamlı kelimeleriyle geçmiş satırları bul.
         qwords = kelimeler(cari_ad)
@@ -746,7 +739,6 @@ class KuralMotoru:
         if not aday:
             return sonuc
 
-        # Önce tam/kuvvetli eşleşme, sonra son kayıt.
         aday.sort(key=lambda x: (x[0], x[1]), reverse=True)
         satirlar = [x[2] for x in aday]
 
@@ -756,6 +748,9 @@ class KuralMotoru:
             for i, r in enumerate(rows):
                 kod = str(r.get("hesap", "")).strip()
                 if not kod or not kod_filtresi(kod):
+                    continue
+                # Mizanda kontrol — yoksa atla
+                if kod not in mizan_kodlari:
                     continue
                 if borc_mu is True and float(r.get("borc", 0) or 0) <= 0:
                     continue
@@ -769,26 +764,21 @@ class KuralMotoru:
 
         if yon == "alis":
             sonuc["cari"] = say_sec(satirlar, lambda k: k.startswith(("320", "329", "331", "335")), borc_mu=False)
-            # Gider/stok hesabı: borç tarafında, cari/KDV/vergi/banka hesaplarını dışla.
             def ana(k):
                 return (not k.startswith(("100", "101", "102", "120", "121", "191", "192", "193", "194", "195",
                                           "300", "320", "329", "331", "335", "360", "361", "370", "380", "391")))
             sonuc["ana"] = say_sec(satirlar, ana, borc_mu=True)
-            sonuc["kdv"] = list(dict.fromkeys(str(r.get("hesap", "")).strip() for r in satirlar
-                                               if str(r.get("hesap", "")).strip().startswith("191") and float(r.get("borc", 0) or 0) > 0))
-            sonuc["tevkifat"] = list(dict.fromkeys(str(r.get("hesap", "")).strip() for r in satirlar
-                                                     if str(r.get("hesap", "")).strip().startswith("191") and
-                                                     str(r.get("hesap", "")).strip() not in sonuc["kdv"] and
-                                                     float(r.get("borc", 0) or 0) > 0))
+            sonuc["kdv"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)
+                                               if k.startswith("191") and k in mizan_kodlari))
+            sonuc["tevkifat"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)
+                                                     if k.startswith("191") and k in mizan_kodlari and k not in sonuc["kdv"]))
         else:
             sonuc["cari"] = say_sec(satirlar, lambda k: k.startswith(("120", "121")), borc_mu=True)
             sonuc["ana"] = say_sec(satirlar, lambda k: k.startswith(("600", "601", "602", "603", "610", "611", "612")), borc_mu=False)
-            sonuc["kdv"] = list(dict.fromkeys(str(r.get("hesap", "")).strip() for r in satirlar
-                                               if str(r.get("hesap", "")).strip().startswith("391") and float(r.get("alacak", 0) or 0) > 0))
-            sonuc["tevkifat"] = list(dict.fromkeys(str(r.get("hesap", "")).strip() for r in satirlar
-                                                     if str(r.get("hesap", "")).strip().startswith("391") and
-                                                     str(r.get("hesap", "")).strip() not in sonuc["kdv"] and
-                                                     float(r.get("alacak", 0) or 0) > 0))
+            sonuc["kdv"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)
+                                               if k.startswith("391") and k in mizan_kodlari))
+            sonuc["tevkifat"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)
+                                                     if k.startswith("391") and k in mizan_kodlari and k not in sonuc["kdv"]))
 
         if any(sonuc[k] for k in ("cari", "ana", "kdv", "tevkifat")):
             sonuc["kaynak"] = "gecmis_fatura"
