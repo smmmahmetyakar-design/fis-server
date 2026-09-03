@@ -399,6 +399,7 @@ function render(r){
   }).join('');
   h+=`</tbody><tfoot style="position:sticky;bottom:0;z-index:1"><tr class="tot"><td colspan="4" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';
+  if(dz) h+='<div style="margin-top:6px;display:flex;gap:8px;align-items:center"><button class="btn" onclick="satirEkle()" style="background:#2f5d6e;color:#fff;padding:5px 14px;font-size:13px">➕ Kalem Ekle</button><span class="hint">Yeni borç veya alacak satırı ekler</span></div>';
   if(dz) h+='<div class="hint" style="margin-top:6px">Hesabı yanlış eşleşenleri düzeltin; "Bitir"e basınca eşleştirmeler öğrenilir. Sonra Excel/XML alın.</div>';
   $('onizle').innerHTML=h;
 }
@@ -416,6 +417,27 @@ function edit(i,alan,deger){
   if(duzenleMod) render();
 }
 function satirSil(i){satirlar.splice(i,1);render();}
+function satirEkle(){
+  // Son satırın fiş no ve tarihini kopyala (kolaylık)
+  const son = satirlar.length ? satirlar[satirlar.length-1] : {};
+  satirlar.push({
+    fisno: son.fisno || '00001',
+    fis_tarih: son.fis_tarih || '',
+    fis_aciklama: son.fis_aciklama || '',
+    hesap: '',
+    evrak_no: son.evrak_no || '',
+    evrak_tarih: son.fis_tarih || '',
+    detay: '',
+    borc: 0,
+    alacak: 0,
+    belge_turu: 'MF',
+    kaynak: '',
+  });
+  render();
+  // Yeni satıra kaydır
+  const container = $('onizle').querySelector('div[style*="overflow-y"]');
+  if(container) setTimeout(()=>container.scrollTop=container.scrollHeight, 50);
+}
 function duzenleToggle(){
   if(!satirlar.length){alert('Önce İşle');return;}
   duzenleMod=!duzenleMod;
