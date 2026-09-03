@@ -797,46 +797,62 @@ class KuralMotoru:
     def eslestir(self, aciklama: str):
         """
         Bir açıklama metni için hesap kodu tahmini yapar.
-        Döndürür: (kod, kaynak) — kaynak: 'ogrenme' | 'excel' | 'tahmin' | ''
+        Döndürür: (kod, kaynak) — kaynak: 'ogrenme' | 'excel' | 'tahmin' | 'gecmis' | ''
+        Bulunan hesap kodu mizanda yoksa geçersiz sayılır, boş döner.
         """
         nq = norm(aciklama)
         if not nq:
             return "", ""
 
-        # 1) öğrenilen eşleşme: anahtar tam geçiyorsa VEYA anahtar kelimelerinin
-        #    çoğu açıklamada varsa
+        # Mizan hesap kodları seti (hızlı kontrol için)
+        mizan_kodlari = {k for k, _ in self.hesaplar}
+
+        def _mizan_kontrol(kod, kaynak):
+            """Hesap kodu mizanda var mı? Yoksa boş döner."""
+            if not kod:
+                return "", ""
+            if kod in mizan_kodlari:
+                return kod, kaynak
+            # Mizanda yok — geçersiz eşleşme
+            return "", ""
+
+        # 1) öğrenilen eşleşme
         gw = kelimeler(aciklama)
         best_og = None; best_og_sc = 0
         for anahtar, kod in self.ogrenme.items():
             if not anahtar:
                 continue
             if anahtar in nq:
-                return kod, "ogrenme"
+                r = _mizan_kontrol(kod, "ogrenme")
+                if r[0]: return r
             aw = kelimeler(anahtar)
             if aw:
-                ort = len(gw & aw) / len(aw)   # anahtarın ne kadarı eşleşti
+                ort = len(gw & aw) / len(aw)
                 if ort >= 0.6 and len(gw & aw) > best_og_sc:
                     best_og_sc = len(gw & aw); best_og = kod
         if best_og:
-            return best_og, "ogrenme"
+            r = _mizan_kontrol(best_og, "ogrenme")
+            if r[0]: return r
 
-        # 1.5) geçmiş fişlerden öğrenilen eşleşmeler (gerçek kullanım)
+        # 1.5) geçmiş fişlerden öğrenilen eşleşmeler
         gecmis_es = self.gecmis.get("eslesmeler", {})
         best_g = None; best_g_sc = 0
         for anahtar, kod in gecmis_es.items():
             if not anahtar:
                 continue
             if anahtar in nq or nq in anahtar:
-                return kod, "gecmis"
+                r = _mizan_kontrol(kod, "gecmis")
+                if r[0]: return r
             aw = kelimeler(anahtar)
             if aw:
                 ort = len(gw & aw) / len(aw)
                 if ort >= 0.6 and len(gw & aw) > best_g_sc:
                     best_g_sc = len(gw & aw); best_g = kod
         if best_g:
-            return best_g, "gecmis"
+            r = _mizan_kontrol(best_g, "gecmis")
+            if r[0]: return r
 
-        # 2) excel kurallarındaki hesap adları / kullanım açıklamaları ile eşleşme
+        # 2) excel kurallarındaki hesap adları
         best = None; bs = 0
         for h in self.kural["hesaplar"]:
             hedef = kelimeler(h["ad"] + " " + h.get("kullanim", ""))
@@ -844,7 +860,8 @@ class KuralMotoru:
             if sc > bs:
                 bs = sc; best = h["kod"]
         if bs >= 1:
-            return best, "excel"
+            r = _mizan_kontrol(best, "excel")
+            if r[0]: return r
 
         # 3) mizan hesap adlarıyla zayıf eşleşme
         best = None; bs = 0
@@ -853,7 +870,7 @@ class KuralMotoru:
             if sc > bs:
                 bs = sc; best = kod
         if bs >= 2:
-            return best, "tahmin"
+            return best, "tahmin"  # mizan'dan geldiği için kontrol gerekmez
 
         return "", ""
 
