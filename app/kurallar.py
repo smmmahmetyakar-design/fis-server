@@ -718,23 +718,17 @@ class KuralMotoru:
         mizan_kodlari = {k for k, _ in self.hesaplar}
 
         # Cari adının tamamı veya anlamlı kelimeleriyle geçmiş satırları bul.
+        # SADECE TAM EŞLEŞMELERİ kabul et — bulanık eşleşme yanlış cariye yol açıyor.
         qwords = kelimeler(cari_ad)
         aday = []
         for idx, r in enumerate(self.gecmis.get("satirlar", [])):
             metin = norm(f"{r.get('detay','')} {r.get('fis_aciklama','')}")
             if not metin:
                 continue
-            rw = kelimeler(metin)
+            # Tam eşleşme: cari adının tamamı metin içinde geçmeli
             if q in metin:
                 sc = 100 + len(qwords)
-            else:
-                ortak = len(qwords & rw)
-                if not qwords or ortak == 0:
-                    continue
-                sc = ortak / len(qwords)
-                if sc < 0.60:
-                    continue
-            aday.append((sc, idx, r))
+                aday.append((sc, idx, r))
 
         if not aday:
             return sonuc
@@ -824,23 +818,14 @@ class KuralMotoru:
             r = _mizan_kontrol(best_og, "ogrenme")
             if r[0]: return r
 
-        # 1.5) geçmiş fişlerden öğrenilen eşleşmeler
+        # 1.5) geçmiş fişlerden öğrenilen eşleşmeler — SADECE TAM EŞLEŞME
         gecmis_es = self.gecmis.get("eslesmeler", {})
-        best_g = None; best_g_sc = 0
         for anahtar, kod in gecmis_es.items():
             if not anahtar:
                 continue
             if anahtar in nq or nq in anahtar:
                 r = _mizan_kontrol(kod, "gecmis")
                 if r[0]: return r
-            aw = kelimeler(anahtar)
-            if aw:
-                ort = len(gw & aw) / len(aw)
-                if ort >= 0.6 and len(gw & aw) > best_g_sc:
-                    best_g_sc = len(gw & aw); best_g = kod
-        if best_g:
-            r = _mizan_kontrol(best_g, "gecmis")
-            if r[0]: return r
 
         # 2) excel kurallarındaki hesap adları
         best = None; bs = 0
