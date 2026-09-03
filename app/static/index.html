@@ -418,7 +418,12 @@ function edit(i,alan,deger){
     fetch(`/api/firma/${firmaKod}/ogret/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,aciklama:satirlar[i].detay,kod:deger})}).catch(()=>{});
   }
-  if(duzenleMod) render();
+  if(duzenleMod){
+    const container = $('onizle').querySelector('div[style*="overflow-y"]');
+    const scrollPos = container ? container.scrollTop : 0;
+    render();
+    requestAnimationFrame(()=>{ const c=$('onizle').querySelector('div[style*="overflow-y"]'); if(c) c.scrollTop=scrollPos; });
+  }
 }
 function satirSil(i){satirlar.splice(i,1);render();}
 function tumunuSec(checked){satirlar.forEach(s=>s.secili=checked);render();}
