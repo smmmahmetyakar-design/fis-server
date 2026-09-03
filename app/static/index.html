@@ -369,7 +369,7 @@ function render(r){
   if(dz){
     h+='<datalist id="hesapDL">'+hesaplar.map(x=>`<option value="${x.kod}">${x.kod} — ${x.ad}</option>`).join('')+'</datalist>';
   }
-  h+=`<div style="max-height:60vh;overflow-y:auto;border:1px solid #d0d0d0;border-radius:4px"><table style="width:100%"><thead style="position:sticky;top:0;z-index:1"><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
+  h+=`<div style="max-height:60vh;overflow-y:auto;border:1px solid #d0d0d0;border-radius:4px"><table style="width:100%"><thead style="position:sticky;top:0;z-index:1"><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Evrak No</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
   h+=gosterilecek.map(s=>{
     const i=s._idx;
     if(dz){
@@ -381,15 +381,16 @@ function render(r){
           <input list="hesapDL" value="${s.hesap||''}" placeholder="kod veya ad ara..." onchange="edit(${i},'hesap',this.value)" style="width:170px" title="${hesapAdi.replace(/"/g,'&quot;')}">
           ${hesapAdi?`<div class="hint" style="font-size:10px;margin-top:1px">${hesapAdi.slice(0,32)}</div>`:''}
         </td>
+        <td><input value="${s.evrak_no||''}" onchange="edit(${i},'evrak_no',this.value)" style="width:100px;font-size:11px"></td>
         <td><input value="${s.borc||0}" onchange="edit(${i},'borc',this.value)" style="width:80px;text-align:right"></td>
         <td><input value="${s.alacak||0}" onchange="edit(${i},'alacak',this.value)" style="width:80px;text-align:right"></td>
         <td class="l"><textarea onchange="edit(${i},'detay',this.value)" rows="2" style="width:100%;min-height:34px;max-height:110px;resize:vertical;font-family:inherit;font-size:12px;padding:3px 5px">${(s.detay||'').replace(/</g,'&lt;')}</textarea></td>
         <td><button class="btn btn-x" onclick="satirSil(${i})">🗑</button></td>
       </tr>`;
     }
-    return `<tr class="${s.hesap?'':'warn'}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
+    return `<tr class="${s.hesap?'':'warn'}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td style="font-size:11px">${s.evrak_no||''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
   }).join('');
-  h+=`</tbody><tfoot style="position:sticky;bottom:0;z-index:1"><tr class="tot"><td colspan="3" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
+  h+=`</tbody><tfoot style="position:sticky;bottom:0;z-index:1"><tr class="tot"><td colspan="4" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';
   if(dz) h+='<div class="hint" style="margin-top:6px">Hesabı yanlış eşleşenleri düzeltin; "Bitir"e basınca eşleştirmeler öğrenilir. Sonra Excel/XML alın.</div>';
   $('onizle').innerHTML=h;
