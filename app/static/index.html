@@ -369,7 +369,7 @@ function render(r){
   if(dz){
     h+='<datalist id="hesapDL">'+hesaplar.map(x=>`<option value="${x.kod}">${x.kod} — ${x.ad}</option>`).join('')+'</datalist>';
   }
-  h+=`<div style="max-height:60vh;overflow-y:auto;border:1px solid #d0d0d0;border-radius:4px"><table style="width:100%"><thead style="position:sticky;top:0;z-index:1"><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Evrak No</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
+  h+=`<div style="max-height:60vh;overflow-y:auto;border:1px solid #d0d0d0;border-radius:4px"><table style="width:100%"><thead style="position:sticky;top:0;z-index:1"><tr>${dz?'<th><input type="checkbox" onchange="tumunuSec(this.checked)" title="Tümünü seç/kaldır"></th>':'<th style="width:24px"></th>'}<th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Evrak No</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
   h+=gosterilecek.map(s=>{
     const i=s._idx;
     if(dz){
@@ -385,6 +385,7 @@ function render(r){
       </div>
       ${hesapAdi?`<div class="hint" style="font-size:10px;margin-top:1px">${hesapAdi.slice(0,32)}</div>`:''}`;
       return `<tr class="${s.hesap?'':'warn'}">
+        <td><input type="checkbox" ${s.secili?'checked':''} onchange="edit(${i},'secili',this.checked)"></td>
         <td><input value="${s.fisno||''}" onchange="edit(${i},'fisno',this.value)" style="width:70px"></td>
         <td><input value="${s.fis_tarih||''}" onchange="edit(${i},'fis_tarih',this.value)" style="width:96px"></td>
         <td class="l">${hesapSecHTML}</td>
@@ -398,11 +399,11 @@ function render(r){
         </td>
       </tr>`;
     }
-    return `<tr class="${s.hesap?'':'warn'}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td style="font-size:11px;max-width:180px;word-break:break-all">${s.evrak_no||''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
+    return `<tr class="${s.hesap?'':'warn'}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td style="font-size:11px;max-width:180px;word-break:break-all">${s.evrak_no||''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
   }).join('');
-  h+=`</tbody><tfoot style="position:sticky;bottom:0;z-index:1"><tr class="tot"><td colspan="4" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
+  h+=`</tbody><tfoot style="position:sticky;bottom:0;z-index:1"><tr class="tot"><td colspan="5" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';
-  if(dz) h+='<div style="margin-top:6px;display:flex;gap:8px;align-items:center"><button class="btn" onclick="satirEkle()" style="background:#2f5d6e;color:#fff;padding:5px 14px;font-size:13px">➕ Kalem Ekle</button><span class="hint">Yeni borç veya alacak satırı ekler</span></div>';
+  if(dz) h+='<div style="margin-top:6px;display:flex;gap:8px;align-items:center"><button class="btn" onclick="satirEkle()" style="background:#2f5d6e;color:#fff;padding:5px 14px;font-size:13px">➕ Kalem Ekle</button><button class="btn" onclick="seciliSil()" style="background:#c0392b;color:#fff;padding:5px 14px;font-size:13px">🗑 Seçilileri Sil</button><span class="hint">Satır seçip toplu silebilirsiniz</span></div>';
   if(dz) h+='<div class="hint" style="margin-top:6px">Hesabı yanlış eşleşenleri düzeltin; "Bitir"e basınca eşleştirmeler öğrenilir. Sonra Excel/XML alın.</div>';
   $('onizle').innerHTML=h;
 }
@@ -420,8 +421,15 @@ function edit(i,alan,deger){
   if(duzenleMod) render();
 }
 function satirSil(i){satirlar.splice(i,1);render();}
+function tumunuSec(checked){satirlar.forEach(s=>s.secili=checked);render();}
+function seciliSil(){
+  const seciliSayisi=satirlar.filter(s=>s.secili).length;
+  if(!seciliSayisi){alert('Önce satır seçin');return;}
+  if(!confirm(`${seciliSayisi} seçili satır silinecek. Emin misiniz?`)) return;
+  satirlar=satirlar.filter(s=>!s.secili);
+  render();
+}
 function satirEkleAraya(i){
-  // i. satırın altına yeni satır ekle, o satırın fiş no ve tarihini kopyala
   const ref = satirlar[i] || {};
   const yeni = {
     fisno: ref.fisno || '00001',
@@ -435,12 +443,16 @@ function satirEkleAraya(i){
     alacak: 0,
     belge_turu: 'MF',
     kaynak: '',
+    secili: false,
   };
   satirlar.splice(i + 1, 0, yeni);
+  // Kaydırma pozisyonunu koru
+  const container = $('onizle').querySelector('div[style*="overflow-y"]');
+  const scrollPos = container ? container.scrollTop : 0;
   render();
+  if(container) requestAnimationFrame(()=>{ const c=$('onizle').querySelector('div[style*="overflow-y"]'); if(c) c.scrollTop=scrollPos+36; });
 }
 function satirEkle(){
-  // Son satırın fiş no ve tarihini kopyala (kolaylık)
   const son = satirlar.length ? satirlar[satirlar.length-1] : {};
   satirlar.push({
     fisno: son.fisno || '00001',
@@ -454,11 +466,9 @@ function satirEkle(){
     alacak: 0,
     belge_turu: 'MF',
     kaynak: '',
+    secili: false,
   });
   render();
-  // Yeni satıra kaydır
-  const container = $('onizle').querySelector('div[style*="overflow-y"]');
-  if(container) setTimeout(()=>container.scrollTop=container.scrollHeight, 50);
 }
 function duzenleToggle(){
   if(!satirlar.length){alert('Önce İşle');return;}
