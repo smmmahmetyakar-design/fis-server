@@ -12,6 +12,14 @@ import io, re
 from datetime import datetime
 from app.kurallar import norm
 
+# Gerçek işlem değil, hesap özeti/metadata satırı olduğu belli olan açıklamalar
+# (ör. "Sicil: 26920050511927770340630") — bunlar tabloya karışırsa hem hesap
+# eşleşmez hem de anlamsız devasa bir "tutar" üretebilir.
+_METADATA_RE = re.compile(
+    r"^(SICIL|IBAN|SUBE|VKN|TCKN|MUSTERI NO|HESAP NO|HESAP SAHIBI)\b"
+)
+_MAKUL_TUTAR_UST_SINIR = 1_000_000_000  # bu üstü gerçek bir banka hareketi değil, hatalı okunmuş sayıdır
+
 
 # ----------------------------------------------------------------- tarih/sayı ayrıştırma
 def _tarih_iso(s):
@@ -101,6 +109,10 @@ def _tablo_satirlari(hamlar):
                     continue
                 if tutar == 0:
                     continue
+                if _METADATA_RE.match(norm(acik)):
+                    continue
+                if abs(tutar) > _MAKUL_TUTAR_UST_SINIR:
+                    continue
                 kayitlar.append({"tarih": tarih, "aciklama": acik, "tutar": tutar,
                                  "dosya": h.get("dosya", "")})
     return kayitlar
@@ -127,8 +139,12 @@ def _ham_metin_satirlari(hamlar):
             tutar = _sayi(tutarlar[-1])
             if tutar is None or tutar == 0:
                 continue
+            if abs(tutar) > _MAKUL_TUTAR_UST_SINIR:
+                continue
             acik = hat[tm.end():]
             acik = acik.replace(tutarlar[-1], "").strip(" \t-|")
+            if _METADATA_RE.match(norm(acik)):
+                continue
             kayitlar.append({"tarih": tarih, "aciklama": acik, "tutar": tutar,
                              "dosya": h.get("dosya", "")})
     return kayitlar

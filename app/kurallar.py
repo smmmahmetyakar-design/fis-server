@@ -32,7 +32,22 @@ STOP = {"ANONIM", "SIRKETI", "LIMITED", "LTD", "STI", "SAN", "TIC", "VE", "A", "
 
 
 def kelimeler(s: str) -> set:
-    return {w for w in norm(s).split() if w not in STOP and len(w) > 2}
+    """Eşleştirmede kullanılacak anlamlı kelimeler. Referans/evrak no, tutar,
+    oran ve sicil gibi işlem bazında değişen sayısal token'lar (ör. 'H2604200942507',
+    '26920050511927770340630', '5000') elenir — aksi halde her işlemde farklı olan
+    bu kodlar yüzünden aynı türden hareketler (BSMV, ÜCRET, BRÜT FAİZ ... gibi) her
+    seferinde eşleşmeyen kabul edilirdi."""
+    out = set()
+    for w in norm(s).split():
+        if w in STOP or len(w) <= 2:
+            continue
+        rakam = sum(c.isdigit() for c in w)
+        if rakam == len(w):
+            continue  # salt sayı: tutar/referans/evrak/sicil no
+        if len(w) >= 4 and rakam / len(w) >= 0.5:
+            continue  # harf+rakam karışık referans kodu (ör. H2604200942507)
+        out.add(w)
+    return out
 
 
 # ----------------------------------------------------------------- mizan
