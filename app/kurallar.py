@@ -13,6 +13,39 @@ from pathlib import Path
 import openpyxl
 
 
+# ----------------------------------------------------------------- dosyadan banka hesabı tanıma
+_IBAN_RE = re.compile(r"TR\d{2}(?:[ .]?\d{4}){5}[ .]?\d{2}")
+_HESAPNO_RE = re.compile(r"HESAP\s*NO\S*\s*[:\-]?\s*([0-9][0-9 .\-]{3,20}[0-9])")
+
+
+def dosya_banka_anahtari(h: dict) -> str:
+    """Bir belgenin (tablolar/ham_metin) içinden IBAN ya da hesap numarasını bulup
+    bu fiziksel banka hesabını tekil tanımlayan bir anahtar döndürür (yoksa '').
+    Aynı anahtar, öğrenilmiş banka_hesap_eslestirme.json içinde bir hesap koduna
+    bağlanınca, sonraki aylarda bu dosya otomatik doğru hesaba yazılır."""
+    parcalar = []
+    for tablo in (h.get("tablolar") or [])[:3]:
+        for row in tablo[:40]:
+            for c in row:
+                if c not in (None, ""):
+                    parcalar.append(str(c))
+    if h.get("ham_metin"):
+        parcalar.append(h["ham_metin"][:4000])
+    metin = " \n ".join(parcalar).upper()
+
+    m = _IBAN_RE.search(metin)
+    if m:
+        return re.sub(r"[ .\-]", "", m.group(0))
+
+    m = _HESAPNO_RE.search(metin)
+    if m:
+        rakam = re.sub(r"[^0-9]", "", m.group(1))
+        if len(rakam) >= 4:
+            return rakam
+
+    return ""
+
+
 def norm(s: str) -> str:
     """Türkçe duyarsız normalize: büyük harf, aksan yok, sadece harf/rakam/boşluk."""
     if s is None:
@@ -190,14 +223,25 @@ def ogrenme_yaz(path: Path, data: dict):
 class KuralMotoru:
     """Bir firma + belge tipi (banka/fatura/cek) için hesap eşleştirme yapar."""
 
-    def __init__(self, mizan_path: Path, kural_path: Path, ogrenme_path: Path):
+    def __init__(self, mizan_path: Path, kural_path: Path, ogrenme_path: Path,
+                 banka_eslestirme_path: Path = None):
         self.hesaplar = mizan_hesaplar(mizan_path)
         self.kural = kural_excel_oku(kural_path)
         self.ogrenme = ogrenme_oku(ogrenme_path)
         self.ogrenme_path = ogrenme_path
+        self.banka_eslestirme_path = banka_eslestirme_path
+        self.banka_eslestirme = ogrenme_oku(banka_eslestirme_path) if banka_eslestirme_path else {}
         self.kod_ad = {k: a for k, a in self.hesaplar}
         for h in self.kural["hesaplar"]:
             self.kod_ad.setdefault(h["kod"], h["ad"])
+
+    def banka_hesap_ogren(self, anahtar: str, kod: str):
+        """IBAN/hesap no anahtarını bir hesap koduna bağlar ve kalıcı olarak kaydeder
+        (sonraki işlemlerde bu dosya otomatik doğru hesaba düşer)."""
+        if not anahtar or not kod or not self.banka_eslestirme_path:
+            return
+        self.banka_eslestirme[anahtar] = kod
+        ogrenme_yaz(self.banka_eslestirme_path, self.banka_eslestirme)
 
     def hesap_adi(self, kod: str) -> str:
         return self.kod_ad.get(kod, "")

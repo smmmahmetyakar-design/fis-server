@@ -10,7 +10,7 @@ banka hesabı / karşı hesap mantığı geliştirilecek.
 """
 import io, re
 from datetime import datetime
-from app.kurallar import norm
+from app.kurallar import norm, dosya_banka_anahtari
 
 # Gerçek işlem değil, hesap özeti/metadata satırı olduğu belli olan açıklamalar
 # (ör. "Sicil: 26920050511927770340630") — bunlar tabloya karışırsa hem hesap
@@ -164,8 +164,15 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
     Banka dökümü -> her hareket bir fiş.
     Bankaya para GİRİŞİ (alacak, +): banka borç / karşı alacak
     Bankadan ÇIKIŞ (borç, -): karşı borç / banka alacak
-    Banka hesabı: önce elle verilen banka_hesap_kodu, yoksa kural excel'inden
-    (102... vadesiz ana), o da yoksa mizanda tek 102.x hesap varsa ondan.
+
+    Banka hesabı DOSYA BAZINDA belirlenir:
+      1) dosyadaki IBAN/hesap no daha önce öğrenilmiş bir hesaba bağlıysa -> otomatik
+      2) değilse elle verilen banka_hesap_kodu / kural excel (vadesiz ana) / mizanda
+         tek 102.x hesap -> varsayılan olarak TÜM dosyalara uygulanır
+      3) hâlâ yoksa 102.01.001'e düşer ve uyarı verir
+    Aynı işlemde tek bir YENİ (henüz öğrenilmemiş) IBAN/hesap no ile birlikte elle
+    banka_hesap_kodu verilmişse, bu eşleşme kalıcı öğrenilir — sonraki aylarda bu
+    dosya, diğer bankalarla karışık bir toplu işlemde bile otomatik doğru hesaba düşer.
     """
     uyarilar = []
     kayitlar = _kayitlar(hamlar)
@@ -175,35 +182,64 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
                 uyarilar.append(f"{h.get('dosya')}: tablo çıkarılamadı, ham metin var — elle düzenleme gerekebilir")
         return [], uyarilar
 
-    banka_hesap = (banka_hesap_kodu or "").strip()
-    if not banka_hesap:
+    # 1) her dosyanın IBAN/hesap no anahtarını çıkar, öğrenilmiş eşleşmeye bak
+    dosya_anahtar = {}
+    dosya_hesap = {}
+    for h in hamlar:
+        fn = h.get("dosya", "")
+        anahtar = dosya_banka_anahtari(h)
+        dosya_anahtar[fn] = anahtar
+        if anahtar and anahtar in km.banka_eslestirme:
+            dosya_hesap[fn] = km.banka_eslestirme[anahtar]
+
+    # 2) elle verilen kod + tek bir YENİ anahtar varsa -> kalıcı öğren
+    manuel_hesap = (banka_hesap_kodu or "").strip()
+    if manuel_hesap:
+        yeni_anahtarlar = {a for a in dosya_anahtar.values() if a and a not in km.banka_eslestirme}
+        if len(yeni_anahtarlar) == 1:
+            km.banka_hesap_ogren(yeni_anahtarlar.pop(), manuel_hesap)
+            for fn, a in dosya_anahtar.items():
+                if a and a in km.banka_eslestirme:
+                    dosya_hesap[fn] = km.banka_eslestirme[a]
+
+    # 3) hiçbir şekilde belirlenemeyen dosyalar için varsayılan zincir
+    varsayilan_hesap = manuel_hesap
+    if not varsayilan_hesap:
         for hh in km.kural["hesaplar"]:
             if hh["kod"].startswith("102") and ("VADESIZ" in norm(hh.get("kullanim", "")) or "ANA" in norm(hh.get("kullanim", ""))):
-                banka_hesap = hh["kod"]; break
-    if not banka_hesap:
+                varsayilan_hesap = hh["kod"]; break
+    if not varsayilan_hesap:
         for hh in km.kural["hesaplar"]:
             if hh["kod"].startswith("102"):
-                banka_hesap = hh["kod"]; break
-    if not banka_hesap:
+                varsayilan_hesap = hh["kod"]; break
+    if not varsayilan_hesap:
         mizan_banka = [k for k, a in km.hesaplar if k.startswith("102")]
         if len(mizan_banka) == 1:
-            banka_hesap = mizan_banka[0]
-    if not banka_hesap:
-        banka_hesap = "102.01.001"
-        uyarilar.append("Banka hesabı belirlenemedi (kural/mizan'da net değil), 102.01.001 varsayıldı — "
-                        "isteğe banka_hesap_kodu vererek düzeltebilirsiniz")
+            varsayilan_hesap = mizan_banka[0]
+    varsayilan_kullanildi = False
+    if not varsayilan_hesap:
+        varsayilan_hesap = "102.01.001"
+        varsayilan_kullanildi = True
 
-    banka_ad = km.hesap_adi(banka_hesap) or "BANKA"
+    for fn, kod in sorted(dosya_hesap.items()):
+        uyarilar.append(f"{fn}: {kod} olarak otomatik tanındı (IBAN/hesap no eşleşmesi)")
+    eksik_dosyalar = sorted(fn for fn in dosya_anahtar if fn not in dosya_hesap)
+    if eksik_dosyalar and varsayilan_kullanildi:
+        uyarilar.append("Banka hesabı belirlenemedi (kural/mizan'da net değil), 102.01.001 varsayıldı — "
+                        "isteğe banka_hesap_kodu vererek düzeltebilirsiniz: " + ", ".join(eksik_dosyalar))
+
     fisler = []
     fis = fis0
     for k in sorted(kayitlar, key=lambda x: x["tarih"] or ""):
         fisno = f"{fis:05d}"
+        kd = k.get("dosya", "")
+        banka_hesap = dosya_hesap.get(kd, varsayilan_hesap)
+        banka_ad = km.hesap_adi(banka_hesap) or "BANKA"
         karsi, kaynak = km.eslestir(k["aciklama"])
         if not karsi:
             karsi = ""
             uyarilar.append(f"{k['aciklama'][:30]}: hesap eşleşmedi")
         tutar = abs(k["tutar"])
-        kd = k.get("dosya", "")
         if k["tutar"] >= 0:
             fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, tutar, 0, detay=k["aciklama"], kaynak="banka", kaynak_dosya=kd))
             fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, 0, tutar, detay=k["aciklama"], kaynak=kaynak, kaynak_dosya=kd))

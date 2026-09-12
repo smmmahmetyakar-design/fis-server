@@ -202,7 +202,8 @@ def isle(kod: str, tip: str, body: IsleBody):
     if tip not in TIPLER:
         raise HTTPException(400, "Geçersiz tip")
     d = firma_dir(kod)
-    km = KuralMotoru(d / "mizan.xlsx", d / f"kural_{tip}.xlsx", d / f"{tip}_ogrenme.json")
+    km = KuralMotoru(d / "mizan.xlsx", d / f"kural_{tip}.xlsx", d / f"{tip}_ogrenme.json",
+                      d / "banka_hesap_eslestirme.json")
 
     dosyalar = body.dosyalar or [f.name for f in (d / tip).iterdir() if f.is_file()]
     tum_ham = []
