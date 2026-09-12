@@ -319,6 +319,10 @@ async function loadCiktilar(){
 }
 
 loadFirmalar();
+// Sayfa ilk açıldığında sekme zaten "banka" olduğu halde sekmeSec() hiç
+// çalışmadığı için Banka Hesabı kutusu gizli kalıyordu — burada bir kez
+// senkronize ediyoruz.
+$('bankaHesapWrap').style.display=(aktifTip==='banka')?'':'none';
 </script>
 </body>
 </html>
