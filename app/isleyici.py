@@ -16,11 +16,15 @@ from app.kurallar import norm, dosya_banka_anahtari, banka_kisa_adi
 # (ör. "Sicil: 26920050511927770340630") — bunlar tabloya karışırsa hem hesap
 # eşleşmez hem de anlamsız devasa bir "tutar" üretebilir.
 _METADATA_RE = re.compile(
-    r"^(SICIL|IBAN|SUBE|VKN|TCKN|MUSTERI NO|HESAP NO|HESAP SAHIBI)\b"
+    r"^(SICIL|IBAN|SUBE|VKN|TCKN|MUSTERI NO|HESAP NO|HESAP SAHIBI|"
+    r"TARIH ARALIGI|BAKIYE|EK HESAP LIMITI|ORTAK HESAP|RUMUZ|VB MUS NO|"
+    r"HESAP TURU|HESAP HAREKETLERI)\b"
 )
 _MAKUL_TUTAR_UST_SINIR = 1_000_000_000  # bu üstü gerçek bir banka hareketi değil, hatalı okunmuş sayıdır
 _SAAT_ONEK_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?\s+")  # açıklama başındaki "12:31:21 " gibi saat
 _ISLEMNO_RE = re.compile(r"\b\d{10,}\b")  # İşlem/referans no gibi uzun sayı dizileri açıklamaya karışmasın
+_FOOTER_RE = re.compile(r"www\.|Sicil Numaras|Dekont yerine|Uyuşmazlık halinde", re.IGNORECASE)
+_FOOTER_BASLANGIC_RE = re.compile(r"^\*{3,}")  # "***Dekont yerine..." gibi dipnotlar; maskeli kart no ("5472********1297") ile karışmasın diye SADECE satır başı
 
 
 def _ddmmyyyy(iso: str) -> str:
@@ -137,8 +141,12 @@ def _ham_metin_satirlari(hamlar):
         metin = h.get("ham_metin", "")
         if not metin:
             continue
-        for hat in metin.splitlines():
-            hat = hat.strip()
+        satirlar = [s.strip() for s in metin.splitlines()]
+        n = len(satirlar)
+        i = 0
+        while i < n:
+            hat = satirlar[i]
+            i += 1
             if not hat:
                 continue
             tm = tarih_re.search(hat)
@@ -171,6 +179,31 @@ def _ham_metin_satirlari(hamlar):
             acik = _SAAT_ONEK_RE.sub("", acik)
             if _METADATA_RE.match(norm(acik)):
                 continue
+            # Birçok ekstrede kısa "İşlem Adı" (ör. "FAST Anlık Ödeme") tek
+            # başına karşı tarafı ayırt etmeye yetmez; asıl bilgi bir sonraki
+            # satır(lar)a taşar (ör. "... ERDİNÇ ÇÖL hesabına giden FAST
+            # ödemesi"). Yeni bir işlem/tarih başlayana, dipnot/altbilgi
+            # metnine (İBAN/şube/dekont uyarısı vb.) ya da anlamsız kısa bir
+            # parçaya (taranmış logo/altbilgi gürültüsü) çatana kadar bu
+            # devam satırlarını açıklamaya ekle.
+            ek = []
+            while i < n and len(ek) < 4:
+                sonraki = _ISLEMNO_RE.sub("", satirlar[i])
+                sonraki = re.sub(r"\s+", " ", sonraki).strip()
+                if not sonraki:
+                    i += 1
+                    continue
+                tm2 = tarih_re.search(sonraki)
+                if tm2 and tm2.start() <= 3:
+                    break
+                if _FOOTER_RE.search(sonraki) or _FOOTER_BASLANGIC_RE.match(sonraki) or _METADATA_RE.match(norm(sonraki)):
+                    break
+                if len(sonraki) < 8 or " " not in sonraki:
+                    break
+                ek.append(sonraki)
+                i += 1
+            if ek:
+                acik = re.sub(r"\s+", " ", acik + " " + " ".join(ek)).strip()
             kayitlar.append({"tarih": tarih, "aciklama": acik, "tutar": tutar,
                              "dosya": h.get("dosya", "")})
     return kayitlar
