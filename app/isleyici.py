@@ -47,12 +47,12 @@ def _sayi(s):
 
 
 # ----------------------------------------------------------------- fiş satırı
-def _sat(fisno, tarih, aciklama, hesap, borc, alacak, evrak_no="", detay="", kaynak=""):
+def _sat(fisno, tarih, aciklama, hesap, borc, alacak, evrak_no="", detay="", kaynak="", kaynak_dosya=""):
     return {
         "fisno": fisno, "fis_tarih": tarih, "fis_aciklama": aciklama,
         "hesap": hesap, "evrak_no": evrak_no, "evrak_tarih": tarih,
         "detay": detay or aciklama, "borc": round(borc, 2), "alacak": round(alacak, 2),
-        "belge_turu": "MF", "kaynak": kaynak,
+        "belge_turu": "MF", "kaynak": kaynak, "kaynak_dosya": kaynak_dosya,
     }
 
 
@@ -187,12 +187,13 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
             karsi = ""
             uyarilar.append(f"{k['aciklama'][:30]}: hesap eşleşmedi")
         tutar = abs(k["tutar"])
+        kd = k.get("dosya", "")
         if k["tutar"] >= 0:
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, tutar, 0, detay=k["aciklama"], kaynak="banka"))
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, 0, tutar, detay=k["aciklama"], kaynak=kaynak))
+            fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, tutar, 0, detay=k["aciklama"], kaynak="banka", kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, 0, tutar, detay=k["aciklama"], kaynak=kaynak, kaynak_dosya=kd))
         else:
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, tutar, 0, detay=k["aciklama"], kaynak=kaynak))
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, 0, tutar, detay=k["aciklama"], kaynak="banka"))
+            fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, tutar, 0, detay=k["aciklama"], kaynak=kaynak, kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, 0, tutar, detay=k["aciklama"], kaynak="banka", kaynak_dosya=kd))
         fis += 1
     return fisler, uyarilar
 

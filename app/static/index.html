@@ -119,14 +119,14 @@
 <script>
 const $=id=>document.getElementById(id);
 let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
-let filtreHesap='', filtreEslesmeyen=false, sonR=null;
+let filtreHesap='', filtreDosya='', filtreEslesmeyen=false, sonR=null;
 
 function sekmeSec(tip){
   aktifTip=tip;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tip===tip));
   $('kuralTip').textContent=tip; $('belgeTip').textContent=tip;
   $('bankaHesapWrap').style.display=(tip==='banka')?'':'none';
-  satirlar=[]; duzenleMod=false; filtreHesap=''; filtreEslesmeyen=false; sonR=null;
+  satirlar=[]; duzenleMod=false; filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; sonR=null;
   $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
   if(firmaKod) firmaDurum();
   bankaHesapDoldur();
@@ -215,11 +215,12 @@ async function isle(){
     body:JSON.stringify(govde)})).json();
   $('durum').textContent='';
   satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false;
-  filtreHesap=''; filtreEslesmeyen=false;
+  filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false;
   $('duzenleBtn').style.display=satirlar.length?'inline-block':'none';
   render(r);
 }
 function filtreHesapDegisti(v){ filtreHesap=v; render(); }
+function filtreDosyaDegisti(v){ filtreDosya=v; render(); }
 function filtreEslesmeyenDegisti(v){ filtreEslesmeyen=v; render(); }
 function totals(){
   const b=satirlar.reduce((a,s)=>a+(parseFloat(s.borc)||0),0);
@@ -231,8 +232,11 @@ function render(r){
   if(!satirlar.length){$('onizle').innerHTML='<div class="hint">Sonuç yok. Belge yükleyip işleyin.</div>';return;}
   const t=totals(); const dz=duzenleMod;
   const hesapSecenekleri=[...new Set(satirlar.map(s=>s.hesap).filter(Boolean))].sort();
+  const dosyaSecenekleri=[...new Set(satirlar.map(s=>s.kaynak_dosya).filter(Boolean))].sort();
   const goster=satirlar.map((s,i)=>({s,i})).filter(({s})=>
-    (!filtreHesap||s.hesap===filtreHesap) && (!filtreEslesmeyen||!s.hesap));
+    (!filtreHesap||s.hesap===filtreHesap) &&
+    (!filtreDosya||s.kaynak_dosya===filtreDosya) &&
+    (!filtreEslesmeyen||!s.hesap));
   let h='';
   if(r&&r.okunan_belgeler) h+='<div class="hint" style="margin-bottom:8px">Okunan: '+r.okunan_belgeler.map(b=>`${b.dosya} (${b.tur})`).join(', ')+'</div>';
   h+=`<div class="flex" style="margin-bottom:10px">
@@ -242,10 +246,16 @@ function render(r){
         ${hesapSecenekleri.map(k=>`<option value="${k}" ${k===filtreHesap?'selected':''}>${k}</option>`).join('')}
       </select>
     </div>
+    ${dosyaSecenekleri.length>1?`<div><label>Bankaya / dosyaya göre filtrele</label>
+      <select onchange="filtreDosyaDegisti(this.value)">
+        <option value="">— Tümü —</option>
+        ${dosyaSecenekleri.map(d=>`<option value="${d}" ${d===filtreDosya?'selected':''}>${d}</option>`).join('')}
+      </select>
+    </div>`:''}
     <label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;color:#333;align-self:flex-end">
       <input type="checkbox" ${filtreEslesmeyen?'checked':''} onchange="filtreEslesmeyenDegisti(this.checked)"> Sadece eşleşmeyenler
     </label>
-    ${(filtreHesap||filtreEslesmeyen)?`<span class="hint" style="align-self:flex-end">${goster.length} / ${satirlar.length} satır gösteriliyor</span>`:''}
+    ${(filtreHesap||filtreDosya||filtreEslesmeyen)?`<span class="hint" style="align-self:flex-end">${goster.length} / ${satirlar.length} satır gösteriliyor</span>`:''}
   </div>`;
   h+=`<table><thead><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
   h+=goster.map(({s,i})=>{
