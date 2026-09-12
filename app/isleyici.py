@@ -10,7 +10,7 @@ banka hesabı / karşı hesap mantığı geliştirilecek.
 """
 import io, re
 from datetime import datetime
-from app.kurallar import norm, dosya_banka_anahtari
+from app.kurallar import norm, dosya_banka_anahtari, banka_kisa_adi
 
 # Gerçek işlem değil, hesap özeti/metadata satırı olduğu belli olan açıklamalar
 # (ör. "Sicil: 26920050511927770340630") — bunlar tabloya karışırsa hem hesap
@@ -19,6 +19,15 @@ _METADATA_RE = re.compile(
     r"^(SICIL|IBAN|SUBE|VKN|TCKN|MUSTERI NO|HESAP NO|HESAP SAHIBI)\b"
 )
 _MAKUL_TUTAR_UST_SINIR = 1_000_000_000  # bu üstü gerçek bir banka hareketi değil, hatalı okunmuş sayıdır
+_SAAT_ONEK_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?\s+")  # açıklama başındaki "12:31:21 " gibi saat
+
+
+def _ddmmyyyy(iso: str) -> str:
+    try:
+        y, m, d = map(int, iso.split("-"))
+        return f"{d:02d}.{m:02d}.{y}"
+    except Exception:
+        return iso or ""
 
 
 # ----------------------------------------------------------------- tarih/sayı ayrıştırma
@@ -98,7 +107,7 @@ def _tablo_satirlari(hamlar):
                     j = harita.get(key)
                     return row[j] if j is not None and j < len(row) else None
                 tarih = _tarih_iso(g("tarih"))
-                acik = str(g("aciklama") or "").strip()
+                acik = _SAAT_ONEK_RE.sub("", str(g("aciklama") or "").strip())
                 if "borc" in harita or "alacak" in harita:
                     borc = _sayi(g("borc")) or 0
                     alacak = _sayi(g("alacak")) or 0
@@ -143,6 +152,7 @@ def _ham_metin_satirlari(hamlar):
                 continue
             acik = hat[tm.end():]
             acik = acik.replace(tutarlar[-1], "").strip(" \t-|")
+            acik = _SAAT_ONEK_RE.sub("", acik)
             if _METADATA_RE.match(norm(acik)):
                 continue
             kayitlar.append({"tarih": tarih, "aciklama": acik, "tutar": tutar,
@@ -239,15 +249,16 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
             karsi = ""
             uyarilar.append(f"{k['aciklama'][:30]}: hesap eşleşmedi")
         tutar = abs(k["tutar"])
-        # Fiş Açıklama = gerçek işlem açıklaması (banka adı değil) — yevmiye
-        # fişlerindeki gibi her iki satırda da aynı, işlemi anlatan metin olsun.
+        # Fiş Açıklama = "BANKA-TARİH" (ör. "YKB-05.04.2026"); Detay Açıklama
+        # ise gerçek işlem metni. Tüm bankalarda aynı kural geçerli.
+        fis_aciklama = f"{banka_kisa_adi(km.hesap_adi(banka_hesap), banka_hesap)}-{_ddmmyyyy(k['tarih'])}"
         aciklama = k["aciklama"]
         if k["tutar"] >= 0:
-            fisler.append(_sat(fisno, k["tarih"], aciklama, banka_hesap, tutar, 0, detay=aciklama, kaynak="banka", kaynak_dosya=kd))
-            fisler.append(_sat(fisno, k["tarih"], aciklama, karsi, 0, tutar, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, banka_hesap, tutar, 0, detay=aciklama, kaynak="banka", kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, karsi, 0, tutar, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd))
         else:
-            fisler.append(_sat(fisno, k["tarih"], aciklama, karsi, tutar, 0, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd))
-            fisler.append(_sat(fisno, k["tarih"], aciklama, banka_hesap, 0, tutar, detay=aciklama, kaynak="banka", kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, karsi, tutar, 0, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, banka_hesap, 0, tutar, detay=aciklama, kaynak="banka", kaynak_dosya=kd))
         fis += 1
     return fisler, uyarilar
 

@@ -47,6 +47,43 @@ def dosya_banka_anahtari(h: dict) -> str:
     return ""
 
 
+# ----------------------------------------------------------------- kısa banka adı
+# Mizan/kural excel'deki hesap adı genelde uzun ve dağınık olur (ör.
+# "GARANTİ BANK 1047-6296738 TL"). Fiş Açıklama'da "BANKA-TARİH" biçimi için
+# kısa, tanıdık bir banka adına indirgiyoruz. Yeni bir banka mizan'a eklendiğinde
+# bu listeye eklemeye gerek yok — eşleşmeyen adlarda ilk anlamlı kelime kullanılır.
+_BANKA_KISALTMALARI = [
+    (re.compile(r"\bGARANTI\b"), "GARANTİ"),
+    (re.compile(r"\bVAKIF"), "VAKIFBANK"),
+    (re.compile(r"YAPI\s+(VE\s+)?KREDI|\bYKB\b"), "YKB"),
+    (re.compile(r"\bIS\s*BANKASI\b|\bISBANK\b"), "İŞBANKASI"),
+    (re.compile(r"\bAKBANK\b"), "AKBANK"),
+    (re.compile(r"\bDENIZBANK\b"), "DENİZBANK"),
+    (re.compile(r"\bZIRAAT\b"), "ZİRAAT"),
+    (re.compile(r"\bHALKBANK\b"), "HALKBANK"),
+    (re.compile(r"\bQNB\b|\bFINANSBANK\b"), "QNB FİNANSBANK"),
+    (re.compile(r"\bTEB\b"), "TEB"),
+    (re.compile(r"\bING\b"), "ING"),
+    (re.compile(r"\bODEA"), "ODEABANK"),
+    (re.compile(r"\bENPARA\b"), "ENPARA"),
+    (re.compile(r"\bKUVEYT\b"), "KUVEYTTÜRK"),
+    (re.compile(r"\bALBARAKA\b"), "ALBARAKA"),
+]
+
+
+def banka_kisa_adi(hesap_adi: str, hesap_kodu: str = "") -> str:
+    """Mizan/kural hesap adından kısa, tanıdık banka adı çıkarır
+    (ör. 'GARANTİ BANK 1047-6296738 TL' -> 'GARANTİ')."""
+    ad_norm = norm(hesap_adi)
+    for pat, kisa in _BANKA_KISALTMALARI:
+        if pat.search(ad_norm):
+            return kisa
+    ilk_kelimeler = [w for w in ad_norm.split() if w not in STOP]
+    if ilk_kelimeler:
+        return ilk_kelimeler[0]
+    return hesap_kodu or "BANKA"
+
+
 def norm(s: str) -> str:
     """Türkçe duyarsız normalize: büyük harf, aksan yok, sadece harf/rakam/boşluk."""
     if s is None:
