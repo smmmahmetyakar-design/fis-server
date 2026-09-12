@@ -20,6 +20,7 @@ _METADATA_RE = re.compile(
 )
 _MAKUL_TUTAR_UST_SINIR = 1_000_000_000  # bu üstü gerçek bir banka hareketi değil, hatalı okunmuş sayıdır
 _SAAT_ONEK_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?\s+")  # açıklama başındaki "12:31:21 " gibi saat
+_ISLEMNO_RE = re.compile(r"\b\d{10,}\b")  # İşlem/referans no gibi uzun sayı dizileri açıklamaya karışmasın
 
 
 def _ddmmyyyy(iso: str) -> str:
@@ -141,17 +142,32 @@ def _ham_metin_satirlari(hamlar):
             if not hat:
                 continue
             tm = tarih_re.search(hat)
-            tutarlar = tutar_re.findall(hat)
-            if not tm or not tutarlar:
+            # Tarih satırın hemen başında değilse (küçük OCR gürültüsü hariç)
+            # bu bir işlem satırı değil, bir üstbilgi/etiket satırıdır
+            # (ör. "Tarih Aralığı : 01.08.2026 - 31.08.2026") — atla.
+            if not tm or tm.start() > 3:
+                continue
+            # Tutarları SADECE tarihten SONRAKİ kısımda ara; aksi halde
+            # "03.08.2026" gibi tarihin kendi ".08" parçası yanlışlıkla bir
+            # tutar sanılabiliyordu.
+            kalan = hat[tm.end():]
+            tutarlar = tutar_re.findall(kalan)
+            if not tutarlar:
                 continue
             tarih = _tarih_iso(tm.group(1))
-            tutar = _sayi(tutarlar[-1])
+            # Ekstrede aynı satırda hem İŞLEM TUTARI hem de (o hareket sonrası)
+            # BAKİYE gösteriliyorsa (ör. Vakıfbank: "... -5.000,00 183.681,28
+            # FAST Anlık Ödeme") sıradaki İLK tutar gerçek işlem tutarıdır;
+            # sonraki(ler) bakiyedir — SON değeri almak bakiyeyi tutar sanardı.
+            tutar = _sayi(tutarlar[0])
             if tutar is None or tutar == 0:
                 continue
             if abs(tutar) > _MAKUL_TUTAR_UST_SINIR:
                 continue
-            acik = hat[tm.end():]
-            acik = acik.replace(tutarlar[-1], "").strip(" \t-|")
+            acik = _ISLEMNO_RE.sub("", kalan)
+            for t in tutarlar:
+                acik = acik.replace(t, "")
+            acik = re.sub(r"\s+", " ", acik).strip(" \t-|")
             acik = _SAAT_ONEK_RE.sub("", acik)
             if _METADATA_RE.match(norm(acik)):
                 continue
