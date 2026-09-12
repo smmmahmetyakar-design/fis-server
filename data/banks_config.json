@@ -1,0 +1,11 @@
+{
+  "banks": [
+    {"id":"is","name":"İş Bankası","detect_keywords":["İŞ BANKASI"],"separator":"|","columns":["date","desc","amount","balance"]},
+    {"id":"vakif","name":"Vakıfbank","detect_keywords":["VAKIFBANK"],"separator":"\t","columns":["date","desc","amount","balance"]},
+    {"id":"yapi","name":"Yapı Kredi","detect_keywords":["YAPI KREDİ"],"separator":"\t","columns":["date","desc","amount","balance"]},
+    {"id":"garanti","name":"Garanti BBVA","detect_keywords":["GARANTI"],"separator":"\t","columns":["date","desc","amount","balance"]},
+    {"id":"ziraat","name":"Ziraat","detect_keywords":["ZİRAAT"],"separator":"\t","columns":["date","desc","amount","balance"]},
+    {"id":"akbank","name":"Akbank","detect_keywords":["AKBANK"],"separator":"\t","columns":["date","desc","amount","balance"]},
+    {"id":"deniz","name":"Deniz Bank","detect_keywords":["DENİZ BANK"],"separator":"\t","columns":["date","desc","amount","balance"]}
+  ]
+}
