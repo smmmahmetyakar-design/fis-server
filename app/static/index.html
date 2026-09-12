@@ -326,7 +326,7 @@ function render(r){
         <td class="l"><input list="hesapListe" value="${hesapDeger.replace(/"/g,'&quot;')}" placeholder="kod veya ad yaz…" onchange="editHesap(${i},this.value)" style="width:190px"></td>
         <td><input value="${s.borc||0}" onchange="edit(${i},'borc',this.value)" style="width:80px;text-align:right"></td>
         <td><input value="${s.alacak||0}" onchange="edit(${i},'alacak',this.value)" style="width:80px;text-align:right"></td>
-        <td class="l"><input value="${(s.detay||'').replace(/"/g,'&quot;')}" onchange="edit(${i},'detay',this.value)" style="width:100%"></td>
+        <td class="l"><input value="${(s.detay||'').replace(/"/g,'&quot;')}" onchange="edit(${i},'detay',this.value)" style="width:100%;min-width:420px"></td>
         <td><button class="btn btn-x" onclick="satirSil(${i})">🗑</button></td>
       </tr>`;
     }
