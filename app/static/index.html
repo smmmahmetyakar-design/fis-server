@@ -96,6 +96,10 @@
   <div class="card">
     <h2>3) İşle & Fiş Üret</h2>
     <div class="flex">
+      <div id="bankaHesapWrap" style="display:none">
+        <label>Banka Hesabı (bu belgeler hangi hesaba ait)</label>
+        <select id="bankaHesapSel" style="min-width:220px"><option value="">— otomatik —</option></select>
+      </div>
       <div><label>Başlangıç Fiş No</label><input id="fisBas" type="number" value="1" min="1" style="width:120px"></div>
       <button class="btn btn-yesil" onclick="isle()" style="align-self:flex-end">⚙ İşle (Önizle)</button>
       <button class="btn btn-edit" id="duzenleBtn" onclick="duzenleToggle()" style="display:none;align-self:flex-end">✎ Düzenle</button>
@@ -115,13 +119,25 @@
 <script>
 const $=id=>document.getElementById(id);
 let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
+let filtreHesap='', filtreEslesmeyen=false, sonR=null;
 
 function sekmeSec(tip){
   aktifTip=tip;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tip===tip));
   $('kuralTip').textContent=tip; $('belgeTip').textContent=tip;
-  satirlar=[]; duzenleMod=false; $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
+  $('bankaHesapWrap').style.display=(tip==='banka')?'':'none';
+  satirlar=[]; duzenleMod=false; filtreHesap=''; filtreEslesmeyen=false; sonR=null;
+  $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
   if(firmaKod) firmaDurum();
+  bankaHesapDoldur();
+}
+
+function bankaHesapDoldur(){
+  const sel=$('bankaHesapSel'); if(!sel) return;
+  const eski=sel.value;
+  const secenekler=hesaplar.filter(h=>/^10[0-9]/.test(h.kod));
+  sel.innerHTML='<option value="">— otomatik —</option>'+secenekler.map(h=>`<option value="${h.kod}">${h.kod} — ${h.ad}</option>`).join('');
+  if(secenekler.some(h=>h.kod===eski)) sel.value=eski;
 }
 
 async function loadFirmalar(){
@@ -138,6 +154,7 @@ async function yeniFirma(){
 
 async function loadHesaplar(){
   try{ hesaplar=(await (await fetch(`/api/firma/${firmaKod}/hesaplar`)).json()).hesaplar; }catch(e){ hesaplar=[]; }
+  bankaHesapDoldur();
 }
 
 async function firmaDurum(){
@@ -192,25 +209,46 @@ function nf(n){return (Math.round((n||0)*100)/100).toLocaleString('tr-TR',{minim
 async function isle(){
   if(!firmaKod){alert('Önce firma seç');return;}
   $('durum').textContent='işleniyor (OCR sürebilir)...';
+  const govde={firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||1};
+  if(aktifTip==='banka'){ const bh=$('bankaHesapSel').value; if(bh) govde.banka_hesap_kodu=bh; }
   const r=await (await fetch(`/api/firma/${firmaKod}/isle/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||1})})).json();
+    body:JSON.stringify(govde)})).json();
   $('durum').textContent='';
   satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false;
+  filtreHesap=''; filtreEslesmeyen=false;
   $('duzenleBtn').style.display=satirlar.length?'inline-block':'none';
   render(r);
 }
+function filtreHesapDegisti(v){ filtreHesap=v; render(); }
+function filtreEslesmeyenDegisti(v){ filtreEslesmeyen=v; render(); }
 function totals(){
   const b=satirlar.reduce((a,s)=>a+(parseFloat(s.borc)||0),0);
   const al=satirlar.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0);
   return {b,al,dengeli:Math.abs(b-al)<0.01};
 }
 function render(r){
+  r=r||sonR; sonR=r;
   if(!satirlar.length){$('onizle').innerHTML='<div class="hint">Sonuç yok. Belge yükleyip işleyin.</div>';return;}
   const t=totals(); const dz=duzenleMod;
+  const hesapSecenekleri=[...new Set(satirlar.map(s=>s.hesap).filter(Boolean))].sort();
+  const goster=satirlar.map((s,i)=>({s,i})).filter(({s})=>
+    (!filtreHesap||s.hesap===filtreHesap) && (!filtreEslesmeyen||!s.hesap));
   let h='';
   if(r&&r.okunan_belgeler) h+='<div class="hint" style="margin-bottom:8px">Okunan: '+r.okunan_belgeler.map(b=>`${b.dosya} (${b.tur})`).join(', ')+'</div>';
+  h+=`<div class="flex" style="margin-bottom:10px">
+    <div><label>Hesaba göre filtrele</label>
+      <select onchange="filtreHesapDegisti(this.value)">
+        <option value="">— Tümü (${satirlar.length}) —</option>
+        ${hesapSecenekleri.map(k=>`<option value="${k}" ${k===filtreHesap?'selected':''}>${k}</option>`).join('')}
+      </select>
+    </div>
+    <label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;color:#333;align-self:flex-end">
+      <input type="checkbox" ${filtreEslesmeyen?'checked':''} onchange="filtreEslesmeyenDegisti(this.checked)"> Sadece eşleşmeyenler
+    </label>
+    ${(filtreHesap||filtreEslesmeyen)?`<span class="hint" style="align-self:flex-end">${goster.length} / ${satirlar.length} satır gösteriliyor</span>`:''}
+  </div>`;
   h+=`<table><thead><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
-  h+=satirlar.map((s,i)=>{
+  h+=goster.map(({s,i})=>{
     const opts=hesaplar.map(x=>`<option value="${x.kod}" ${x.kod===s.hesap?'selected':''}>${x.kod} — ${x.ad}</option>`).join('');
     if(dz){
       return `<tr class="${s.hesap?'':'warn'}">
@@ -225,7 +263,7 @@ function render(r){
     }
     return `<tr class="${s.hesap?'':'warn'}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.detay||''}</td></tr>`;
   }).join('');
-  h+=`</tbody><tfoot><tr class="tot"><td colspan="3" class="l">TOPLAM</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table>`;
+  h+=`</tbody><tfoot><tr class="tot"><td colspan="3" class="l">TOPLAM (tümü)</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';
   if(dz) h+='<div class="hint" style="margin-top:6px">Hesabı yanlış eşleşenleri düzeltin; "Bitir"e basınca eşleştirmeler öğrenilir. Sonra Excel/XML alın.</div>';
   $('onizle').innerHTML=h;
