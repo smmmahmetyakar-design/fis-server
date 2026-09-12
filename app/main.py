@@ -20,6 +20,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar, fis_listesi_ogren
 from app.belge_oku import belge_oku
@@ -31,6 +32,23 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="Fiş Aktarım Aracı")
 app.include_router(enhanced_router)
+
+
+# ----------------------------------------------------------------- önbellek kapalı
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    """Arayüz (index.html) tarayıcı önbelleğinde takılıp kalmasın diye her
+    yanıta 'önbelleğe alma' başlığı ekler. Her deploy'dan sonra kullanıcı
+    ?v=2 gibi bir numara eklemeden / sert yenileme yapmadan en güncel
+    sürümü otomatik görür."""
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
+
+app.add_middleware(NoCacheMiddleware)
 
 TIPLER = ("banka", "fatura", "cek")
 
