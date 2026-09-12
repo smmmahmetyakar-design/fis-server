@@ -171,7 +171,10 @@ def _kayitlar(hamlar):
 # ----------------------------------------------------------------- BANKA
 def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
     """
-    Banka dökümü -> her hareket bir fiş.
+    Banka dökümü -> fiş. Aynı banka hesabına ait, aynı tarihli hareketler TEK
+    fişte toplanır (fiş no ve fiş tarihi ortak, her hareket kendi Borç/Alacak
+    satır çiftiyle fişe eklenir); farklı tarih veya farklı banka hesabı yeni
+    bir fiş no başlatır.
     Bankaya para GİRİŞİ (alacak, +): banka borç / karşı alacak
     Bankadan ÇIKIŞ (borç, -): karşı borç / banka alacak
 
@@ -240,10 +243,15 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
 
     fisler = []
     fis = fis0
-    for k in sorted(kayitlar, key=lambda x: x["tarih"] or ""):
-        fisno = f"{fis:05d}"
+    grup_fisno = {}  # (banka_hesap, tarih) -> fisno — aynı bankanın aynı tarihli hareketleri tek fişte toplanır
+    for k in sorted(kayitlar, key=lambda x: (x["tarih"] or "", x.get("dosya", ""))):
         kd = k.get("dosya", "")
         banka_hesap = dosya_hesap.get(kd, varsayilan_hesap)
+        grup_anahtar = (banka_hesap, k["tarih"])
+        if grup_anahtar not in grup_fisno:
+            grup_fisno[grup_anahtar] = f"{fis:05d}"
+            fis += 1
+        fisno = grup_fisno[grup_anahtar]
         karsi, kaynak = km.eslestir(k["aciklama"])
         if not karsi:
             karsi = ""
@@ -259,7 +267,6 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
         else:
             fisler.append(_sat(fisno, k["tarih"], fis_aciklama, karsi, tutar, 0, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd))
             fisler.append(_sat(fisno, k["tarih"], fis_aciklama, banka_hesap, 0, tutar, detay=aciklama, kaynak="banka", kaynak_dosya=kd))
-        fis += 1
     return fisler, uyarilar
 
 
