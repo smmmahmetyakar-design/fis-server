@@ -125,6 +125,25 @@ async def mizan_yukle(kod: str, file: UploadFile = File(...)):
     return {"ok": True, "hesap_sayisi": len(hes)}
 
 
+@app.delete("/api/firma/{kod}/mizan")
+def mizan_sil(kod: str):
+    """Mizanı siler; yeni mizan yüklenene kadar hesap listesi/eşleştirme boş kalır."""
+    d = firma_dir(kod)
+    (d / "mizan.xlsx").unlink(missing_ok=True)
+    return {"ok": True}
+
+
+@app.delete("/api/firma/{kod}/ogrenme/{tip}")
+def ogrenme_sil(kod: str, tip: str):
+    """Fiş Listesi'nden (veya elle düzenlemeden) öğrenilmiş eşleştirmeleri sıfırlar,
+    böylece yeni bir Fiş Listesi baştan öğretilebilir."""
+    if tip not in TIPLER:
+        raise HTTPException(400, "Geçersiz tip")
+    d = firma_dir(kod)
+    (d / f"{tip}_ogrenme.json").unlink(missing_ok=True)
+    return {"ok": True}
+
+
 @app.post("/api/firma/{kod}/kural/{tip}")
 async def kural_yukle(kod: str, tip: str, file: UploadFile = File(...)):
     if tip not in TIPLER:

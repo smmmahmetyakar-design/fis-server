@@ -74,6 +74,7 @@
         <label>Mizan (tüm hesaplar)</label>
         <input type="file" id="mizanFile" accept=".xlsx,.xls">
         <button class="btn btn-ana" onclick="mizanYukle()">Yükle</button>
+        <button class="btn btn-x" onclick="mizanSil()">🗑 Sil</button>
         <span id="mizanPill" class="pill off">mizan yok</span>
       </div>
     </div>
@@ -85,7 +86,22 @@
         <span id="kuralPill" class="pill off">kural yok</span>
       </div>
     </div>
+    <div class="flex" style="margin-top:12px">
+      <div>
+        <label>Fiş Listesi (<span id="fisListesiTip">banka</span>) — geçmiş fişlerden karşı hesap öğren</label>
+        <input type="file" id="fisListesiFile" accept=".xlsx,.xls">
+      </div>
+      <div>
+        <label>Hedef Hesap Kodu (bu fişlerdeki banka/ana hesap)</label>
+        <input id="fisListesiHesap" placeholder="ör. 102.01.004" style="width:150px">
+      </div>
+      <button class="btn btn-ana" onclick="fisListesiYukle()" style="align-self:flex-end">Öğren</button>
+      <button class="btn btn-x" onclick="ogrenmeSil()" style="align-self:flex-end">🗑 Öğrenilenleri Sil</button>
+      <span id="ogrenmePill" class="pill off" style="align-self:flex-end">öğrenilen yok</span>
+    </div>
   </div>
+
+  <datalist id="hesapListe"></datalist>
 
   <div class="card">
     <h2>2) Belge Yükle (<span id="belgeTip">banka</span>) — Excel / PDF / Resim</h2>
@@ -128,7 +144,7 @@ let filtreHesap='', filtreDosya='', filtreEslesmeyen=false, sonR=null;
 function sekmeSec(tip){
   aktifTip=tip;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tip===tip));
-  $('kuralTip').textContent=tip; $('belgeTip').textContent=tip;
+  $('kuralTip').textContent=tip; $('belgeTip').textContent=tip; $('fisListesiTip').textContent=tip;
   $('bankaHesapWrap').style.display=(tip==='banka')?'':'none';
   satirlar=[]; duzenleMod=false; filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; sonR=null;
   $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
@@ -159,6 +175,17 @@ async function yeniFirma(){
 async function loadHesaplar(){
   try{ hesaplar=(await (await fetch(`/api/firma/${firmaKod}/hesaplar`)).json()).hesaplar; }catch(e){ hesaplar=[]; }
   bankaHesapDoldur();
+  hesapListeDoldur();
+}
+
+function hesapListeDoldur(){
+  const dl=$('hesapListe'); if(!dl) return;
+  dl.innerHTML=hesaplar.map(h=>`<option value="${h.kod} — ${h.ad}">`).join('');
+}
+
+function hesapAdi(kod){
+  const h=hesaplar.find(x=>x.kod===kod);
+  return h?h.ad:'';
 }
 
 async function firmaDurum(){
@@ -170,6 +197,9 @@ async function firmaDurum(){
   const kp=$('kuralPill');
   if(t.kural_var){kp.className='pill';kp.textContent=t.kural_hesap+' kural + '+(t.ogrenilen||0)+' öğrenilen';}
   else{kp.className='pill off';kp.textContent='kural yok';}
+  const op=$('ogrenmePill');
+  if(t.ogrenilen){op.className='pill';op.textContent=t.ogrenilen+' öğrenilen';}
+  else{op.className='pill off';op.textContent='öğrenilen yok';}
   // belge listesi
   const bl=$('belgeListe');
   if(t.belgeler&&t.belgeler.length){
@@ -183,7 +213,32 @@ async function mizanYukle(){
   const f=$('mizanFile').files[0]; if(!f){alert('Dosya seç');return;}
   const fd=new FormData(); fd.append('file',f);
   await fetch(`/api/firma/${firmaKod}/mizan`,{method:'POST',body:fd});
+  $('mizanFile').value='';
   firmaDurum(); loadHesaplar();
+}
+async function mizanSil(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  if(!confirm('Mizan silinsin mi? Yeni mizanı yükleyene kadar hesap listesi/eşleştirme çalışmaz.'))return;
+  await fetch(`/api/firma/${firmaKod}/mizan`,{method:'DELETE'});
+  firmaDurum(); loadHesaplar();
+}
+async function fisListesiYukle(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const f=$('fisListesiFile').files[0]; if(!f){alert('Dosya seç');return;}
+  const hk=($('fisListesiHesap').value||'').trim(); if(!hk){alert('Hedef hesap kodu gir (ör. 102.01.004)');return;}
+  const fd=new FormData(); fd.append('file',f); fd.append('banka_hesap_kodu',hk);
+  $('durum').textContent='öğreniliyor...';
+  const r=await (await fetch(`/api/firma/${firmaKod}/ogren-fis-listesi/${aktifTip}`,{method:'POST',body:fd})).json();
+  $('durum').textContent='';
+  $('fisListesiFile').value='';
+  alert(`${r.yeni_kural} yeni eşleştirme öğrenildi (toplam ${r.toplam_ogrenilen}).`);
+  firmaDurum();
+}
+async function ogrenmeSil(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  if(!confirm('Bu sekme ('+aktifTip+') için öğrenilen tüm eşleştirmeler silinsin mi?'))return;
+  await fetch(`/api/firma/${firmaKod}/ogrenme/${aktifTip}`,{method:'DELETE'});
+  firmaDurum();
 }
 async function kuralYukle(){
   if(!firmaKod){alert('Önce firma seç');return;}
@@ -263,12 +318,12 @@ function render(r){
   </div>`;
   h+=`<div class="tablo-kayan"><table><thead><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
   h+=goster.map(({s,i})=>{
-    const opts=hesaplar.map(x=>`<option value="${x.kod}" ${x.kod===s.hesap?'selected':''}>${x.kod} — ${x.ad}</option>`).join('');
+    const hesapDeger=s.hesap?(s.hesap+' — '+hesapAdi(s.hesap)):'';
     if(dz){
       return `<tr class="${s.hesap?'':'warn'}">
         <td><input value="${s.fisno||''}" onchange="edit(${i},'fisno',this.value)" style="width:70px"></td>
         <td><input value="${s.fis_tarih||''}" onchange="edit(${i},'fis_tarih',this.value)" style="width:96px"></td>
-        <td class="l"><select onchange="edit(${i},'hesap',this.value)" style="width:150px"><option value="">— seç —</option>${opts}</select></td>
+        <td class="l"><input list="hesapListe" value="${hesapDeger.replace(/"/g,'&quot;')}" placeholder="kod veya ad yaz…" onchange="editHesap(${i},this.value)" style="width:190px"></td>
         <td><input value="${s.borc||0}" onchange="edit(${i},'borc',this.value)" style="width:80px;text-align:right"></td>
         <td><input value="${s.alacak||0}" onchange="edit(${i},'alacak',this.value)" style="width:80px;text-align:right"></td>
         <td class="l"><input value="${(s.detay||'').replace(/"/g,'&quot;')}" onchange="edit(${i},'detay',this.value)" style="width:100%"></td>
@@ -292,6 +347,20 @@ function edit(i,alan,deger){
       body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,aciklama:satirlar[i].detay,kod:deger})}).catch(()=>{});
   }
   if(duzenleMod) render();
+}
+function editHesap(i,val){
+  val=(val||'').trim();
+  if(!val){ edit(i,'hesap',''); return; }
+  // "KOD — AD" biçiminde datalist'ten seçildiyse kodu doğrudan al
+  let kod=val.split(' — ')[0].trim();
+  if(!hesaplar.some(h=>h.kod===kod)){
+    // elle yazılmışsa (kod tam eşleşmiyorsa) hesap adına göre ara
+    const vNorm=val.toLocaleUpperCase('tr-TR');
+    const tamAd=hesaplar.find(h=>h.ad.toLocaleUpperCase('tr-TR')===vNorm);
+    const icerenAd=hesaplar.find(h=>h.ad.toLocaleUpperCase('tr-TR').includes(vNorm));
+    kod=(tamAd||icerenAd)?(tamAd||icerenAd).kod:kod;
+  }
+  edit(i,'hesap',kod);
 }
 function satirSil(i){satirlar.splice(i,1);render();}
 function duzenleToggle(){
