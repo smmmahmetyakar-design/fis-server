@@ -37,6 +37,10 @@
   .pill.off{background:#f0e2e0;color:#8a3d34}
   .dosya-satir{display:flex;align-items:center;gap:10px;padding:6px 8px;border-bottom:1px solid #efe9dc}
   .dosya-satir:last-child{border:none}
+  .tablo-kayan{max-height:65vh;overflow-y:auto;border:1px solid #e2ddd0;border-radius:8px}
+  .tablo-kayan table{width:100%;margin:0;border:none}
+  .tablo-kayan thead th{position:sticky;top:0;z-index:1;background:#f0ece2;box-shadow:0 1px 0 #e2ddd0}
+  .tablo-kayan tfoot td{position:sticky;bottom:0;z-index:1}
   .kaynak{font-size:10px;padding:1px 6px;border-radius:8px}
   .kaynak.ogrenme{background:#dcedc8;color:#33691e}
   .kaynak.excel{background:#c8e0f0;color:#1f4e78}
@@ -257,7 +261,7 @@ function render(r){
     </label>
     ${(filtreHesap||filtreDosya||filtreEslesmeyen)?`<span class="hint" style="align-self:flex-end">${goster.length} / ${satirlar.length} satır gösteriliyor</span>`:''}
   </div>`;
-  h+=`<table><thead><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
+  h+=`<div class="tablo-kayan"><table><thead><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
   h+=goster.map(({s,i})=>{
     const opts=hesaplar.map(x=>`<option value="${x.kod}" ${x.kod===s.hesap?'selected':''}>${x.kod} — ${x.ad}</option>`).join('');
     if(dz){
@@ -273,7 +277,7 @@ function render(r){
     }
     return `<tr class="${s.hesap?'':'warn'}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.detay||''}</td></tr>`;
   }).join('');
-  h+=`</tbody><tfoot><tr class="tot"><td colspan="3" class="l">TOPLAM (tümü)</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table>`;
+  h+=`</tbody><tfoot><tr class="tot"><td colspan="3" class="l">TOPLAM (tümü)</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';
   if(dz) h+='<div class="hint" style="margin-top:6px">Hesabı yanlış eşleşenleri düzeltin; "Bitir"e basınca eşleştirmeler öğrenilir. Sonra Excel/XML alın.</div>';
   $('onizle').innerHTML=h;
