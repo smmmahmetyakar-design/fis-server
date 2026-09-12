@@ -9,6 +9,7 @@ Belge işleme sırasında bir açıklama/satır için hesap kodu ararken:
   önce öğrenilen kurallar, sonra Excel kuralları, sonra anahtar kelime tahmini.
 """
 import json, re, unicodedata
+from difflib import SequenceMatcher
 from pathlib import Path
 import openpyxl
 
@@ -62,6 +63,26 @@ def norm(s: str) -> str:
 
 STOP = {"ANONIM", "SIRKETI", "LIMITED", "LTD", "STI", "SAN", "TIC", "VE", "A", "S",
         "AS", "TICARET", "SANAYI", "MItedh", "HIZM", "HIZMETLERI", "MALI", "STI."}
+
+
+def _yakin(a: str, b: str) -> bool:
+    """İki kelime aynı ya da OCR'dan kaynaklı ufak bir yazım farkıyla (ör.
+    'MUHASEBE'/'MUHASEBA', 'ODEMESI'/'ODENESI') neredeyse aynıysa True döner."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 2:
+        return False
+    return SequenceMatcher(None, a, b).ratio() >= 0.82
+
+
+def _ortak_sayisi(gw: set, aw: set) -> int:
+    """aw (öğrenilen anahtarın kelimeleri) içindeki kaç kelimenin gw (sorgu
+    kelimeleri) içinde aynısı veya yakın bir eşi olduğunu sayar."""
+    n = 0
+    for a in aw:
+        if a in gw or any(_yakin(a, g) for g in gw):
+            n += 1
+    return n
 
 
 def kelimeler(s: str) -> set:
@@ -260,9 +281,10 @@ class KuralMotoru:
                 return kod, "ogrenme"
             aw = kelimeler(anahtar)
             if aw:
-                ort = len(gw & aw) / len(aw)
-                if ort >= 0.6 and len(gw & aw) > best_og_sc:
-                    best_og_sc = len(gw & aw); best_og = kod
+                ortak = _ortak_sayisi(gw, aw)
+                ort = ortak / len(aw)
+                if ort >= 0.6 and ortak > best_og_sc:
+                    best_og_sc = ortak; best_og = kod
         if best_og:
             return best_og, "ogrenme"
 

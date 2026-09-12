@@ -234,18 +234,20 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
         fisno = f"{fis:05d}"
         kd = k.get("dosya", "")
         banka_hesap = dosya_hesap.get(kd, varsayilan_hesap)
-        banka_ad = km.hesap_adi(banka_hesap) or "BANKA"
         karsi, kaynak = km.eslestir(k["aciklama"])
         if not karsi:
             karsi = ""
             uyarilar.append(f"{k['aciklama'][:30]}: hesap eşleşmedi")
         tutar = abs(k["tutar"])
+        # Fiş Açıklama = gerçek işlem açıklaması (banka adı değil) — yevmiye
+        # fişlerindeki gibi her iki satırda da aynı, işlemi anlatan metin olsun.
+        aciklama = k["aciklama"]
         if k["tutar"] >= 0:
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, tutar, 0, detay=k["aciklama"], kaynak="banka", kaynak_dosya=kd))
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, 0, tutar, detay=k["aciklama"], kaynak=kaynak, kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], aciklama, banka_hesap, tutar, 0, detay=aciklama, kaynak="banka", kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], aciklama, karsi, 0, tutar, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd))
         else:
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, tutar, 0, detay=k["aciklama"], kaynak=kaynak, kaynak_dosya=kd))
-            fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, 0, tutar, detay=k["aciklama"], kaynak="banka", kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], aciklama, karsi, tutar, 0, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], aciklama, banka_hesap, 0, tutar, detay=aciklama, kaynak="banka", kaynak_dosya=kd))
         fis += 1
     return fisler, uyarilar
 
