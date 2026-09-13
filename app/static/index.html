@@ -123,6 +123,7 @@
       <div><label>Başlangıç Fiş No</label><input id="fisBas" type="number" value="1" min="1" style="width:120px"></div>
       <button class="btn btn-yesil" onclick="isle()" style="align-self:flex-end">⚙ İşle (Önizle)</button>
       <button class="btn btn-edit" id="duzenleBtn" onclick="duzenleToggle()" style="display:none;align-self:flex-end">✎ Düzenle</button>
+      <button class="btn btn-x" id="vazgecBtn" onclick="vazgec()" style="display:none;align-self:flex-end">↺ Vazgeç</button>
       <button class="btn btn-gri" id="satirEkleBtn" onclick="satirEkle()" style="display:none;align-self:flex-end">➕ Satır Ekle</button>
       <button class="btn btn-ana" onclick="disaAktar('xlsx')" style="align-self:flex-end">⬇ Excel</button>
       <button class="btn btn-ana" onclick="disaAktar('xml')" style="background:#2f5d6e;align-self:flex-end">⬇ XML</button>
@@ -142,6 +143,8 @@ const $=id=>document.getElementById(id);
 let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
 let filtreHesap='', filtreDosya='', filtreEslesmeyen=false, sonR=null;
 let seciliSatirlar=new Set();  // sol taraftaki tik kutusuyla seçilen satır indeksleri — biri düzeltilince aynı hesap kodu diğerlerine de uygulanır
+let sonGosterIndices=[];  // render()'da hesaplanan, filtreye göre şu an görünen satır indeksleri — "tümünü seç" tik kutusu için
+let oncekiSatirlar=null;  // Düzenle moduna girerken satirlar'ın anlık kopyası — "Vazgeç" bunu geri yükler
 
 function sekmeSec(tip){
   aktifTip=tip;
@@ -151,8 +154,8 @@ function sekmeSec(tip){
   $('fisListesiHesapWrap').style.display=(tip==='fatura')?'none':'';
   $('fisListesiAciklama').textContent=(tip==='fatura')?'geçmiş fişlerden cari→gider hesabı öğren':'geçmiş fişlerden karşı hesap öğren';
   satirlar=[]; duzenleMod=false; filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; sonR=null;
-  seciliSatirlar=new Set();
-  $('onizle').innerHTML=''; $('duzenleBtn').style.display='none'; $('satirEkleBtn').style.display='none';
+  seciliSatirlar=new Set(); oncekiSatirlar=null;
+  $('onizle').innerHTML=''; $('duzenleBtn').style.display='none'; $('satirEkleBtn').style.display='none'; $('vazgecBtn').style.display='none';
   if(firmaKod) firmaDurum();
   bankaHesapDoldur();
 }
@@ -285,9 +288,9 @@ async function isle(){
     body:JSON.stringify(govde)})).json();
   $('durum').textContent='';
   satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false;
-  filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; seciliSatirlar=new Set();
+  filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; seciliSatirlar=new Set(); oncekiSatirlar=null;
   $('duzenleBtn').style.display=satirlar.length?'inline-block':'none';
-  $('satirEkleBtn').style.display='none';
+  $('satirEkleBtn').style.display='none'; $('vazgecBtn').style.display='none';
   render(r);
 }
 function filtreHesapDegisti(v){ filtreHesap=v; render(); }
@@ -308,6 +311,8 @@ function render(r){
     (!filtreHesap||s.hesap===filtreHesap) &&
     (!filtreDosya||s.kaynak_dosya===filtreDosya) &&
     (!filtreEslesmeyen||!s.hesap));
+  sonGosterIndices=goster.map(g=>g.i);
+  const tumuSecili=dz && sonGosterIndices.length>0 && sonGosterIndices.every(i=>seciliSatirlar.has(i));
   let h='';
   if(r&&r.okunan_belgeler) h+='<div class="hint" style="margin-bottom:8px">Okunan: '+r.okunan_belgeler.map(b=>`${b.dosya} (${b.tur})`).join(', ')+'</div>';
   h+=`<div class="flex" style="margin-bottom:10px">
@@ -328,7 +333,7 @@ function render(r){
     </label>
     ${(filtreHesap||filtreDosya||filtreEslesmeyen)?`<span class="hint" style="align-self:flex-end">${goster.length} / ${satirlar.length} satır gösteriliyor</span>`:''}
   </div>`;
-  h+=`<div class="tablo-kayan"><table><thead><tr>${dz?'<th></th>':''}<th>Fiş No</th><th>Tarih</th><th class="l">Belge No</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
+  h+=`<div class="tablo-kayan"><table><thead><tr>${dz?`<th><input type="checkbox" ${tumuSecili?'checked':''} title="Tümünü seç / kaldır" onchange="tumSecToggle(this.checked)"></th>`:''}<th>Fiş No</th><th>Tarih</th><th class="l">Belge No</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
   h+=goster.map(({s,i})=>{
     const hesapDeger=s.hesap?(s.hesap+' — '+hesapAdi(s.hesap)):'';
     const dikkat=!s.hesap||s.iade;
@@ -418,6 +423,11 @@ function satirEkle(){
 function satirSecToggle(i,checked){
   if(checked) seciliSatirlar.add(i); else seciliSatirlar.delete(i);
 }
+function tumSecToggle(checked){
+  if(checked) sonGosterIndices.forEach(i=>seciliSatirlar.add(i));
+  else seciliSatirlar.clear();
+  render();
+}
 function faturaGorselAc(dosya,sayfa){
   window.open(`/api/firma/${firmaKod}/belge/${aktifTip}/${encodeURIComponent(dosya)}/sayfa/${sayfa}`,'_blank');
 }
@@ -426,9 +436,26 @@ function duzenleToggle(){
   duzenleMod=!duzenleMod;
   $('duzenleBtn').textContent=duzenleMod?'✔ Bitir':'✎ Düzenle';
   $('satirEkleBtn').style.display=duzenleMod?'inline-block':'none';
-  if(!duzenleMod) seciliSatirlar=new Set();
+  $('vazgecBtn').style.display=duzenleMod?'inline-block':'none';
+  if(duzenleMod){
+    // Düzenle moduna girerken şu anki hali sakla — "Vazgeç" bu oturumdaki
+    // değişiklikleri (hesap kodu, satır ekleme/silme…) geri almak için kullanır.
+    oncekiSatirlar=JSON.parse(JSON.stringify(satirlar));
+  }else{
+    seciliSatirlar=new Set(); oncekiSatirlar=null;
+  }
   render();
   if(!duzenleMod){ firmaDurum(); } // öğrenilenler güncellensin
+}
+function vazgec(){
+  if(!duzenleMod || !oncekiSatirlar) return;
+  if(!confirm('Bu düzenleme oturumunda yaptığınız değişiklikler geri alınacak. Emin misiniz?')) return;
+  satirlar=JSON.parse(JSON.stringify(oncekiSatirlar));
+  duzenleMod=false; seciliSatirlar=new Set(); oncekiSatirlar=null;
+  $('duzenleBtn').textContent='✎ Düzenle';
+  $('satirEkleBtn').style.display='none';
+  $('vazgecBtn').style.display='none';
+  render();
 }
 async function disaAktar(format){
   if(!satirlar.length){alert('Önce İşle');return;}
