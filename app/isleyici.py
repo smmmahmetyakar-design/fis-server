@@ -357,8 +357,13 @@ def _efatura_listesi_satirlari(hamlar):
                         harita["no"] = j
                     elif c == "FATURA TARIHI":
                         harita["tarih"] = j
-                    elif "GONDERICI" in c or "ALICI" in c or "MUSTERI" in c:
-                        harita["gonderici"] = j
+                    elif ("GONDERICI" in c or "ALICI" in c or "MUSTERI" in c) and ("ADI" in c or "UNVAN" in c):
+                        # "ADI"/"UNVAN" şartı, aynı raporda AYRICA bulunabilen
+                        # "Müşteri Bayi Kodu"/"Müşteri Kodu" gibi kod
+                        # sütunlarının (gerçek AREL satış listesinde olduğu
+                        # gibi) asıl "Alıcı Adı" sütununu ezmesini önler —
+                        # ilk eşleşen (soldaki) kazanır.
+                        harita.setdefault("gonderici", j)
                     elif "MATRAH" in c and "10" in c:
                         harita["matrah10"] = j
                     elif "MATRAH" in c and "20" in c:
@@ -423,14 +428,44 @@ _PDF_UNVAN_RE = re.compile(r"(ŞİRKETİ|SIRKETI|A\.\Ş\.|A\.S\.|LTD\.|ŞTİ\.|S
 _PDF_GONDERICI_KESME_RE = re.compile(r"\s{2,}|HİZMET\s*NO|HIZMET\s*NO|Tel:|Faks|VKN|Vergi", re.IGNORECASE)
 _PDF_GONDERICI_DUR_RE = re.compile(
     r"VKN|TCKN|Vergi\s*Dairesi|Vergi\s*No|Tel:|Faks|Web\s*Sitesi|E-Posta|E-posta|"
-    r"Mah\.|Mahallesi|Sokak|Sok\.|Cadde|Cad\.|No:\d", re.IGNORECASE)
+    r"Mah\.|Mahallesi|\bMh\.|Sokak|Sok\.|\bSk\.|Cadde|Cad\.|\bCd\.|No\s*:\s*\d", re.IGNORECASE)
 _PDF_METADATA_ALAN_RE = re.compile(r"Özelleştirme|Senaryo|Fatura\s*ID|Fatura\s*Tarih|Fatura\s*Tipi", re.IGNORECASE)
 _PDF_TUTAR_HUCRE_RE = re.compile(r"^[\d.,]+\s*TL?$")
 # SATIŞ faturalarında sayfanın üst kısmı KENDİ firmamızın (düzenleyenin)
 # antetidir, karşı taraf (alıcı/müşteri) değil — bu yüzden ALIŞ'ta kullanılan
 # "sayfanın ilk satırları" sezgisi satışta yanlış tarafı (kendi firmamızı)
-# yakalar. Bunun yerine "Sayın ..." / "Alıcı ..." etiketli satır aranır.
-_PDF_ALICI_ETIKET_RE = re.compile(r"(?:Say[ıi]n|Al[ıi]c[ıi])\s*:?\s*(.+)", re.IGNORECASE)
+# yakalar. Bunun yerine "SAYIN"/"ALICI" etiketi aranır — gerçek eLogo
+# portal şablonunda bu etiket genelde KENDİ satırında yalnız durur, alıcı
+# unvanı bir/iki satır ALTINDA gelir (aynı satırda değil).
+_PDF_SAYIN_ETIKET_RE = re.compile(r"^\s*(?:SAY[İI]N|AL[İI]C[İI])\s*:?\s*(.*)$", re.IGNORECASE)
+
+
+def _pdf_alici_adi_bul(metin: str) -> str:
+    """SATIŞ faturasında 'SAYIN'/'ALICI' etiketinin altındaki (veya aynı
+    satırındaki) alıcı unvanını çıkarır. Etiketten sonraki satırlarda
+    aradaki kısa/anlamsız satırlar (logo/damga taşması gibi tek harfli
+    satırlar) atlanır, adres/VKN gibi bilgiye (_PDF_GONDERICI_DUR_RE)
+    çatılınca durulur; unvan 1-2 satıra yayılabilir."""
+    satirlar_all = [s.strip() for s in metin.splitlines()]
+    for i, s in enumerate(satirlar_all):
+        m = _PDF_SAYIN_ETIKET_RE.match(s)
+        if not m:
+            continue
+        aday = []
+        inline = m.group(1).strip()
+        if inline:
+            aday.append(inline)
+        for s2 in satirlar_all[i + 1:i + 12]:
+            if len(aday) >= 2:
+                break
+            if not s2 or len(s2) < 3:
+                continue
+            if _PDF_GONDERICI_DUR_RE.search(s2):
+                break
+            aday.append(s2)
+        if aday:
+            return " ".join(aday)
+    return ""
 
 
 def _pdf_tekil_fatura_ayikla(ham, yon="alis"):
@@ -464,13 +499,9 @@ def _pdf_tekil_fatura_ayikla(ham, yon="alis"):
     satirlar = [s.strip() for s in metin.splitlines()][1:]  # ilk satır: portal/tarih üstbilgisi
     gonderici = ""
     if yon == "satis":
-        # Önce "Sayın ..."/"Alıcı ..." etiketli satırı dene — sayfanın üst
-        # kısmındaki eski sezgi (aşağıda) satışta kendi firmamızı yakalar.
-        m_alici = _PDF_ALICI_ETIKET_RE.search(metin)
-        if m_alici:
-            aday_satir = m_alici.group(1).strip()
-            kesme = _PDF_GONDERICI_KESME_RE.search(aday_satir)
-            gonderici = (aday_satir[:kesme.start()] if kesme else aday_satir).strip()
+        # Önce "SAYIN"/"ALICI" etiketini dene — sayfanın üst kısmındaki eski
+        # sezgi (aşağıda) satışta kendi firmamızı yakalar.
+        gonderici = _pdf_alici_adi_bul(metin)
     if not gonderici:
         aday = []
         for s in satirlar:
