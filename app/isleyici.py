@@ -615,25 +615,25 @@ def _isle_efatura_listesi(kayitlar, km, fis0):
             if gider_matrah == 0 and kdv == 0:
                 continue
             toplam += gider_matrah + kdv
-            not_par = f" (%{oran} KDV)" if (oran and kdv) else (" (Ek Vergiler dahil)" if not oran else "")
-            detay = gonderici + not_par + (" — İADE" if iade else "")
+            # Açıklama (detay) sadece gönderici/cari adı olsun — KDV oranı,
+            # "Ek Vergiler dahil" gibi ekler yazılmaz (İADE zaten ayrı bir
+            # rozetle gösteriliyor, metne tekrar eklenmez).
             fisler.append(_sat(fisno, k["tarih"], gonderici, gider_varsayilan, gider_matrah, 0,
-                                evrak_no=k.get("fatura_no", ""), detay=detay, kaynak=kaynak, iade=iade,
+                                evrak_no=k.get("fatura_no", ""), detay=gonderici, kaynak=kaynak, iade=iade,
                                 kaynak_dosya=k.get("dosya", ""), sayfa=k.get("sayfa")))
             if kdv:
                 kdv_hesap = _KDV_HESAP_KODU.get(oran, "191.01.020")
                 fisler.append(_sat(fisno, k["tarih"], gonderici, kdv_hesap, kdv, 0,
-                                    evrak_no=k.get("fatura_no", ""), detay=detay, kaynak="kdv", iade=iade,
+                                    evrak_no=k.get("fatura_no", ""), detay=gonderici, kaynak="kdv", iade=iade,
                                     kaynak_dosya=k.get("dosya", ""), sayfa=k.get("sayfa")))
         if telekom and ek_vergi:
             toplam += ek_vergi
-            detay = gonderici + " (ÖİV)" + (" — İADE" if iade else "")
             fisler.append(_sat(fisno, k["tarih"], gonderici, _OIV_HESAP_KODU, ek_vergi, 0,
-                                evrak_no=k.get("fatura_no", ""), detay=detay, kaynak="oiv", iade=iade,
+                                evrak_no=k.get("fatura_no", ""), detay=gonderici, kaynak="oiv", iade=iade,
                                 kaynak_dosya=k.get("dosya", ""), sayfa=k.get("sayfa")))
         if toplam:
             fisler.append(_sat(fisno, k["tarih"], gonderici, cari or _CARI_BULUNAMADI_HESABI, 0, round(toplam, 2),
-                                evrak_no=k.get("fatura_no", ""), detay=gonderici + (" — İADE" if iade else ""),
+                                evrak_no=k.get("fatura_no", ""), detay=gonderici,
                                 kaynak=kaynak, iade=iade,
                                 kaynak_dosya=k.get("dosya", ""), sayfa=k.get("sayfa")))
         fis += 1
@@ -655,7 +655,21 @@ def isle_fatura(hamlar, km, fis0):
         # o listedeki faturaların tek tek PDF çıktısı) — bu durumda aynı
         # fatura_no iki kez fişlenmesin diye, Excel'de zaten bulunan
         # fatura_no'lu PDF kayıtları atlanır (Excel'in yapılandırılmış
-        # KDV/matrah kırılımı daha güvenilir kabul edilir).
+        # KDV/matrah kırılımı daha güvenilir kabul edilir). Ama PDF
+        # kaydındaki sayfa/dosya bilgisi kaybolmasın diye — aksi halde
+        # fatura görseli butonu hiç görünmez — atlanan her PDF kaydının
+        # sayfa/dosya bilgisi eşleşen Excel kaydına aktarılır.
+        pdf_by_no = {}
+        for k in pdf_kayitlar:
+            no = k.get("fatura_no", "").strip().upper()
+            if no:
+                pdf_by_no.setdefault(no, k)
+        for k in excel_kayitlar:
+            no = k.get("fatura_no", "").strip().upper()
+            eslesen = pdf_by_no.get(no)
+            if eslesen and not k.get("sayfa"):
+                k["sayfa"] = eslesen.get("sayfa")
+                k["dosya"] = eslesen.get("dosya", k.get("dosya", ""))
         excel_no = {k.get("fatura_no", "").strip().upper() for k in excel_kayitlar if k.get("fatura_no")}
         pdf_kayitlar = [k for k in pdf_kayitlar if k.get("fatura_no", "").strip().upper() not in excel_no]
     e_kayitlar = excel_kayitlar + pdf_kayitlar
@@ -682,7 +696,7 @@ def isle_fatura(hamlar, km, fis0):
         if not gider:
             uyarilar.append(f"{k['aciklama'][:30]}: gider hesabı eşleşmedi")
         fisler.append(_sat(fisno, k["tarih"], k["aciklama"], gider, matrah, 0, detay=k["aciklama"], kaynak=kaynak))
-        fisler.append(_sat(fisno, k["tarih"], k["aciklama"], "191.01.020", kdv, 0, detay=k["aciklama"] + " (%20 KDV)", kaynak="kdv"))
+        fisler.append(_sat(fisno, k["tarih"], k["aciklama"], "191.01.020", kdv, 0, detay=k["aciklama"], kaynak="kdv"))
         fisler.append(_sat(fisno, k["tarih"], k["aciklama"], cari or _CARI_BULUNAMADI_HESABI, 0, toplam, detay=k["aciklama"], kaynak=kaynak))
         fis += 1
     return fisler, uyarilar
