@@ -42,6 +42,9 @@ def _tarih_iso(s):
     if isinstance(s, datetime):
         return f"{s.year:04d}-{s.month:02d}-{s.day:02d}"
     s = str(s).strip()
+    # "20.08.2026 13:24" gibi tarih+saat birleşik hücrelerde (ör. Denizbank
+    # Excel ekstresi) saat kısmını at, sadece tarihi ayrıştır.
+    s = re.sub(r"\s+\d{1,2}:\d{2}(:\d{2})?\s*$", "", s)
     for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%y"):
         try:
             d = datetime.strptime(s, fmt)
@@ -90,20 +93,28 @@ def _tablo_satirlari(hamlar):
             bas_idx = None; harita = {}
             for i, row in enumerate(tablo[:30]):
                 nrow = [norm(str(c)) for c in row]
+                satir_harita = {}
                 for j, c in enumerate(nrow):
                     if c in ("TARIH", "ISLEM TARIHI", "VALOR", "VALOR TARIHI"):
-                        harita["tarih"] = j
+                        satir_harita["tarih"] = j
                     elif "ACIKLAMA" in c or "ISLEM" == c:
-                        harita["aciklama"] = j
-                    elif c in ("TUTAR", "ISLEM TUTARI", "MIKTAR"):
-                        harita["tutar"] = j
+                        satir_harita["aciklama"] = j
+                    elif ("TUTAR" in c or "MIKTAR" in c) and "BAKIYE" not in c:
+                        # "TUTAR", "İşlem Tutarı", "Tutar (TL)" (norm -> "TUTAR TL") gibi
+                        # varyasyonları yakalar; "Güncel Bakiye (TL)" gibi bakiye
+                        # sütunlarını (norm -> "GUNCEL BAKIYE TL") hariç tutar.
+                        satir_harita["tutar"] = j
                     elif "BORC" in c:
-                        harita["borc"] = j
+                        satir_harita["borc"] = j
                     elif "ALACAK" in c:
-                        harita["alacak"] = j
+                        satir_harita["alacak"] = j
                     elif "GONDER" in c or "UNVAN" in c or "FIRMA" in c:
-                        harita.setdefault("aciklama", j)
-                if "tarih" in harita and ("tutar" in harita or "borc" in harita or "alacak" in harita):
+                        satir_harita.setdefault("aciklama", j)
+                # Her aday satır BAĞIMSIZ değerlendirilir (önceki satırlardan
+                # kalıntı eşleşme taşınmaz) — gerçek başlık satırı tek satırda
+                # hem tarih hem tutar/borç/alacak sütununu birlikte içerir.
+                if "tarih" in satir_harita and ("tutar" in satir_harita or "borc" in satir_harita or "alacak" in satir_harita):
+                    harita = satir_harita
                     bas_idx = i; break
             if bas_idx is None:
                 continue
