@@ -123,6 +123,7 @@
       <div><label>Başlangıç Fiş No</label><input id="fisBas" type="number" value="1" min="1" style="width:120px"></div>
       <button class="btn btn-yesil" onclick="isle()" style="align-self:flex-end">⚙ İşle (Önizle)</button>
       <button class="btn btn-edit" id="duzenleBtn" onclick="duzenleToggle()" style="display:none;align-self:flex-end">✎ Düzenle</button>
+      <button class="btn btn-gri" id="satirEkleBtn" onclick="satirEkle()" style="display:none;align-self:flex-end">➕ Satır Ekle</button>
       <button class="btn btn-ana" onclick="disaAktar('xlsx')" style="align-self:flex-end">⬇ Excel</button>
       <button class="btn btn-ana" onclick="disaAktar('xml')" style="background:#2f5d6e;align-self:flex-end">⬇ XML</button>
       <span id="durum" class="hint" style="align-self:flex-end"></span>
@@ -140,6 +141,7 @@
 const $=id=>document.getElementById(id);
 let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
 let filtreHesap='', filtreDosya='', filtreEslesmeyen=false, sonR=null;
+let seciliSatirlar=new Set();  // sol taraftaki tik kutusuyla seçilen satır indeksleri — biri düzeltilince aynı hesap kodu diğerlerine de uygulanır
 
 function sekmeSec(tip){
   aktifTip=tip;
@@ -149,7 +151,8 @@ function sekmeSec(tip){
   $('fisListesiHesapWrap').style.display=(tip==='fatura')?'none':'';
   $('fisListesiAciklama').textContent=(tip==='fatura')?'geçmiş fişlerden cari→gider hesabı öğren':'geçmiş fişlerden karşı hesap öğren';
   satirlar=[]; duzenleMod=false; filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; sonR=null;
-  $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
+  seciliSatirlar=new Set();
+  $('onizle').innerHTML=''; $('duzenleBtn').style.display='none'; $('satirEkleBtn').style.display='none';
   if(firmaKod) firmaDurum();
   bankaHesapDoldur();
 }
@@ -282,8 +285,9 @@ async function isle(){
     body:JSON.stringify(govde)})).json();
   $('durum').textContent='';
   satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false;
-  filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false;
+  filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; seciliSatirlar=new Set();
   $('duzenleBtn').style.display=satirlar.length?'inline-block':'none';
+  $('satirEkleBtn').style.display='none';
   render(r);
 }
 function filtreHesapDegisti(v){ filtreHesap=v; render(); }
@@ -324,15 +328,17 @@ function render(r){
     </label>
     ${(filtreHesap||filtreDosya||filtreEslesmeyen)?`<span class="hint" style="align-self:flex-end">${goster.length} / ${satirlar.length} satır gösteriliyor</span>`:''}
   </div>`;
-  h+=`<div class="tablo-kayan"><table><thead><tr><th>Fiş No</th><th>Tarih</th><th class="l">Belge No</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
+  h+=`<div class="tablo-kayan"><table><thead><tr>${dz?'<th></th>':''}<th>Fiş No</th><th>Tarih</th><th class="l">Belge No</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
   h+=goster.map(({s,i})=>{
     const hesapDeger=s.hesap?(s.hesap+' — '+hesapAdi(s.hesap)):'';
     const dikkat=!s.hesap||s.iade;
+    const gorselBtn=(s.kaynak_dosya&&s.sayfa)?` <button class="btn btn-gri" title="Fatura görselini aç" style="padding:2px 6px;font-size:12px" onclick="faturaGorselAc('${(s.kaynak_dosya||'').replace(/'/g,"\\'")}',${s.sayfa})">🖼</button>`:'';
     if(dz){
       return `<tr class="${dikkat?'warn':''}">
+        <td><input type="checkbox" ${seciliSatirlar.has(i)?'checked':''} onchange="satirSecToggle(${i},this.checked)"></td>
         <td><input value="${s.fisno||''}" onchange="edit(${i},'fisno',this.value)" style="width:70px"></td>
         <td><input value="${s.fis_tarih||''}" onchange="edit(${i},'fis_tarih',this.value)" style="width:96px"></td>
-        <td class="l"><input value="${(s.evrak_no||'').replace(/"/g,'&quot;')}" onchange="edit(${i},'evrak_no',this.value)" style="width:120px"></td>
+        <td class="l"><input value="${(s.evrak_no||'').replace(/"/g,'&quot;')}" onchange="edit(${i},'evrak_no',this.value)" style="width:120px">${gorselBtn}</td>
         <td class="l"><input list="hesapListe" value="${hesapDeger.replace(/"/g,'&quot;')}" placeholder="kod veya ad yaz…" onchange="editHesap(${i},this.value)" style="width:190px"></td>
         <td><input value="${s.borc||0}" onchange="edit(${i},'borc',this.value)" style="width:80px;text-align:right"></td>
         <td><input value="${s.alacak||0}" onchange="edit(${i},'alacak',this.value)" style="width:80px;text-align:right"></td>
@@ -340,17 +346,23 @@ function render(r){
         <td><button class="btn btn-x" onclick="satirSil(${i})">🗑</button></td>
       </tr>`;
     }
-    return `<tr class="${dikkat?'warn':''}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.evrak_no||''}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.iade?'<span class="kaynak" style="background:#ffe0b2;color:#8a5a1a">İADE</span> ':''}${s.detay||''}</td></tr>`;
+    return `<tr class="${dikkat?'warn':''}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.evrak_no||''}${gorselBtn}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.iade?'<span class="kaynak" style="background:#ffe0b2;color:#8a5a1a">İADE</span> ':''}${s.detay||''}</td></tr>`;
   }).join('');
-  h+=`</tbody><tfoot><tr class="tot"><td colspan="4" class="l">TOPLAM (tümü)</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
+  h+=`</tbody><tfoot><tr class="tot"><td colspan="${dz?5:4}" class="l">TOPLAM (tümü)</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';
   if(dz) h+='<div class="hint" style="margin-top:6px">Hesabı yanlış eşleşenleri düzeltin; "Bitir"e basınca eşleştirmeler öğrenilir. Sonra Excel/XML alın.</div>';
   $('onizle').innerHTML=h;
 }
-function edit(i,alan,deger){
+function edit(i,alan,deger,yayilanMi){
   if(alan==='borc'||alan==='alacak') deger=parseFloat((deger||'').toString().replace(',','.'))||0;
   const eski=satirlar[i].hesap;
   satirlar[i][alan]=deger;
+  // tik kutusuyla seçilmiş birden fazla satır varsa, birinde hesap kodu
+  // düzeltildiğinde aynı kod diğer seçili satırlara da uygulanır (yayilanMi
+  // bayrağı bu yayılan çağrıların tekrar yayılmasını, sonsuz döngüyü önler)
+  if(!yayilanMi && alan==='hesap' && deger && seciliSatirlar.has(i) && seciliSatirlar.size>1){
+    seciliSatirlar.forEach(j=>{ if(j!==i) edit(j,'hesap',deger,true); });
+  }
   // hesap elle değişince öğret
   if(alan==='hesap' && deger && deger!==eski && satirlar[i].detay){
     const satir=satirlar[i];
@@ -393,10 +405,28 @@ function editHesap(i,val){
   edit(i,'hesap',kod);
 }
 function satirSil(i){satirlar.splice(i,1);render();}
+function satirEkle(){
+  if(!duzenleMod){alert('Önce Düzenle moduna geçin');return;}
+  const son=satirlar[satirlar.length-1]||{};
+  satirlar.push({
+    fisno:son.fisno||'00001', fis_tarih:son.fis_tarih||'', fis_aciklama:'',
+    hesap:'', evrak_no:'', evrak_tarih:son.fis_tarih||'', detay:'',
+    borc:0, alacak:0, belge_turu:'MF', kaynak:'', kaynak_dosya:'', iade:false, sayfa:null
+  });
+  render();
+}
+function satirSecToggle(i,checked){
+  if(checked) seciliSatirlar.add(i); else seciliSatirlar.delete(i);
+}
+function faturaGorselAc(dosya,sayfa){
+  window.open(`/api/firma/${firmaKod}/belge/${aktifTip}/${encodeURIComponent(dosya)}/sayfa/${sayfa}`,'_blank');
+}
 function duzenleToggle(){
   if(!satirlar.length){alert('Önce İşle');return;}
   duzenleMod=!duzenleMod;
   $('duzenleBtn').textContent=duzenleMod?'✔ Bitir':'✎ Düzenle';
+  $('satirEkleBtn').style.display=duzenleMod?'inline-block':'none';
+  if(!duzenleMod) seciliSatirlar=new Set();
   render();
   if(!duzenleMod){ firmaDurum(); } // öğrenilenler güncellensin
 }

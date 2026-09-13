@@ -239,6 +239,34 @@ def belge_sil(kod: str, tip: str, fname: str):
     return {"ok": True}
 
 
+@app.get("/api/firma/{kod}/belge/{tip}/{fname}/sayfa/{sayfa}")
+def belge_sayfa_gorsel(kod: str, tip: str, fname: str, sayfa: int):
+    """Bir fatura satırının kaynağı olan PDF sayfasını PNG olarak döner —
+    önizleme tablosundaki 🖼 butonu bununla faturanın orijinal görselini
+    yeni sekmede açar. Sadece PDF kaynaklı fatura satırlarında anlamlı
+    (Excel kaynaklı satırların 'sayfa'sı yok, buton zaten gösterilmez)."""
+    if tip not in TIPLER or ".." in fname or "/" in fname or "\\" in fname:
+        raise HTTPException(400, "Geçersiz")
+    d = firma_dir(kod)
+    p = d / tip / fname
+    if not p.exists() or p.suffix.lower() != ".pdf":
+        raise HTTPException(404, "PDF bulunamadı")
+    try:
+        import pdfplumber
+        with pdfplumber.open(p) as pdf:
+            if sayfa < 1 or sayfa > len(pdf.pages):
+                raise HTTPException(404, "Sayfa yok")
+            im = pdf.pages[sayfa - 1].to_image(resolution=150).original
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+            buf.seek(0)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Sayfa görüntüsü oluşturulamadı: {e}")
+    return StreamingResponse(buf, media_type="image/png")
+
+
 # ----------------------------------------------------------------- işleme
 class IsleBody(BaseModel):
     firma_kod: str
