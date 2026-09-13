@@ -297,6 +297,28 @@ def ogret(kod: str, tip: str, body: OgretBody):
     return {"ok": True, "ogrenilen": len(km.ogrenme)}
 
 
+class OgretGiderBody(BaseModel):
+    firma_kod: str
+    cari_kod: str
+    gider_kod: str
+
+
+@app.post("/api/firma/{kod}/ogret-gider")
+def ogret_gider(kod: str, body: OgretGiderBody):
+    """Fatura Düzenle modunda bir fişin CARİ veya GİDER hesabı elle
+    düzeltilince, aynı fişteki cari<->gider hesap çiftini doğrudan
+    fatura_gider_eslestirme.json'a yazar — geçmiş fiş listesi yüklemeyi
+    beklemeden, düzeltme yapıldıkça öğrenir (bkz. index.html edit())."""
+    if not body.cari_kod or not body.gider_kod:
+        raise HTTPException(400, "cari_kod ve gider_kod gerekli")
+    d = firma_dir(kod)
+    gider_path = d / "fatura_gider_eslestirme.json"
+    gider_og = _read_json(gider_path, {})
+    gider_og[body.cari_kod] = body.gider_kod
+    _write_json(gider_path, gider_og)
+    return {"ok": True, "gider_ogrenilen": len(gider_og)}
+
+
 @app.get("/api/firma/{kod}/hesaplar")
 def hesaplar(kod: str):
     """Firmanın tüm hesapları (eşleştirme kutusu için)."""

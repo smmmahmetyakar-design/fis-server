@@ -262,21 +262,28 @@ def fis_listesi_ogren(fis_path: Path, banka_hesap_kodu: str) -> dict:
     return ogrenme
 
 
-def fatura_gider_ogren(fis_path: Path, cari_onek: str = "320", kdv_onek: str = "191") -> dict:
+def fatura_gider_ogren(fis_path: Path, cari_onek: str = "32", kdv_onek: str = "191") -> dict:
     """
-    Fatura fişlerinde hangi CARİ (tedarikçi, ör. 320.x) hesabının hangi
-    GİDER/STOK hesabıyla eşleştiğini geçmiş fiş listesinden (aynı Logo Tiger
-    'fiş listesi' export'u) öğrenir. Gelen e-Fatura listesinde ürün/hizmet
+    Fatura fişlerinde hangi CARİ (tedarikçi) hesabının hangi GİDER/STOK
+    hesabıyla eşleştiğini geçmiş fiş listesinden (aynı Logo Tiger 'fiş
+    listesi' export'u) öğrenir. Gelen e-Fatura listesinde ürün/hizmet
     açıklaması olmadığı için (sadece gönderici/tedarikçi adı var) gider hesabı
     açıklama kelimelerinden değil, CARİ HESABIN KENDİSİNDEN öğrenilir: aynı
     tedarikçi (aynı cari kod) geçmişte hangi gider hesabına işlenmişse, yeni
     faturalarda da varsayılan olarak o hesap önerilir.
 
+    cari_onek varsayılan olarak '32' (Ticari Borçlar ANA GRUBU: 320 Satıcılar,
+    321/322 Borç Senetleri, 329 Diğer Ticari Borçlar vb.) — sadece '320' değil,
+    çünkü ofisler faktoring/kira gibi bazı tedarikçileri 329.x gibi farklı bir
+    alt hesapta izleyebiliyor (gerçek AREL verisinde GARANTİ FAKTORİNG'in cari
+    kodu 329.02.006 çıktı, eski '320' sabiti bunu hiç yakalamıyordu).
+
     Mantık: her fiş bloğunda KDV (191.x) hesabı hariç tutulduğunda geriye TEK
-    bir cari (320.x) ve TEK bir gider hesabı kalıyorsa (basit, tek kalemli
+    bir cari (32x) ve TEK bir gider hesabı kalıyorsa (basit, tek kalemli
     fatura fişi), bu ikisini eşleştirip kaydeder. Birden çok gider kalemli
     (KDV hariç 2+ farklı gider hesabı olan) fişler yanlış öğrenme riskine
-    karşı atlanır.
+    karşı atlanır — bu tür çok kalemli faturalar otomatik öğrenilemez,
+    Düzenle modunda elle düzeltilince (bkz. main.py /ogret-gider) öğrenilir.
 
     Döndürür: {cari_hesap_kodu: gider_hesap_kodu}
     """
@@ -350,9 +357,27 @@ class KuralMotoru:
         for h in self.kural["hesaplar"]:
             self.kod_ad.setdefault(h["kod"], h["ad"])
 
-    def gider_hesabi(self, cari_kod: str) -> str:
-        """Bir cari (tedarikçi) hesap koduna öğrenilmiş varsayılan gider hesabı."""
-        return self.gider_eslestirme.get(cari_kod, "") if cari_kod else ""
+    def gider_hesabi(self, cari_kod: str, gonderici: str = "") -> str:
+        """Bir cari (tedarikçi) hesap koduna öğrenilmiş varsayılan gider hesabı.
+        Önce cari koduna göre öğrenilenlere bakar (fatura_gider_ogren ile geçmiş
+        fiş listesinden, ya da Düzenle modunda elle düzeltilerek öğrenilir).
+        Hiç öğrenilmemişse (yeni tedarikçi, geçmiş fiş listesi henüz
+        yüklenmemiş) — CARİ eşleştirmede kullanılan mantığın aynısıyla — Kural
+        Dosyası'ndaki (Hesap Kodu Eşleştirme sekmesi) hesap adı/kullanım
+        metniyle gönderici adı arasında kelime eşleşmesi dener."""
+        if cari_kod and cari_kod in self.gider_eslestirme:
+            return self.gider_eslestirme[cari_kod]
+        if gonderici:
+            gw = kelimeler(gonderici)
+            best = None; bs = 0
+            for h in self.kural["hesaplar"]:
+                hedef = kelimeler(h["ad"] + " " + h.get("kullanim", ""))
+                sc = len(gw & hedef)
+                if sc > bs:
+                    bs = sc; best = h["kod"]
+            if bs >= 1:
+                return best
+        return ""
 
     def banka_hesap_ogren(self, anahtar: str, kod: str):
         """IBAN/hesap no anahtarını bir hesap koduna bağlar ve kalıcı olarak kaydeder

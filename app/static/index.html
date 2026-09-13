@@ -353,8 +353,28 @@ function edit(i,alan,deger){
   satirlar[i][alan]=deger;
   // hesap elle değişince öğret
   if(alan==='hesap' && deger && deger!==eski && satirlar[i].detay){
-    fetch(`/api/firma/${firmaKod}/ogret/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,aciklama:satirlar[i].detay,kod:deger})}).catch(()=>{});
+    const satir=satirlar[i];
+    if(aktifTip==='fatura' && satir.kaynak!=='kdv'){
+      // Fatura fişinde CARİ satırı (alacak>0) mı GİDER satırı (borç>0) mı
+      // düzeltildi bul, aynı fişteki kardeşinden cari<->gider çiftini
+      // çıkar ve doğrudan fatura_gider_eslestirme.json'a öğret — geçmiş
+      // fiş listesi yüklemeyi beklemeden, düzeltme yapıldıkça öğrenir.
+      const cariRow = satir.alacak>0 ? null : satirlar.find(s=>s.fisno===satir.fisno && s.alacak>0 && s.hesap);
+      const giderRow = satir.alacak>0 ? satirlar.find(s=>s.fisno===satir.fisno && s.borc>0 && s.kaynak!=='kdv' && s.hesap) : null;
+      const cariKod = satir.alacak>0 ? deger : (cariRow&&cariRow.hesap);
+      const giderKod = satir.alacak>0 ? (giderRow&&giderRow.hesap) : deger;
+      if(cariKod && giderKod){
+        fetch(`/api/firma/${firmaKod}/ogret-gider`,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({firma_kod:firmaKod,cari_kod:cariKod,gider_kod:giderKod})}).catch(()=>{});
+      }
+    }
+    // CARİ satırı için genel kelime eşleştirmesi de öğretilir (gönderici adı
+    // -> hesap); GİDER satırı için bu ATLANIR, çünkü gider hesabı sadece
+    // yukarıdaki cari->gider eşleşmesiyle bulunur, açıklama kelimesiyle değil.
+    if(!(aktifTip==='fatura' && satir.borc>0)){
+      fetch(`/api/firma/${firmaKod}/ogret/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,aciklama:satir.detay,kod:deger})}).catch(()=>{});
+    }
   }
   if(duzenleMod) render();
 }

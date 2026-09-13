@@ -584,7 +584,7 @@ def _isle_efatura_listesi(kayitlar, km, fis0):
         cari, kaynak = km.eslestir(gonderici)
         if not cari:
             uyarilar.append(f"{gonderici[:40]}: cari hesabı eşleşmedi")
-        gider_varsayilan = km.gider_hesabi(cari) if cari else ""
+        gider_varsayilan = km.gider_hesabi(cari, gonderici)
         if not gider_varsayilan:
             uyarilar.append(f"{gonderici[:40]}: gider hesabı bilinmiyor (Fiş Listesi'nden öğretin)")
         if iade:
@@ -623,7 +623,18 @@ def isle_fatura(hamlar, km, fis0):
     # Tek tek fatura PDF'leri (her sayfa kendi şablonunda bir fatura) de aynı
     # işleme ile birleştirilir — bir yüklemede hem Excel liste hem PDF
     # fatura birlikte gelebilir, biri diğerini geçersiz kılmaz.
-    e_kayitlar = _efatura_listesi_satirlari(hamlar) + _pdf_fatura_satirlari(hamlar)
+    excel_kayitlar = _efatura_listesi_satirlari(hamlar)
+    pdf_kayitlar = _pdf_fatura_satirlari(hamlar)
+    if excel_kayitlar and pdf_kayitlar:
+        # AYNI faturalar hem Excel entegratör listesinde hem tekil PDF
+        # baskısında birlikte gelebilir (ör. "gelen fatura listesi.xlsx" +
+        # o listedeki faturaların tek tek PDF çıktısı) — bu durumda aynı
+        # fatura_no iki kez fişlenmesin diye, Excel'de zaten bulunan
+        # fatura_no'lu PDF kayıtları atlanır (Excel'in yapılandırılmış
+        # KDV/matrah kırılımı daha güvenilir kabul edilir).
+        excel_no = {k.get("fatura_no", "").strip().upper() for k in excel_kayitlar if k.get("fatura_no")}
+        pdf_kayitlar = [k for k in pdf_kayitlar if k.get("fatura_no", "").strip().upper() not in excel_no]
+    e_kayitlar = excel_kayitlar + pdf_kayitlar
     if e_kayitlar:
         return _isle_efatura_listesi(e_kayitlar, km, fis0)
 
@@ -641,7 +652,7 @@ def isle_fatura(hamlar, km, fis0):
     for k in sorted(kayitlar, key=lambda x: x["tarih"] or ""):
         fisno = f"{fis:05d}"
         cari, kaynak = km.eslestir(k["aciklama"])
-        gider = km.gider_hesabi(cari) if cari else ""
+        gider = km.gider_hesabi(cari, k["aciklama"])
         toplam = abs(k["tutar"])
         matrah = round(toplam / 1.20, 2); kdv = round(toplam - matrah, 2)
         if not gider:
