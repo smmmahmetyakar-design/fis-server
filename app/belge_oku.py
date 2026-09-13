@@ -65,23 +65,32 @@ def excel_oku(path: Path, ext: str = ""):
 
 
 def pdf_oku(path: Path):
-    """Önce metin/tablo dener; metin çıkmazsa OCR'a düşer."""
+    """Önce metin/tablo dener; metin çıkmazsa OCR'a düşer.
+    'sayfalar': sayfa bazlı (ham_metin, tablolar) listesi de eklenir — banka/çek
+    modülleri hâlâ düzleştirilmiş ham_metin/tablolar kullanır (aynı davranış),
+    ama tek sayfa = tek fatura gibi sayfa sınırının önemli olduğu akışlar
+    (bkz. isleyici._pdf_fatura_satirlari) 'sayfalar'ı kullanabilir."""
     import pdfplumber
     tablolar = []
     ham = []
+    sayfalar = []
     metin_var = False
     with pdfplumber.open(path) as pdf:
         for sayfa in pdf.pages:
             t = sayfa.extract_text() or ""
-            if t.strip():
-                metin_var = True
-                ham.append(t)
+            sayfa_tablolar = []
             for tb in (sayfa.extract_tables() or []):
                 temiz = [[("" if c is None else str(c)) for c in row] for row in tb]
                 if temiz:
+                    sayfa_tablolar.append(temiz)
                     tablolar.append(temiz)
+            if t.strip():
+                metin_var = True
+                ham.append(t)
+            sayfalar.append({"ham_metin": t, "tablolar": sayfa_tablolar})
     if metin_var or tablolar:
-        return {"tur": "pdf", "tablolar": tablolar, "ham_metin": "\n".join(ham), "uyari": ""}
+        return {"tur": "pdf", "tablolar": tablolar, "ham_metin": "\n".join(ham), "uyari": "",
+                "sayfalar": sayfalar}
     return pdf_ocr(path)
 
 
@@ -95,13 +104,16 @@ def pdf_ocr(path: Path):
         return {"tur": "pdf_ocr", "tablolar": [], "ham_metin": "",
                 "uyari": f"OCR kütüphanesi yok: {e}"}
     ham = []
+    sayfalar = []
     with pdfplumber.open(path) as pdf:
         for sayfa in pdf.pages:
             im = sayfa.to_image(resolution=300).original
             txt = pytesseract.image_to_string(im, lang=_ocr_lang())
             ham.append(txt)
+            sayfalar.append({"ham_metin": txt, "tablolar": []})
     return {"tur": "pdf_ocr", "tablolar": [], "ham_metin": "\n".join(ham),
-            "uyari": "Taranmış PDF OCR ile okundu; verileri kontrol edin."}
+            "uyari": "Taranmış PDF OCR ile okundu; verileri kontrol edin.",
+            "sayfalar": sayfalar}
 
 
 def resim_oku(path: Path):

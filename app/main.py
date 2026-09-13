@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar, fis_listesi_ogren
+from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar, fis_listesi_ogren, fatura_gider_ogren
 from app.belge_oku import belge_oku
 from app import isleyici
 from app.routes.enhanced import router as enhanced_router
@@ -141,6 +141,8 @@ def ogrenme_sil(kod: str, tip: str):
         raise HTTPException(400, "Geçersiz tip")
     d = firma_dir(kod)
     (d / f"{tip}_ogrenme.json").unlink(missing_ok=True)
+    if tip == "fatura":
+        (d / "fatura_gider_eslestirme.json").unlink(missing_ok=True)
     return {"ok": True}
 
 
@@ -156,12 +158,16 @@ async def kural_yukle(kod: str, tip: str, file: UploadFile = File(...)):
 
 
 @app.post("/api/firma/{kod}/ogren-fis-listesi/{tip}")
-async def ogren_fis_listesi(kod: str, tip: str, banka_hesap_kodu: str = Form(...), file: UploadFile = File(...)):
+async def ogren_fis_listesi(kod: str, tip: str, banka_hesap_kodu: str = Form(""), file: UploadFile = File(...)):
     """
-    Gerçek muhasebe fiş geçmişinizi (Logo Tiger 'fiş listesi' export'u) yükleyip
-    hedef banka hesap kodunu verin; sistem karşı hesap eşleştirmelerini otomatik
-    öğrenip {tip}_ogrenme.json'a ekler. Manuel 'Hesap Kodu Eşleştirme' dosyası
-    hazırlamaya gerek kalmaz.
+    Gerçek muhasebe fiş geçmişinizi (Logo Tiger 'fiş listesi' export'u) yükleyin:
+    - banka/çek: hedef hesap kodunu da verin, karşı hesap eşleştirmelerini
+      öğrenip {tip}_ogrenme.json'a ekler.
+    - fatura: hedef hesap kodu gerekmez — e-Fatura listesinde ürün/hizmet
+      açıklaması olmadığından, hangi CARİ (tedarikçi) hesabının hangi GİDER
+      hesabına işlendiği doğrudan geçmiş fişlerden öğrenilip
+      fatura_gider_eslestirme.json'a yazılır.
+    Manuel 'Hesap Kodu Eşleştirme' dosyası hazırlamaya gerek kalmaz.
     """
     if tip not in TIPLER:
         raise HTTPException(400, "Geçersiz tip")
@@ -169,10 +175,17 @@ async def ogren_fis_listesi(kod: str, tip: str, banka_hesap_kodu: str = Form(...
     tmp = d / "_gecici_fis_listesi.xlsx"
     tmp.write_bytes(await file.read())
     try:
-        yeni = fis_listesi_ogren(tmp, banka_hesap_kodu.strip())
+        if tip == "fatura":
+            yeni = fatura_gider_ogren(tmp)
+            og_path = d / "fatura_gider_eslestirme.json"
+        else:
+            hesap_kodu = (banka_hesap_kodu or "").strip()
+            if not hesap_kodu:
+                raise HTTPException(400, "Hedef hesap kodu gerekli")
+            yeni = fis_listesi_ogren(tmp, hesap_kodu)
+            og_path = d / f"{tip}_ogrenme.json"
     finally:
         tmp.unlink(missing_ok=True)
-    og_path = d / f"{tip}_ogrenme.json"
     mevcut = _read_json(og_path, {})
     mevcut.update(yeni)
     _write_json(og_path, mevcut)
@@ -189,12 +202,14 @@ def firma_durum(kod: str):
         k = kural_excel_oku(kp) if kp.exists() else {"hesaplar": [], "talimatlar": []}
         belgeler = [f.name for f in (d / t).iterdir()] if (d / t).exists() else []
         og = _read_json(d / f"{t}_ogrenme.json", {})
+        gider_og = _read_json(d / "fatura_gider_eslestirme.json", {}) if t == "fatura" else {}
         out["tipler"][t] = {
             "kural_var": kp.exists(),
             "kural_hesap": len(k["hesaplar"]),
             "belge_sayisi": len(belgeler),
             "belgeler": belgeler,
             "ogrenilen": len(og),
+            "gider_ogrenilen": len(gider_og),
         }
     return out
 
@@ -240,7 +255,7 @@ def isle(kod: str, tip: str, body: IsleBody):
         raise HTTPException(400, "Geçersiz tip")
     d = firma_dir(kod)
     km = KuralMotoru(d / "mizan.xlsx", d / f"kural_{tip}.xlsx", d / f"{tip}_ogrenme.json",
-                      d / "banka_hesap_eslestirme.json")
+                      d / "banka_hesap_eslestirme.json", d / "fatura_gider_eslestirme.json")
 
     dosyalar = body.dosyalar or [f.name for f in (d / tip).iterdir() if f.is_file()]
     tum_ham = []

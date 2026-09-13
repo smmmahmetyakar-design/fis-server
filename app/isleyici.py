@@ -72,12 +72,12 @@ def _sayi(s):
 
 
 # ----------------------------------------------------------------- fiş satırı
-def _sat(fisno, tarih, aciklama, hesap, borc, alacak, evrak_no="", detay="", kaynak="", kaynak_dosya=""):
+def _sat(fisno, tarih, aciklama, hesap, borc, alacak, evrak_no="", detay="", kaynak="", kaynak_dosya="", iade=False):
     return {
         "fisno": fisno, "fis_tarih": tarih, "fis_aciklama": aciklama,
         "hesap": hesap, "evrak_no": evrak_no, "evrak_tarih": tarih,
         "detay": detay or aciklama, "borc": round(borc, 2), "alacak": round(alacak, 2),
-        "belge_turu": "MF", "kaynak": kaynak, "kaynak_dosya": kaynak_dosya,
+        "belge_turu": "MF", "kaynak": kaynak, "kaynak_dosya": kaynak_dosya, "iade": iade,
     }
 
 
@@ -331,7 +331,304 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
 
 
 # ----------------------------------------------------------------- FATURA
+_KDV_HESAP_KODU = {10: "191.01.010", 20: "191.01.020"}  # oran -> indirilecek KDV hesabı (mizanda farklıysa kural dosyasından düzeltilebilir)
+
+
+def _efatura_listesi_satirlari(hamlar):
+    """Bazı e-Fatura entegratörlerinin ('gelen fatura listesi' Excel raporu)
+    formatını tanır: Fatura No, Fatura Tarihi, Gönderici Adı, KDV %10, KDV %20,
+    KDV %10 Matrah, KDV %20 Matrah, Ek Vergiler gibi sütunlar. Genel
+    _tablo_satirlari banka dökümü odaklı (TARİH/AÇIKLAMA/TUTAR) olduğu için bu
+    formatı tanımıyor — ayrı bir sütun haritası gerekiyor. Bu formatta ürün/
+    hizmet açıklaması YOK, sadece gönderici (tedarikçi) adı var."""
+    kayitlar = []
+    for h in hamlar:
+        for tablo in h.get("tablolar", []):
+            if not tablo:
+                continue
+            bas_idx = None; harita = {}
+            for i, row in enumerate(tablo[:10]):
+                nrow = [norm(str(c)) for c in row]
+                if "FATURA NO" not in nrow:
+                    continue
+                for j, c in enumerate(nrow):
+                    if c == "FATURA NO":
+                        harita["no"] = j
+                    elif c == "FATURA TARIHI":
+                        harita["tarih"] = j
+                    elif "GONDERICI" in c:
+                        harita["gonderici"] = j
+                    elif "MATRAH" in c and "10" in c:
+                        harita["matrah10"] = j
+                    elif "MATRAH" in c and "20" in c:
+                        harita["matrah20"] = j
+                    elif "KDV" in c and "10" in c:
+                        harita["kdv10"] = j
+                    elif "KDV" in c and "20" in c:
+                        harita["kdv20"] = j
+                    elif "EK VERGI" in c:
+                        harita["ek"] = j
+                bas_idx = i
+                break
+            if bas_idx is None or "gonderici" not in harita or "tarih" not in harita:
+                continue
+            for row in tablo[bas_idx + 1:]:
+                def g(key):
+                    j = harita.get(key)
+                    return row[j] if j is not None and j < len(row) else None
+                tarih = _tarih_iso(g("tarih"))
+                gonderici = str(g("gonderici") or "").strip()
+                if not tarih and not gonderici:
+                    continue
+                kalemler = []
+                for oran, mkey, kkey in ((10, "matrah10", "kdv10"), (20, "matrah20", "kdv20")):
+                    matrah = _sayi(g(mkey)) or 0
+                    kdv = _sayi(g(kkey)) or 0
+                    if matrah or kdv:
+                        kalemler.append((oran, matrah, kdv))
+                ek = _sayi(g("ek")) or 0
+                if not kalemler and not ek:
+                    continue
+                kayitlar.append({
+                    "tarih": tarih, "gonderici": gonderici, "kalemler": kalemler,
+                    "ek_vergiler": ek, "fatura_no": str(g("no") or "").strip(),
+                    "dosya": h.get("dosya", ""),
+                })
+    return kayitlar
+
+
+# ------------------------------------------------------- PDF tekil e-Fatura (entegratör baskısı)
+# Excel entegratör listesi gelmediğinde (veya sadece PDF fatura elimizdeyse):
+# her tedarikçi KENDİ fatura şablonunu kullanıyor (eLogo/e-Fatura portal
+# "DocumentPrint" çıktısı) — ürün/hizmet kalem tablosunun sütun düzeni
+# tedarikçiden tedarikçiye tamamen farklı. Bu yüzden kalem bazlı ayrıştırma
+# yerine TÜM şablonlarda ortak bulunan üst bilgi alanları hedeflenir:
+# Fatura No/ID, Tarih, "Mal/Hizmet Toplam Tutarı", "Hesaplanan KDV(...)",
+# "Ödenecek Tutar" / "Vergiler Dahil Toplam Tutar". Genelde bu alanlar sayfa
+# sonundaki özet tablosunda temiz (etiket, tutar) satırları olarak bulunur;
+# tablo çıkmazsa (bazı şablonlar sınırsız/borderless) ham metinden aynı
+# etiketler regex ile aranır.
+_PDF_FATURA_ID_RE = re.compile(r"Fatura\s*ID\s*:?\s*([A-Za-z0-9]+)", re.IGNORECASE)
+_PDF_FATURA_NO_RE = re.compile(r"Fatura\s*(?:No|Numaras[ıi])\s*:?\s*([A-Za-z0-9\-]+)", re.IGNORECASE)
+_PDF_FATURA_TARIHI_RE = re.compile(r"Fatura\s*Tarih[i]?\s*:?\s*(\d{1,2})[\s./-]+(\d{1,2})[\s./-]+(\d{2,4})", re.IGNORECASE)
+_PDF_TARIH_FALLBACK_RE = re.compile(r"(?:^|\n)\s*Tarih\s*:?\s*(\d{1,2})[\s./-]+(\d{1,2})[\s./-]+(\d{2,4})", re.IGNORECASE | re.MULTILINE)
+_PDF_TARIH_ANY_RE = re.compile(r"\b(\d{1,2})[.\-](\d{1,2})[.\-](\d{4})\b")
+_PDF_IADE_RE = re.compile(r"Fatura\s*Tipi\s*:?\s*IADE", re.IGNORECASE)
+_PDF_ODENECEK_RE = re.compile(r"(?:ÖDENECEK\s+(?:TUTAR|TOPLAM)|Ödenecek\s+Tutar)\s*:?\s*([\d.,]+)", re.IGNORECASE)
+_PDF_MAL_HIZMET_RE = re.compile(r"Mal\s*/?\s*Hizmet\s*Toplam\s*Tutar[ıi]\s*:?\s*([\d.,]+)\s*TL?", re.IGNORECASE)
+_PDF_HESAPLANAN_KDV_METIN_RE = re.compile(r"Hesaplanan\s+KDV[^(%\n]*[(%][^)]*?(\d+)[^)]*\)?\s*:?\s*([\d.,]+)\s*TL", re.IGNORECASE)
+_PDF_KDV_ORAN_RE = re.compile(r"%\s*(\d+)")
+_PDF_UNVAN_RE = re.compile(r"(ŞİRKETİ|SIRKETI|A\.\Ş\.|A\.S\.|LTD\.|ŞTİ\.|STI\.|ANONIM)", re.IGNORECASE)
+_PDF_GONDERICI_KESME_RE = re.compile(r"\s{2,}|HİZMET\s*NO|HIZMET\s*NO|Tel:|Faks|VKN|Vergi", re.IGNORECASE)
+_PDF_GONDERICI_DUR_RE = re.compile(
+    r"VKN|TCKN|Vergi\s*Dairesi|Vergi\s*No|Tel:|Faks|Web\s*Sitesi|E-Posta|E-posta|"
+    r"Mah\.|Mahallesi|Sokak|Sok\.|Cadde|Cad\.|No:\d", re.IGNORECASE)
+_PDF_METADATA_ALAN_RE = re.compile(r"Özelleştirme|Senaryo|Fatura\s*ID|Fatura\s*Tarih|Fatura\s*Tipi", re.IGNORECASE)
+_PDF_TUTAR_HUCRE_RE = re.compile(r"^[\d.,]+\s*TL?$")
+
+
+def _pdf_tekil_fatura_ayikla(ham):
+    """Tek bir PDF sayfasını (=tek fatura, tedarikçiye özgü şablon) ayrıştırır.
+    _efatura_listesi_satirlari'nin döndürdüğüyle aynı sözlük şeklini üretir
+    (tarih/gonderici/kalemler/ek_vergiler/fatura_no/dosya) + ayrıca 'iade'."""
+    metin = ham.get("ham_metin", "")
+    if not metin.strip() or len(metin) < 150:
+        return None
+
+    m = _PDF_FATURA_ID_RE.search(metin) or _PDF_FATURA_NO_RE.search(metin)
+    fatura_no = m.group(1).strip() if m else ""
+
+    m = _PDF_FATURA_TARIHI_RE.search(metin) or _PDF_TARIH_FALLBACK_RE.search(metin)
+    d = mo = y = None
+    if m:
+        d, mo, y = m.groups()
+    else:
+        satirlar_ = metin.splitlines()
+        for i, s in enumerate(satirlar_):
+            if re.search(r"Fatura\s*Tarih", s, re.IGNORECASE):
+                for s2 in satirlar_[i:i + 3]:
+                    m2 = _PDF_TARIH_ANY_RE.search(s2)
+                    if m2:
+                        d, mo, y = m2.groups()
+                        break
+                break
+    tarih = _tarih_iso(f"{d}.{mo}.{y}") if d else ""
+
+    satirlar = [s.strip() for s in metin.splitlines()][1:]  # ilk satır: portal/tarih üstbilgisi
+    aday = []
+    for s in satirlar:
+        if not s or s.lower() in ("e-fatura", "e-fatura."):
+            continue
+        if _PDF_GONDERICI_DUR_RE.search(s):
+            break
+        aday.append(s)
+        if len(aday) >= 2:
+            break
+    gonderici = " ".join(aday)
+    if _PDF_METADATA_ALAN_RE.search(gonderici):
+        # iki sütunlu üstbilgi (ör. telekom faturası) ilk satırları yanlış yakaladı
+        gonderici = ""
+        for s in satirlar[:15]:
+            if _PDF_UNVAN_RE.search(s):
+                kesme = _PDF_GONDERICI_KESME_RE.search(s)
+                gonderici = s[:kesme.start()].strip() if kesme else s
+                break
+
+    iade = bool(_PDF_IADE_RE.search(metin))
+
+    # sayfadaki tüm tablo satırlarından (etiket_hücresi, tutar_hücresi) çifti çıkar
+    ozet = {}
+    for tablo in ham.get("tablolar", []):
+        for row in tablo:
+            hucreler = [c for c in row if c not in (None, "")]
+            if len(hucreler) < 2:
+                continue
+            son = " ".join(str(hucreler[-1]).split())
+            if not _PDF_TUTAR_HUCRE_RE.match(son):
+                continue
+            deger = _sayi(son)
+            if deger is None:
+                continue
+            etiket = " ".join(str(hucreler[-2]).split())
+            ozet[etiket] = deger
+
+    matrah = None
+    kdv_kalemleri = []  # [(oran, tutar)]
+    ek_vergi = 0.0
+    toplam = None
+    for etiket, deger in ozet.items():
+        e = etiket.upper().replace("İ", "I").replace(" ", "").replace("/", "").replace(":", "")
+        if e.startswith("MALHIZMETTOPLAMTUTARI") or e.startswith("VERGIHARICTUTAR"):
+            matrah = deger
+        elif e.startswith("HESAPLANANKDV"):
+            rm = _PDF_KDV_ORAN_RE.search(etiket)
+            kdv_kalemleri.append((int(rm.group(1)) if rm else 20, deger))
+        elif e.startswith("HESAPLANAN"):
+            ek_vergi += deger
+        elif e.startswith("VERGILERDAHILTOPLAMTUTAR") or e.startswith("ODENECEKTUTAR"):
+            toplam = deger
+
+    # tablo eksik/yoksa (borderless şablon) ham metinden aynı alanları dene
+    if matrah is None:
+        m = _PDF_MAL_HIZMET_RE.search(metin)
+        if m:
+            matrah = _sayi(m.group(1))
+    if not kdv_kalemleri:
+        m = _PDF_HESAPLANAN_KDV_METIN_RE.search(metin)
+        if m:
+            kdv_kalemleri.append((int(m.group(1)), _sayi(m.group(2))))
+    if toplam is None:
+        m = _PDF_ODENECEK_RE.search(metin)
+        if m:
+            toplam = _sayi(m.group(1))
+
+    # Telekom tipi fatura (TTNET vb.): "KDV %20 (Matrah ...)" + "ÖİV %10 (Matrah ...)"
+    # ne tablo ne yukarıdaki genel metin deseniyle yakalanır — ayrı format.
+    if matrah is None and not kdv_kalemleri:
+        mk = re.search(r"KDV\s*%\s*(\d+)\s*\(Matrah\w*\s*([\d.,]+)\s*\)\s*([\d.,]+)", metin, re.IGNORECASE)
+        if mk:
+            matrah = _sayi(mk.group(2))
+            kdv_kalemleri.append((int(mk.group(1)), _sayi(mk.group(3))))
+        mo2 = re.search(r"(?:ÖİV|OIV)\s*%\s*(\d+)\s*\(Matrah\w*\s*([\d.,]+)\s*\)\s*([\d.,]+)", metin, re.IGNORECASE)
+        if mo2:
+            ek_vergi += _sayi(mo2.group(3)) or 0
+
+    if matrah is None and toplam is not None:
+        kdv_toplam = sum(t for _, t in kdv_kalemleri)
+        matrah = round(toplam - kdv_toplam - ek_vergi, 2)
+
+    if not (fatura_no or gonderici) or (matrah is None and toplam is None):
+        return None
+
+    kalemler = [(oran, matrah if i == 0 else 0, tutar) for i, (oran, tutar) in enumerate(kdv_kalemleri)]
+    return {
+        "tarih": tarih, "gonderici": gonderici, "kalemler": kalemler,
+        "ek_vergiler": ek_vergi, "fatura_no": fatura_no, "iade": iade,
+        "dosya": ham.get("dosya", ""),
+    }
+
+
+def _pdf_fatura_satirlari(hamlar):
+    """Excel entegratör listesi formatı değil, tek tek fatura görüntüsü/baskısı
+    olan PDF'ler (her SAYFA = bir fatura, tedarikçi başına farklı şablon).
+    belge_oku.pdf_oku 'sayfalar' alanında sayfa bazlı (ham_metin, tablolar)
+    verir — tek dosyanın düzleştirilmiş ham_metin'i tüm faturaları birbirine
+    karıştıracağından mutlaka sayfa bazlı işlenir."""
+    kayitlar = []
+    for h in hamlar:
+        if h.get("tur") not in ("pdf", "pdf_ocr"):
+            continue
+        sayfalar = h.get("sayfalar") or [{"ham_metin": h.get("ham_metin", ""), "tablolar": h.get("tablolar", [])}]
+        for sayfa in sayfalar:
+            veri = {"ham_metin": sayfa.get("ham_metin", ""), "tablolar": sayfa.get("tablolar", []),
+                    "dosya": h.get("dosya", "")}
+            k = _pdf_tekil_fatura_ayikla(veri)
+            if k:
+                kayitlar.append(k)
+    return kayitlar
+
+
+def _isle_efatura_listesi(kayitlar, km, fis0):
+    """e-Fatura entegratör listesindeki her satırı fişe çevirir: her fatura
+    için CARİ (tedarikçiye göre eşleştirilir) ve GİDER (cari hesabın kendisine
+    göre öğrenilir — bkz. KuralMotoru.gider_hesabi) hesapları ayrı ayrı
+    bulunur, KDV oranı başına ayrı gider+KDV satır çifti açılır, Ek Vergiler
+    ilk kaleme eklenir."""
+    uyarilar = []
+    fisler = []
+    fis = fis0
+    for k in sorted(kayitlar, key=lambda x: (x["tarih"] or "", x.get("fatura_no", ""))):
+        fisno = f"{fis:05d}"
+        gonderici = k["gonderici"]
+        iade = bool(k.get("iade"))
+        cari, kaynak = km.eslestir(gonderici)
+        if not cari:
+            uyarilar.append(f"{gonderici[:40]}: cari hesabı eşleşmedi")
+        gider_varsayilan = km.gider_hesabi(cari) if cari else ""
+        if not gider_varsayilan:
+            uyarilar.append(f"{gonderici[:40]}: gider hesabı bilinmiyor (Fiş Listesi'nden öğretin)")
+        if iade:
+            uyarilar.append(f"{gonderici[:40]} ({k.get('fatura_no','')}): İADE faturası — borç/alacak yönünü kontrol edin")
+
+        kalemler = k["kalemler"] or [(0, 0, 0)]  # sadece Ek Vergiler varsa (ör. faktoring/BSMV) oransız tek satır
+        ek_vergi = k.get("ek_vergiler") or 0
+        toplam = 0.0
+        ilk = True
+        for oran, matrah, kdv in kalemler:
+            gider_matrah = matrah + (ek_vergi if ilk else 0)
+            ilk = False
+            if gider_matrah == 0 and kdv == 0:
+                continue
+            toplam += gider_matrah + kdv
+            not_par = f" (%{oran} KDV)" if (oran and kdv) else (" (Ek Vergiler dahil)" if not oran else "")
+            detay = gonderici + not_par + (" — İADE" if iade else "")
+            fisler.append(_sat(fisno, k["tarih"], gonderici, gider_varsayilan, gider_matrah, 0,
+                                evrak_no=k.get("fatura_no", ""), detay=detay, kaynak=kaynak, iade=iade))
+            if kdv:
+                kdv_hesap = _KDV_HESAP_KODU.get(oran, "191.01.020")
+                fisler.append(_sat(fisno, k["tarih"], gonderici, kdv_hesap, kdv, 0,
+                                    evrak_no=k.get("fatura_no", ""), detay=detay, kaynak="kdv", iade=iade))
+        if toplam:
+            fisler.append(_sat(fisno, k["tarih"], gonderici, cari or "320.01.001", 0, round(toplam, 2),
+                                evrak_no=k.get("fatura_no", ""), detay=gonderici + (" — İADE" if iade else ""),
+                                kaynak=kaynak, iade=iade))
+        fis += 1
+    return fisler, uyarilar
+
+
 def isle_fatura(hamlar, km, fis0):
+    # Önce bilinen e-Fatura entegratör listesi formatını dene (Fatura No,
+    # Fatura Tarihi, Gönderici Adı, KDV %10/%20 sütunları) — bu formatta
+    # ürün/hizmet açıklaması yok, gider hesabı cari hesaptan öğrenilir.
+    # Tek tek fatura PDF'leri (her sayfa kendi şablonunda bir fatura) de aynı
+    # işleme ile birleştirilir — bir yüklemede hem Excel liste hem PDF
+    # fatura birlikte gelebilir, biri diğerini geçersiz kılmaz.
+    e_kayitlar = _efatura_listesi_satirlari(hamlar) + _pdf_fatura_satirlari(hamlar)
+    if e_kayitlar:
+        return _isle_efatura_listesi(e_kayitlar, km, fis0)
+
+    # Aksi halde eski/genel akış: basit "tarih + açıklama + tutar" listesi
+    # (tek bir Excel sütun düzeni varsayar, sabit %20 KDV ile).
     uyarilar = []
     kayitlar = _kayitlar(hamlar)
     if not kayitlar:
@@ -343,8 +640,8 @@ def isle_fatura(hamlar, km, fis0):
     fis = fis0
     for k in sorted(kayitlar, key=lambda x: x["tarih"] or ""):
         fisno = f"{fis:05d}"
-        gider, kaynak = km.eslestir(k["aciklama"])
-        cari, _ = km.eslestir(k["aciklama"])
+        cari, kaynak = km.eslestir(k["aciklama"])
+        gider = km.gider_hesabi(cari) if cari else ""
         toplam = abs(k["tutar"])
         matrah = round(toplam / 1.20, 2); kdv = round(toplam - matrah, 2)
         if not gider:

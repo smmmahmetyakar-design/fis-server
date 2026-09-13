@@ -88,10 +88,10 @@
     </div>
     <div class="flex" style="margin-top:12px">
       <div>
-        <label>Fiş Listesi (<span id="fisListesiTip">banka</span>) — geçmiş fişlerden karşı hesap öğren</label>
+        <label>Fiş Listesi (<span id="fisListesiTip">banka</span>) — <span id="fisListesiAciklama">geçmiş fişlerden karşı hesap öğren</span></label>
         <input type="file" id="fisListesiFile" accept=".xlsx,.xls">
       </div>
-      <div>
+      <div id="fisListesiHesapWrap">
         <label>Hedef Hesap Kodu (bu fişlerdeki banka/ana hesap)</label>
         <input id="fisListesiHesap" placeholder="ör. 102.01.004" style="width:150px">
       </div>
@@ -146,6 +146,8 @@ function sekmeSec(tip){
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tip===tip));
   $('kuralTip').textContent=tip; $('belgeTip').textContent=tip; $('fisListesiTip').textContent=tip;
   $('bankaHesapWrap').style.display=(tip==='banka')?'':'none';
+  $('fisListesiHesapWrap').style.display=(tip==='fatura')?'none':'';
+  $('fisListesiAciklama').textContent=(tip==='fatura')?'geçmiş fişlerden cari→gider hesabı öğren':'geçmiş fişlerden karşı hesap öğren';
   satirlar=[]; duzenleMod=false; filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; sonR=null;
   $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
   if(firmaKod) firmaDurum();
@@ -198,7 +200,10 @@ async function firmaDurum(){
   if(t.kural_var){kp.className='pill';kp.textContent=t.kural_hesap+' kural + '+(t.ogrenilen||0)+' öğrenilen';}
   else{kp.className='pill off';kp.textContent='kural yok';}
   const op=$('ogrenmePill');
-  if(t.ogrenilen){op.className='pill';op.textContent=t.ogrenilen+' öğrenilen';}
+  if(aktifTip==='fatura'){
+    if(t.gider_ogrenilen){op.className='pill';op.textContent=t.gider_ogrenilen+' gider eşleşmesi öğrenilen';}
+    else{op.className='pill off';op.textContent='gider eşleşmesi öğrenilmedi';}
+  }else if(t.ogrenilen){op.className='pill';op.textContent=t.ogrenilen+' öğrenilen';}
   else{op.className='pill off';op.textContent='öğrenilen yok';}
   // belge listesi
   const bl=$('belgeListe');
@@ -225,8 +230,11 @@ async function mizanSil(){
 async function fisListesiYukle(){
   if(!firmaKod){alert('Önce firma seç');return;}
   const f=$('fisListesiFile').files[0]; if(!f){alert('Dosya seç');return;}
-  const hk=($('fisListesiHesap').value||'').trim(); if(!hk){alert('Hedef hesap kodu gir (ör. 102.01.004)');return;}
-  const fd=new FormData(); fd.append('file',f); fd.append('banka_hesap_kodu',hk);
+  const fd=new FormData(); fd.append('file',f);
+  if(aktifTip!=='fatura'){
+    const hk=($('fisListesiHesap').value||'').trim(); if(!hk){alert('Hedef hesap kodu gir (ör. 102.01.004)');return;}
+    fd.append('banka_hesap_kodu',hk);
+  }
   $('durum').textContent='öğreniliyor...';
   const r=await (await fetch(`/api/firma/${firmaKod}/ogren-fis-listesi/${aktifTip}`,{method:'POST',body:fd})).json();
   $('durum').textContent='';
@@ -319,18 +327,19 @@ function render(r){
   h+=`<div class="tablo-kayan"><table><thead><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
   h+=goster.map(({s,i})=>{
     const hesapDeger=s.hesap?(s.hesap+' — '+hesapAdi(s.hesap)):'';
+    const dikkat=!s.hesap||s.iade;
     if(dz){
-      return `<tr class="${s.hesap?'':'warn'}">
+      return `<tr class="${dikkat?'warn':''}">
         <td><input value="${s.fisno||''}" onchange="edit(${i},'fisno',this.value)" style="width:70px"></td>
         <td><input value="${s.fis_tarih||''}" onchange="edit(${i},'fis_tarih',this.value)" style="width:96px"></td>
         <td class="l"><input list="hesapListe" value="${hesapDeger.replace(/"/g,'&quot;')}" placeholder="kod veya ad yaz…" onchange="editHesap(${i},this.value)" style="width:190px"></td>
         <td><input value="${s.borc||0}" onchange="edit(${i},'borc',this.value)" style="width:80px;text-align:right"></td>
         <td><input value="${s.alacak||0}" onchange="edit(${i},'alacak',this.value)" style="width:80px;text-align:right"></td>
-        <td class="l"><input value="${(s.detay||'').replace(/"/g,'&quot;')}" onchange="edit(${i},'detay',this.value)" style="width:100%;min-width:420px"></td>
+        <td class="l">${s.iade?'<span class="kaynak" style="background:#ffe0b2;color:#8a5a1a">İADE</span> ':''}<input value="${(s.detay||'').replace(/"/g,'&quot;')}" onchange="edit(${i},'detay',this.value)" style="width:100%;min-width:420px"></td>
         <td><button class="btn btn-x" onclick="satirSil(${i})">🗑</button></td>
       </tr>`;
     }
-    return `<tr class="${s.hesap?'':'warn'}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.detay||''}</td></tr>`;
+    return `<tr class="${dikkat?'warn':''}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.iade?'<span class="kaynak" style="background:#ffe0b2;color:#8a5a1a">İADE</span> ':''}${s.detay||''}</td></tr>`;
   }).join('');
   h+=`</tbody><tfoot><tr class="tot"><td colspan="3" class="l">TOPLAM (tümü)</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';

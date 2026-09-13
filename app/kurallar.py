@@ -262,6 +262,58 @@ def fis_listesi_ogren(fis_path: Path, banka_hesap_kodu: str) -> dict:
     return ogrenme
 
 
+def fatura_gider_ogren(fis_path: Path, cari_onek: str = "320", kdv_onek: str = "191") -> dict:
+    """
+    Fatura fişlerinde hangi CARİ (tedarikçi, ör. 320.x) hesabının hangi
+    GİDER/STOK hesabıyla eşleştiğini geçmiş fiş listesinden (aynı Logo Tiger
+    'fiş listesi' export'u) öğrenir. Gelen e-Fatura listesinde ürün/hizmet
+    açıklaması olmadığı için (sadece gönderici/tedarikçi adı var) gider hesabı
+    açıklama kelimelerinden değil, CARİ HESABIN KENDİSİNDEN öğrenilir: aynı
+    tedarikçi (aynı cari kod) geçmişte hangi gider hesabına işlenmişse, yeni
+    faturalarda da varsayılan olarak o hesap önerilir.
+
+    Mantık: her fiş bloğunda KDV (191.x) hesabı hariç tutulduğunda geriye TEK
+    bir cari (320.x) ve TEK bir gider hesabı kalıyorsa (basit, tek kalemli
+    fatura fişi), bu ikisini eşleştirip kaydeder. Birden çok gider kalemli
+    (KDV hariç 2+ farklı gider hesabı olan) fişler yanlış öğrenme riskine
+    karşı atlanır.
+
+    Döndürür: {cari_hesap_kodu: gider_hesap_kodu}
+    """
+    ogrenme = {}
+    if not fis_path.exists():
+        return ogrenme
+    try:
+        wb = openpyxl.load_workbook(fis_path, data_only=True)
+    except Exception:
+        return ogrenme
+    ws = wb[wb.sheetnames[0]]
+
+    blok = []
+
+    def isle_blok(blok):
+        kodlar = {b[0] for b in blok}
+        kdv_haric = {k for k in kodlar if not k.startswith(kdv_onek)}
+        cari_kodlar = {k for k in kdv_haric if k.startswith(cari_onek)}
+        gider_kodlar = kdv_haric - cari_kodlar
+        if len(cari_kodlar) == 1 and len(gider_kodlar) == 1:
+            ogrenme[next(iter(cari_kodlar))] = next(iter(gider_kodlar))
+
+    for r in range(1, ws.max_row + 1):
+        kod = ws.cell(r, 2).value
+        if kod == "HESAP KODU":
+            blok = []
+            continue
+        if isinstance(kod, str) and kod.strip().startswith("FİŞ TOPLAM"):
+            isle_blok(blok)
+            blok = []
+            continue
+        if kod and re.match(r"^\d{3}(\.\d+)*$", str(kod).strip()):
+            blok.append((str(kod).strip(),))
+
+    return ogrenme
+
+
 # ----------------------------------------------------------------- öğrenme JSON
 def ogrenme_oku(path: Path) -> dict:
     if path.exists():
@@ -282,16 +334,25 @@ class KuralMotoru:
     """Bir firma + belge tipi (banka/fatura/cek) için hesap eşleştirme yapar."""
 
     def __init__(self, mizan_path: Path, kural_path: Path, ogrenme_path: Path,
-                 banka_eslestirme_path: Path = None):
+                 banka_eslestirme_path: Path = None, gider_eslestirme_path: Path = None):
         self.hesaplar = mizan_hesaplar(mizan_path)
         self.kural = kural_excel_oku(kural_path)
         self.ogrenme = ogrenme_oku(ogrenme_path)
         self.ogrenme_path = ogrenme_path
         self.banka_eslestirme_path = banka_eslestirme_path
         self.banka_eslestirme = ogrenme_oku(banka_eslestirme_path) if banka_eslestirme_path else {}
+        # Fatura: CARİ hesap kodu -> GİDER hesap kodu (geçmiş fiş listesinden
+        # öğrenilir, bkz. fatura_gider_ogren — açıklama kelimesinden değil,
+        # doğrudan cari hesabın kendisinden öğrenilir).
+        self.gider_eslestirme_path = gider_eslestirme_path
+        self.gider_eslestirme = ogrenme_oku(gider_eslestirme_path) if gider_eslestirme_path else {}
         self.kod_ad = {k: a for k, a in self.hesaplar}
         for h in self.kural["hesaplar"]:
             self.kod_ad.setdefault(h["kod"], h["ad"])
+
+    def gider_hesabi(self, cari_kod: str) -> str:
+        """Bir cari (tedarikçi) hesap koduna öğrenilmiş varsayılan gider hesabı."""
+        return self.gider_eslestirme.get(cari_kod, "") if cari_kod else ""
 
     def banka_hesap_ogren(self, anahtar: str, kod: str):
         """IBAN/hesap no anahtarını bir hesap koduna bağlar ve kalıcı olarak kaydeder
