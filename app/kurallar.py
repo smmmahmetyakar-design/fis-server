@@ -321,6 +321,55 @@ def fatura_gider_ogren(fis_path: Path, cari_onek: str = "32", kdv_onek: str = "1
     return ogrenme
 
 
+def fatura_gelir_ogren(fis_path: Path, cari_onek: str = "12", kdv_onek: str = "391") -> dict:
+    """
+    SATIŞ faturalarında hangi CARİ (müşteri) hesabının hangi GELİR hesabıyla
+    eşleştiğini geçmiş fiş listesinden öğrenir — fatura_gider_ogren'in ayna
+    (mirror) mantığı: cari_onek varsayılan '12' (Ticari Alacaklar ANA GRUBU:
+    120 Alıcılar, 121 Alacak Senetleri, 122 Alacak Senetleri Reeskontu(-)
+    vb.), kdv_onek '391' (Hesaplanan KDV) hariç tutulur.
+
+    Mantık aynı: her fiş bloğunda KDV (391.x) hesabı hariç tutulduğunda
+    geriye TEK bir cari (12x) ve TEK bir gelir hesabı (600 serisi) kalıyorsa
+    bu ikisi eşleştirilip kaydedilir. Birden çok gelir kalemli fişler
+    (yanlış öğrenme riskine karşı) atlanır.
+
+    Döndürür: {cari_hesap_kodu: gelir_hesap_kodu}
+    """
+    ogrenme = {}
+    if not fis_path.exists():
+        return ogrenme
+    try:
+        wb = openpyxl.load_workbook(fis_path, data_only=True)
+    except Exception:
+        return ogrenme
+    ws = wb[wb.sheetnames[0]]
+
+    blok = []
+
+    def isle_blok(blok):
+        kodlar = {b[0] for b in blok}
+        kdv_haric = {k for k in kodlar if not k.startswith(kdv_onek)}
+        cari_kodlar = {k for k in kdv_haric if k.startswith(cari_onek)}
+        gelir_kodlar = kdv_haric - cari_kodlar
+        if len(cari_kodlar) == 1 and len(gelir_kodlar) == 1:
+            ogrenme[next(iter(cari_kodlar))] = next(iter(gelir_kodlar))
+
+    for r in range(1, ws.max_row + 1):
+        kod = ws.cell(r, 2).value
+        if kod == "HESAP KODU":
+            blok = []
+            continue
+        if isinstance(kod, str) and kod.strip().startswith("FİŞ TOPLAM"):
+            isle_blok(blok)
+            blok = []
+            continue
+        if kod and re.match(r"^\d{3}(\.\d+)*$", str(kod).strip()):
+            blok.append((str(kod).strip(),))
+
+    return ogrenme
+
+
 # ----------------------------------------------------------------- öğrenme JSON
 def ogrenme_oku(path: Path) -> dict:
     if path.exists():

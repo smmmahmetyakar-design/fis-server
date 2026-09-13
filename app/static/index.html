@@ -63,7 +63,8 @@
 <div class="wrap">
   <div class="tabs">
     <div class="tab active" data-tip="banka" onclick="sekmeSec('banka')">🏦 Banka Dökümü</div>
-    <div class="tab" data-tip="fatura" onclick="sekmeSec('fatura')">🧾 Fatura</div>
+    <div class="tab" data-tip="fatura" onclick="sekmeSec('fatura')">🧾 Fatura (Alış)</div>
+    <div class="tab" data-tip="fatura_satis" onclick="sekmeSec('fatura_satis')">🧾 Fatura (Satış)</div>
     <div class="tab" data-tip="cek" onclick="sekmeSec('cek')">📃 Çek Listesi</div>
   </div>
 
@@ -140,6 +141,8 @@
 
 <script>
 const $=id=>document.getElementById(id);
+function faturaTipiMi(tip){ return tip==='fatura'||tip==='fatura_satis'; }
+function satisMi(tip){ return tip==='fatura_satis'; }
 let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
 let filtreHesap='', filtreDosya='', filtreEslesmeyen=false, sonR=null;
 let seciliSatirlar=new Set();  // sol taraftaki tik kutusuyla seçilen satır indeksleri — biri düzeltilince aynı hesap kodu diğerlerine de uygulanır
@@ -151,8 +154,8 @@ function sekmeSec(tip){
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tip===tip));
   $('kuralTip').textContent=tip; $('belgeTip').textContent=tip; $('fisListesiTip').textContent=tip;
   $('bankaHesapWrap').style.display=(tip==='banka')?'':'none';
-  $('fisListesiHesapWrap').style.display=(tip==='fatura')?'none':'';
-  $('fisListesiAciklama').textContent=(tip==='fatura')?'geçmiş fişlerden cari→gider hesabı öğren':'geçmiş fişlerden karşı hesap öğren';
+  $('fisListesiHesapWrap').style.display=faturaTipiMi(tip)?'none':'';
+  $('fisListesiAciklama').textContent=faturaTipiMi(tip)?('geçmiş fişlerden cari→'+(satisMi(tip)?'gelir':'gider')+' hesabı öğren'):'geçmiş fişlerden karşı hesap öğren';
   satirlar=[]; duzenleMod=false; filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; sonR=null;
   seciliSatirlar=new Set(); oncekiSatirlar=null;
   $('onizle').innerHTML=''; $('duzenleBtn').style.display='none'; $('satirEkleBtn').style.display='none'; $('vazgecBtn').style.display='none';
@@ -206,9 +209,10 @@ async function firmaDurum(){
   if(t.kural_var){kp.className='pill';kp.textContent=t.kural_hesap+' kural + '+(t.ogrenilen||0)+' öğrenilen';}
   else{kp.className='pill off';kp.textContent='kural yok';}
   const op=$('ogrenmePill');
-  if(aktifTip==='fatura'){
-    if(t.gider_ogrenilen){op.className='pill';op.textContent=t.gider_ogrenilen+' gider eşleşmesi öğrenilen';}
-    else{op.className='pill off';op.textContent='gider eşleşmesi öğrenilmedi';}
+  if(faturaTipiMi(aktifTip)){
+    const etiket=satisMi(aktifTip)?'gelir':'gider';
+    if(t.gider_ogrenilen){op.className='pill';op.textContent=t.gider_ogrenilen+' '+etiket+' eşleşmesi öğrenilen';}
+    else{op.className='pill off';op.textContent=etiket+' eşleşmesi öğrenilmedi';}
   }else if(t.ogrenilen){op.className='pill';op.textContent=t.ogrenilen+' öğrenilen';}
   else{op.className='pill off';op.textContent='öğrenilen yok';}
   // belge listesi
@@ -237,7 +241,7 @@ async function fisListesiYukle(){
   if(!firmaKod){alert('Önce firma seç');return;}
   const f=$('fisListesiFile').files[0]; if(!f){alert('Dosya seç');return;}
   const fd=new FormData(); fd.append('file',f);
-  if(aktifTip!=='fatura'){
+  if(!faturaTipiMi(aktifTip)){
     const hk=($('fisListesiHesap').value||'').trim(); if(!hk){alert('Hedef hesap kodu gir (ör. 102.01.004)');return;}
     fd.append('banka_hesap_kodu',hk);
   }
@@ -371,24 +375,28 @@ function edit(i,alan,deger,yayilanMi){
   // hesap elle değişince öğret
   if(alan==='hesap' && deger && deger!==eski && satirlar[i].detay){
     const satir=satirlar[i];
-    if(aktifTip==='fatura' && satir.kaynak!=='kdv'){
-      // Fatura fişinde CARİ satırı (alacak>0) mı GİDER satırı (borç>0) mı
-      // düzeltildi bul, aynı fişteki kardeşinden cari<->gider çiftini
-      // çıkar ve doğrudan fatura_gider_eslestirme.json'a öğret — geçmiş
-      // fiş listesi yüklemeyi beklemeden, düzeltme yapıldıkça öğrenir.
-      const cariRow = satir.alacak>0 ? null : satirlar.find(s=>s.fisno===satir.fisno && s.alacak>0 && s.hesap);
-      const giderRow = satir.alacak>0 ? satirlar.find(s=>s.fisno===satir.fisno && s.borc>0 && s.kaynak!=='kdv' && s.hesap) : null;
-      const cariKod = satir.alacak>0 ? deger : (cariRow&&cariRow.hesap);
-      const giderKod = satir.alacak>0 ? (giderRow&&giderRow.hesap) : deger;
-      if(cariKod && giderKod){
+    const satisM=satisMi(aktifTip);
+    // CARİ satırı hangisi: ALIŞ'ta alacak>0 (satıcı alacaklanır), SATIŞ'ta
+    // borç>0 (alıcı borçlanır — yön tam tersi).
+    const satirCariMi = faturaTipiMi(aktifTip) && (satisM ? satir.borc>0 : satir.alacak>0);
+    if(faturaTipiMi(aktifTip) && satir.kaynak!=='kdv'){
+      // Fatura fişinde CARİ satırı mı GİDER/GELİR satırı mı düzeltildi bul,
+      // aynı fişteki kardeşinden cari<->gider(gelir) çiftini çıkar ve
+      // doğrudan {tip}_gider_eslestirme.json'a öğret — geçmiş fiş listesi
+      // yüklemeyi beklemeden, düzeltme yapıldıkça öğrenir.
+      const cariRow = satirCariMi ? null : satirlar.find(s=>s.fisno===satir.fisno && (satisM?s.borc>0:s.alacak>0) && s.hesap);
+      const digerRow = satirCariMi ? satirlar.find(s=>s.fisno===satir.fisno && (satisM?s.alacak>0:s.borc>0) && s.kaynak!=='kdv' && s.hesap) : null;
+      const cariKod = satirCariMi ? deger : (cariRow&&cariRow.hesap);
+      const digerKod = satirCariMi ? (digerRow&&digerRow.hesap) : deger;
+      if(cariKod && digerKod){
         fetch(`/api/firma/${firmaKod}/ogret-gider`,{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({firma_kod:firmaKod,cari_kod:cariKod,gider_kod:giderKod})}).catch(()=>{});
+          body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,cari_kod:cariKod,gider_kod:digerKod})}).catch(()=>{});
       }
     }
-    // CARİ satırı için genel kelime eşleştirmesi de öğretilir (gönderici adı
-    // -> hesap); GİDER satırı için bu ATLANIR, çünkü gider hesabı sadece
-    // yukarıdaki cari->gider eşleşmesiyle bulunur, açıklama kelimesiyle değil.
-    if(!(aktifTip==='fatura' && satir.borc>0)){
+    // CARİ satırı için genel kelime eşleştirmesi de öğretilir (gönderici/alıcı
+    // adı -> hesap); GİDER/GELİR (ve KDV) satırı için bu ATLANIR, çünkü o
+    // hesap sadece yukarıdaki cari->gider(gelir) eşleşmesiyle bulunur.
+    if(!(faturaTipiMi(aktifTip) && !satirCariMi)){
       fetch(`/api/firma/${firmaKod}/ogret/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,aciklama:satir.detay,kod:deger})}).catch(()=>{});
     }

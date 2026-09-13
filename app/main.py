@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar, fis_listesi_ogren, fatura_gider_ogren
+from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar, fis_listesi_ogren, fatura_gider_ogren, fatura_gelir_ogren
 from app.belge_oku import belge_oku
 from app import isleyici
 from app.routes.enhanced import router as enhanced_router
@@ -50,7 +50,7 @@ class NoCacheMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(NoCacheMiddleware)
 
-TIPLER = ("banka", "fatura", "cek")
+TIPLER = ("banka", "fatura", "fatura_satis", "cek")
 
 
 # ----------------------------------------------------------------- yardımcı
@@ -141,8 +141,8 @@ def ogrenme_sil(kod: str, tip: str):
         raise HTTPException(400, "Geçersiz tip")
     d = firma_dir(kod)
     (d / f"{tip}_ogrenme.json").unlink(missing_ok=True)
-    if tip == "fatura":
-        (d / "fatura_gider_eslestirme.json").unlink(missing_ok=True)
+    if tip in ("fatura", "fatura_satis"):
+        (d / f"{tip}_gider_eslestirme.json").unlink(missing_ok=True)
     return {"ok": True}
 
 
@@ -163,10 +163,12 @@ async def ogren_fis_listesi(kod: str, tip: str, banka_hesap_kodu: str = Form("")
     Gerçek muhasebe fiş geçmişinizi (Logo Tiger 'fiş listesi' export'u) yükleyin:
     - banka/çek: hedef hesap kodunu da verin, karşı hesap eşleştirmelerini
       öğrenip {tip}_ogrenme.json'a ekler.
-    - fatura: hedef hesap kodu gerekmez — e-Fatura listesinde ürün/hizmet
-      açıklaması olmadığından, hangi CARİ (tedarikçi) hesabının hangi GİDER
-      hesabına işlendiği doğrudan geçmiş fişlerden öğrenilip
+    - fatura (alış): hedef hesap kodu gerekmez — e-Fatura listesinde ürün/
+      hizmet açıklaması olmadığından, hangi CARİ (tedarikçi) hesabının hangi
+      GİDER hesabına işlendiği doğrudan geçmiş fişlerden öğrenilip
       fatura_gider_eslestirme.json'a yazılır.
+    - fatura_satis: aynı mantığın aynası — hangi CARİ (müşteri) hesabının
+      hangi GELİR hesabına işlendiği öğrenilip fatura_satis_gider_eslestirme.json'a yazılır.
     Manuel 'Hesap Kodu Eşleştirme' dosyası hazırlamaya gerek kalmaz.
     """
     if tip not in TIPLER:
@@ -175,9 +177,9 @@ async def ogren_fis_listesi(kod: str, tip: str, banka_hesap_kodu: str = Form("")
     tmp = d / "_gecici_fis_listesi.xlsx"
     tmp.write_bytes(await file.read())
     try:
-        if tip == "fatura":
-            yeni = fatura_gider_ogren(tmp)
-            og_path = d / "fatura_gider_eslestirme.json"
+        if tip in ("fatura", "fatura_satis"):
+            yeni = fatura_gelir_ogren(tmp) if tip == "fatura_satis" else fatura_gider_ogren(tmp)
+            og_path = d / f"{tip}_gider_eslestirme.json"
         else:
             hesap_kodu = (banka_hesap_kodu or "").strip()
             if not hesap_kodu:
@@ -200,9 +202,9 @@ def firma_durum(kod: str):
     for t in TIPLER:
         kp = d / f"kural_{t}.xlsx"
         k = kural_excel_oku(kp) if kp.exists() else {"hesaplar": [], "talimatlar": []}
-        belgeler = [f.name for f in (d / t).iterdir()] if (d / t).exists() else []
+        belgeler = [f.name for f in (d / t).iterdir() if f.is_file()] if (d / t).exists() else []
         og = _read_json(d / f"{t}_ogrenme.json", {})
-        gider_og = _read_json(d / "fatura_gider_eslestirme.json", {}) if t == "fatura" else {}
+        gider_og = _read_json(d / f"{t}_gider_eslestirme.json", {}) if t in ("fatura", "fatura_satis") else {}
         out["tipler"][t] = {
             "kural_var": kp.exists(),
             "kural_hesap": len(k["hesaplar"]),
@@ -283,7 +285,7 @@ def isle(kod: str, tip: str, body: IsleBody):
         raise HTTPException(400, "Geçersiz tip")
     d = firma_dir(kod)
     km = KuralMotoru(d / "mizan.xlsx", d / f"kural_{tip}.xlsx", d / f"{tip}_ogrenme.json",
-                      d / "banka_hesap_eslestirme.json", d / "fatura_gider_eslestirme.json")
+                      d / "banka_hesap_eslestirme.json", d / f"{tip}_gider_eslestirme.json")
 
     dosyalar = body.dosyalar or [f.name for f in (d / tip).iterdir() if f.is_file()]
     tum_ham = []
@@ -329,18 +331,22 @@ class OgretGiderBody(BaseModel):
     firma_kod: str
     cari_kod: str
     gider_kod: str
+    tip: str = "fatura"
 
 
 @app.post("/api/firma/{kod}/ogret-gider")
 def ogret_gider(kod: str, body: OgretGiderBody):
-    """Fatura Düzenle modunda bir fişin CARİ veya GİDER hesabı elle
-    düzeltilince, aynı fişteki cari<->gider hesap çiftini doğrudan
-    fatura_gider_eslestirme.json'a yazar — geçmiş fiş listesi yüklemeyi
-    beklemeden, düzeltme yapıldıkça öğrenir (bkz. index.html edit())."""
+    """Fatura (alış) veya Fatura Satış Düzenle modunda bir fişin CARİ veya
+    GİDER/GELİR hesabı elle düzeltilince, aynı fişteki cari<->gider(gelir)
+    hesap çiftini doğrudan {tip}_gider_eslestirme.json'a yazar — geçmiş fiş
+    listesi yüklemeyi beklemeden, düzeltme yapıldıkça öğrenir (bkz.
+    index.html edit())."""
+    if body.tip not in ("fatura", "fatura_satis"):
+        raise HTTPException(400, "Geçersiz tip")
     if not body.cari_kod or not body.gider_kod:
         raise HTTPException(400, "cari_kod ve gider_kod gerekli")
     d = firma_dir(kod)
-    gider_path = d / "fatura_gider_eslestirme.json"
+    gider_path = d / f"{body.tip}_gider_eslestirme.json"
     gider_og = _read_json(gider_path, {})
     gider_og[body.cari_kod] = body.gider_kod
     _write_json(gider_path, gider_og)
