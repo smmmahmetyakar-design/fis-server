@@ -66,10 +66,6 @@
     <div class="tab" data-tip="fatura" onclick="sekmeSec('fatura')">🧾 Fatura</div>
     <div class="tab" data-tip="cek" onclick="sekmeSec('cek')">📃 Çek Listesi</div>
   </div>
-  <div id="faturaYonWrap" class="flex" style="display:none;margin:-8px 0 14px 2px;gap:6px">
-    <button class="btn" id="yonAlisBtn" onclick="faturaYonSec('alis')">⬇ Alış</button>
-    <button class="btn btn-gri" id="yonSatisBtn" onclick="faturaYonSec('satis')">⬆ Satış</button>
-  </div>
 
   <div class="card">
     <h2>1) Mizan & Kural Dosyası</h2>
@@ -149,39 +145,19 @@ let filtreHesap='', filtreDosya='', filtreEslesmeyen=false, sonR=null;
 let seciliSatirlar=new Set();  // sol taraftaki tik kutusuyla seçilen satır indeksleri — biri düzeltilince aynı hesap kodu diğerlerine de uygulanır
 let sonGosterIndices=[];  // render()'da hesaplanan, filtreye göre şu an görünen satır indeksleri — "tümünü seç" tik kutusu için
 let oncekiSatirlar=null;  // Düzenle moduna girerken satirlar'ın anlık kopyası — "Vazgeç" bunu geri yükler
-let faturaYon='alis';  // sadece Fatura sekmesinde: 'alis' (tedarikçi/gider) veya 'satis' (müşteri/gelir)
-
-function faturaEtiketGuncelle(){
-  const yonEtiket=aktifTip==='fatura'?(faturaYon==='satis'?' (satış)':' (alış)'):'';
-  $('kuralTip').textContent=aktifTip+yonEtiket; $('belgeTip').textContent=aktifTip+yonEtiket; $('fisListesiTip').textContent=aktifTip+yonEtiket;
-  $('fisListesiAciklama').textContent=(aktifTip!=='fatura')?'geçmiş fişlerden karşı hesap öğren'
-    :(faturaYon==='satis'?'geçmiş fişlerden cari→gelir hesabı öğren':'geçmiş fişlerden cari→gider hesabı öğren');
-  $('yonAlisBtn').className='btn '+(faturaYon==='alis'?'btn-ana':'btn-gri');
-  $('yonSatisBtn').className='btn '+(faturaYon==='satis'?'btn-ana':'btn-gri');
-}
 
 function sekmeSec(tip){
   aktifTip=tip;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tip===tip));
+  $('kuralTip').textContent=tip; $('belgeTip').textContent=tip; $('fisListesiTip').textContent=tip;
   $('bankaHesapWrap').style.display=(tip==='banka')?'':'none';
   $('fisListesiHesapWrap').style.display=(tip==='fatura')?'none':'';
-  $('faturaYonWrap').style.display=(tip==='fatura')?'flex':'none';
-  faturaEtiketGuncelle();
+  $('fisListesiAciklama').textContent=(tip==='fatura')?'geçmiş fişlerden cari→gider hesabı öğren':'geçmiş fişlerden karşı hesap öğren';
   satirlar=[]; duzenleMod=false; filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; sonR=null;
   seciliSatirlar=new Set(); oncekiSatirlar=null;
   $('onizle').innerHTML=''; $('duzenleBtn').style.display='none'; $('satirEkleBtn').style.display='none'; $('vazgecBtn').style.display='none';
   if(firmaKod) firmaDurum();
   bankaHesapDoldur();
-}
-
-function faturaYonSec(yon){
-  if(yon===faturaYon) return;
-  faturaYon=yon;
-  faturaEtiketGuncelle();
-  satirlar=[]; duzenleMod=false; filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; sonR=null;
-  seciliSatirlar=new Set(); oncekiSatirlar=null;
-  $('onizle').innerHTML=''; $('duzenleBtn').style.display='none'; $('satirEkleBtn').style.display='none'; $('vazgecBtn').style.display='none';
-  if(firmaKod) firmaDurum();
 }
 
 function bankaHesapDoldur(){
@@ -225,15 +201,14 @@ async function firmaDurum(){
   const mp=$('mizanPill');
   if(d.mizan_hesap){mp.className='pill';mp.textContent=d.mizan_hesap+' hesap';}
   else{mp.className='pill off';mp.textContent='mizan yok';}
-  const t=(aktifTip==='fatura'&&faturaYon==='satis')?(d.tipler.fatura_satis||{}):(d.tipler[aktifTip]||{});
+  const t=d.tipler[aktifTip]||{};
   const kp=$('kuralPill');
   if(t.kural_var){kp.className='pill';kp.textContent=t.kural_hesap+' kural + '+(t.ogrenilen||0)+' öğrenilen';}
   else{kp.className='pill off';kp.textContent='kural yok';}
   const op=$('ogrenmePill');
   if(aktifTip==='fatura'){
-    const etiket=faturaYon==='satis'?'gelir':'gider';
-    if(t.gider_ogrenilen){op.className='pill';op.textContent=t.gider_ogrenilen+' '+etiket+' eşleşmesi öğrenilen';}
-    else{op.className='pill off';op.textContent=etiket+' eşleşmesi öğrenilmedi';}
+    if(t.gider_ogrenilen){op.className='pill';op.textContent=t.gider_ogrenilen+' gider eşleşmesi öğrenilen';}
+    else{op.className='pill off';op.textContent='gider eşleşmesi öğrenilmedi';}
   }else if(t.ogrenilen){op.className='pill';op.textContent=t.ogrenilen+' öğrenilen';}
   else{op.className='pill off';op.textContent='öğrenilen yok';}
   // belge listesi
@@ -262,9 +237,7 @@ async function fisListesiYukle(){
   if(!firmaKod){alert('Önce firma seç');return;}
   const f=$('fisListesiFile').files[0]; if(!f){alert('Dosya seç');return;}
   const fd=new FormData(); fd.append('file',f);
-  if(aktifTip==='fatura'){
-    fd.append('yon',faturaYon);
-  }else{
+  if(aktifTip!=='fatura'){
     const hk=($('fisListesiHesap').value||'').trim(); if(!hk){alert('Hedef hesap kodu gir (ör. 102.01.004)');return;}
     fd.append('banka_hesap_kodu',hk);
   }
@@ -278,33 +251,29 @@ async function fisListesiYukle(){
 async function ogrenmeSil(){
   if(!firmaKod){alert('Önce firma seç');return;}
   if(!confirm('Bu sekme ('+aktifTip+') için öğrenilen tüm eşleştirmeler silinsin mi?'))return;
-  const yonQ=aktifTip==='fatura'?`?yon=${faturaYon}`:'';
-  await fetch(`/api/firma/${firmaKod}/ogrenme/${aktifTip}${yonQ}`,{method:'DELETE'});
+  await fetch(`/api/firma/${firmaKod}/ogrenme/${aktifTip}`,{method:'DELETE'});
   firmaDurum();
 }
 async function kuralYukle(){
   if(!firmaKod){alert('Önce firma seç');return;}
   const f=$('kuralFile').files[0]; if(!f){alert('Dosya seç');return;}
   const fd=new FormData(); fd.append('file',f);
-  const yonQ=aktifTip==='fatura'?`?yon=${faturaYon}`:'';
-  await fetch(`/api/firma/${firmaKod}/kural/${aktifTip}${yonQ}`,{method:'POST',body:fd});
+  await fetch(`/api/firma/${firmaKod}/kural/${aktifTip}`,{method:'POST',body:fd});
   firmaDurum(); loadHesaplar();
 }
 async function belgeYukle(){
   if(!firmaKod){alert('Önce firma seç');return;}
   const files=$('belgeFile').files; if(!files.length){alert('Dosya seç');return;}
   $('durum').textContent='yükleniyor...';
-  const yonQ=aktifTip==='fatura'?`?yon=${faturaYon}`:'';
   for(const f of files){
     const fd=new FormData(); fd.append('file',f);
-    await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}${yonQ}`,{method:'POST',body:fd});
+    await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}`,{method:'POST',body:fd});
   }
   $('durum').textContent=''; $('belgeFile').value=''; firmaDurum();
 }
 async function belgeSil(fn){
   if(!confirm('Silinsin mi?\n'+fn))return;
-  const yonQ=aktifTip==='fatura'?`?yon=${faturaYon}`:'';
-  await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}/${encodeURIComponent(fn)}${yonQ}`,{method:'DELETE'});
+  await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}/${encodeURIComponent(fn)}`,{method:'DELETE'});
   firmaDurum();
 }
 
@@ -315,7 +284,6 @@ async function isle(){
   $('durum').textContent='işleniyor (OCR sürebilir)...';
   const govde={firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||1};
   if(aktifTip==='banka'){ const bh=$('bankaHesapSel').value; if(bh) govde.banka_hesap_kodu=bh; }
-  if(aktifTip==='fatura'){ govde.yon=faturaYon; }
   const r=await (await fetch(`/api/firma/${firmaKod}/isle/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(govde)})).json();
   $('durum').textContent='';
@@ -403,33 +371,26 @@ function edit(i,alan,deger,yayilanMi){
   // hesap elle değişince öğret
   if(alan==='hesap' && deger && deger!==eski && satirlar[i].detay){
     const satir=satirlar[i];
-    // Fatura fişinde CARİ satırı hangi yönde: ALIŞ'ta cari ALACAK tarafında
-    // (borç: gider), SATIŞ'ta cari BORÇ tarafında (alacak: gelir+KDV) —
-    // bkz. isleyici.py _isle_efatura_listesi / _isle_efatura_listesi_satis.
-    const satisMi=aktifTip==='fatura' && faturaYon==='satis';
-    const cariTarafi = s => satisMi ? s.borc>0 : s.alacak>0;  // bu satır fişin CARİ tarafında mı
-    const satirCariMi = cariTarafi(satir);
     if(aktifTip==='fatura' && satir.kaynak!=='kdv'){
-      // CARİ satırı mı GİDER/GELİR satırı mı düzeltildi bul, aynı fişteki
-      // kardeşinden cari<->gider(ALIŞ)/gelir(SATIŞ) çiftini çıkar ve
-      // doğrudan ilgili eşleştirme dosyasına öğret — geçmiş fiş listesi
-      // yüklemeyi beklemeden, düzeltme yapıldıkça öğrenir.
-      const kardesRow = satirlar.find(s=>s.fisno===satir.fisno && s.hesap &&
-        (satirCariMi ? (!cariTarafi(s) && s.kaynak!=='kdv') : cariTarafi(s)));
-      const cariKod = satirCariMi ? deger : (kardesRow&&kardesRow.hesap);
-      const digerKod = satirCariMi ? (kardesRow&&kardesRow.hesap) : deger;
-      if(cariKod && digerKod){
+      // Fatura fişinde CARİ satırı (alacak>0) mı GİDER satırı (borç>0) mı
+      // düzeltildi bul, aynı fişteki kardeşinden cari<->gider çiftini
+      // çıkar ve doğrudan fatura_gider_eslestirme.json'a öğret — geçmiş
+      // fiş listesi yüklemeyi beklemeden, düzeltme yapıldıkça öğrenir.
+      const cariRow = satir.alacak>0 ? null : satirlar.find(s=>s.fisno===satir.fisno && s.alacak>0 && s.hesap);
+      const giderRow = satir.alacak>0 ? satirlar.find(s=>s.fisno===satir.fisno && s.borc>0 && s.kaynak!=='kdv' && s.hesap) : null;
+      const cariKod = satir.alacak>0 ? deger : (cariRow&&cariRow.hesap);
+      const giderKod = satir.alacak>0 ? (giderRow&&giderRow.hesap) : deger;
+      if(cariKod && giderKod){
         fetch(`/api/firma/${firmaKod}/ogret-gider`,{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({firma_kod:firmaKod,cari_kod:cariKod,gider_kod:digerKod,yon:faturaYon})}).catch(()=>{});
+          body:JSON.stringify({firma_kod:firmaKod,cari_kod:cariKod,gider_kod:giderKod})}).catch(()=>{});
       }
     }
-    // CARİ satırı için genel kelime eşleştirmesi de öğretilir (gönderici/
-    // alıcı adı -> hesap); GİDER/GELİR (ve KDV) satırı için bu ATLANIR, çünkü
-    // o hesap sadece yukarıdaki cari<->gider/gelir eşleşmesiyle bulunur,
-    // açıklama kelimesiyle değil.
-    if(aktifTip!=='fatura' || satirCariMi){
+    // CARİ satırı için genel kelime eşleştirmesi de öğretilir (gönderici adı
+    // -> hesap); GİDER satırı için bu ATLANIR, çünkü gider hesabı sadece
+    // yukarıdaki cari->gider eşleşmesiyle bulunur, açıklama kelimesiyle değil.
+    if(!(aktifTip==='fatura' && satir.borc>0)){
       fetch(`/api/firma/${firmaKod}/ogret/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,aciklama:satir.detay,kod:deger,yon:faturaYon})}).catch(()=>{});
+        body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,aciklama:satir.detay,kod:deger})}).catch(()=>{});
     }
   }
   if(duzenleMod) render();
@@ -468,8 +429,7 @@ function tumSecToggle(checked){
   render();
 }
 function faturaGorselAc(dosya,sayfa){
-  const yonQ=aktifTip==='fatura'?`?yon=${faturaYon}`:'';
-  window.open(`/api/firma/${firmaKod}/belge/${aktifTip}/${encodeURIComponent(dosya)}/sayfa/${sayfa}${yonQ}`,'_blank');
+  window.open(`/api/firma/${firmaKod}/belge/${aktifTip}/${encodeURIComponent(dosya)}/sayfa/${sayfa}`,'_blank');
 }
 function duzenleToggle(){
   if(!satirlar.length){alert('Önce İşle');return;}
@@ -503,8 +463,7 @@ async function disaAktar(format){
   const r=await fetch(`/api/firma/${firmaKod}/export?format=${format}`,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,satirlar,donem:''})});
   const blob=await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-  const dosyaEtiket=aktifTip==='fatura'?`fatura_${faturaYon}`:aktifTip;
-  a.download=`FIS_${dosyaEtiket}.${format}`; a.click();
+  a.download=`FIS_${aktifTip}.${format}`; a.click();
   $('durum').textContent=''; loadCiktilar();
 }
 
