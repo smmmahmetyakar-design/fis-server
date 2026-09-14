@@ -1,12 +1,13 @@
 """
 Belge okuyucu — gelen dosyayı ham satır/tablo verisine çevirir.
 Desteklenen: .xlsx/.xls (openpyxl + eski .xls için xlrd), .pdf (pdfplumber; metin yoksa OCR),
-             .png/.jpg/.jpeg (OCR: pytesseract).
+             .png/.jpg/.jpeg (OCR: pytesseract), .csv (bankaların internet şubesi exportu).
 
-Çıktı: {"tur": "excel|pdf|pdf_ocr|resim_ocr", "tablolar": [[[hücre,...],...]],
+Çıktı: {"tur": "excel|pdf|pdf_ocr|resim_ocr|csv", "tablolar": [[[hücre,...],...]],
          "ham_metin": "...", "uyari": "..."}
 Not: OCR sonuçları hatalı olabilir; kullanıcı önizlemede düzeltir.
 """
+import csv as _csv
 import io
 from pathlib import Path
 
@@ -62,6 +63,46 @@ def excel_oku(path: Path, ext: str = ""):
         if satirlar:
             tablolar.append(satirlar)
     return {"tur": "excel", "tablolar": tablolar, "ham_metin": "", "uyari": ""}
+
+
+def csv_oku(path: Path):
+    """Banka internet şubesi CSV exportu (ör. Akbank). Türk bankaları çoğunlukla
+    eski Windows-1254 (Turkish) kod sayfasıyla ';' ayraçlı csv üretir — bunu
+    UTF-8 sanıp okumaya çalışmak Türkçe karakterleri (İ,ğ,ş,ç,ö,ü) bozar
+    (mojibake). Önce UTF-8 dener, olmazsa cp1254'e (sonra iso-8859-9'a) düşer."""
+    data = path.read_bytes()
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    metin = None
+    for enc in ("utf-8", "cp1254", "iso-8859-9"):
+        try:
+            metin = data.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if metin is None:
+        metin = data.decode("utf-8", errors="replace")
+
+    satirlar_ham = metin.splitlines()
+    # Ayracı otomatik tespit et — TR banka exportlarında genelde ';' (tutarlarda
+    # ondalık ayracı ',' olduğundan ',' güvenilir bir ayraç değildir).
+    ornek = "\n".join(satirlar_ham[:8])
+    try:
+        ayrac = _csv.Sniffer().sniff(ornek, delimiters=";,\t").delimiter
+    except Exception:
+        ayrac = ";" if ornek.count(";") >= ornek.count(",") else ","
+
+    tablo = []
+    try:
+        for row in _csv.reader(satirlar_ham, delimiter=ayrac):
+            if any((c or "").strip() for c in row):
+                tablo.append(row)
+    except Exception as e:
+        return {"tur": "csv", "tablolar": [], "ham_metin": metin,
+                "uyari": f"CSV ayrıştırılamadı: {e}"}
+
+    tablolar = [tablo] if tablo else []
+    return {"tur": "csv", "tablolar": tablolar, "ham_metin": metin, "uyari": ""}
 
 
 def pdf_oku(path: Path):
@@ -152,6 +193,8 @@ def belge_oku(path: Path, orijinal_ad: str = ""):
         return excel_oku(path, ext)
     if ext == ".pdf":
         return pdf_oku(path)
+    if ext == ".csv":
+        return csv_oku(path)
     if ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"):
         return resim_oku(path)
     return {"tur": "bilinmeyen", "tablolar": [], "ham_metin": "",

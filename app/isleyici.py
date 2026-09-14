@@ -18,7 +18,7 @@ from app.kurallar import norm, dosya_banka_anahtari, banka_kisa_adi
 _METADATA_RE = re.compile(
     r"^(SICIL|IBAN|SUBE|VKN|TCKN|MUSTERI NO|HESAP NO|HESAP SAHIBI|"
     r"TARIH ARALIGI|BAKIYE|EK HESAP LIMITI|ORTAK HESAP|RUMUZ|VB MUS NO|"
-    r"HESAP TURU|HESAP HAREKETLERI)\b"
+    r"HESAP TURU|HESAP HAREKETLERI|SAYFA NO)\b"
 )
 _MAKUL_TUTAR_UST_SINIR = 1_000_000_000  # bu üstü gerçek bir banka hareketi değil, hatalı okunmuş sayıdır
 _SAAT_ONEK_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?\s+")  # açıklama başındaki "12:31:21 " gibi saat
@@ -42,6 +42,13 @@ def _tarih_iso(s):
     if isinstance(s, datetime):
         return f"{s.year:04d}-{s.month:02d}-{s.day:02d}"
     s = str(s).strip()
+    # Akbank internet şubesi CSV exportunda "Tarih" hücresi
+    # "2026-08-31-11.28.21.190812" gibi ISO tarihin hemen ardına (boşluksuz,
+    # tire ile) saat/mikrosaniye eklenmiş halde gelir — baştaki YYYY-MM-DD'yi
+    # doğrudan al, geri kalanı (saat) yok say.
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})(?:[-T ].*)?$", s)
+    if m:
+        return m.group(1)
     # "20.08.2026 13:24" gibi tarih+saat birleşik hücrelerde (ör. Denizbank
     # Excel ekstresi) saat kısmını at, sadece tarihi ayrıştır.
     s = re.sub(r"\s+\d{1,2}:\d{2}(:\d{2})?\s*$", "", s)
@@ -152,7 +159,9 @@ def _tablo_satirlari(hamlar):
 def _ham_metin_satirlari(hamlar):
     """OCR/PDF ham metninden (tarih ... açıklama ... tutar) desenli satırları çıkarır."""
     kayitlar = []
-    tarih_re = re.compile(r"\b(\d{1,2}[./]\d{1,2}[./]\d{2,4})\b")
+    # Bazı bankalar (ör. Halkbank hesap özeti) tarihi "13-08-2026" gibi tire
+    # ile ayırır — nokta/slash'ın yanı sıra tireyi de kabul et.
+    tarih_re = re.compile(r"\b(\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4})\b")
     tutar_re = re.compile(r"-?\d{1,3}(?:[.\s]\d{3})*(?:[.,]\d{2})|-?\d+[.,]\d{2}")
     for h in hamlar:
         metin = h.get("ham_metin", "")
@@ -227,11 +236,20 @@ def _ham_metin_satirlari(hamlar):
 
 
 def _kayitlar(hamlar):
-    """Önce tablo, tablo yoksa ham metin (OCR) satırları."""
-    k = _tablo_satirlari(hamlar)
-    if not k:
-        k = _ham_metin_satirlari(hamlar)
-    return k
+    """Her belge için AYRI AYRI: önce tablo, tablo çıkmazsa ham metin (OCR)
+    satırları. Dosya bazında karar vermek önemli — aynı işlemde tablo tabanlı
+    bir dosya (ör. Excel/CSV ekstresi) ile tablo çıkarılamayan bir dosya
+    (ör. metin katmanlı taranmış PDF, ya da tabloyu tek hücreye sıkıştıran
+    Halkbank ekstresi gibi PDF'ler) karışık yüklenirse, TEK bir global
+    "hepsi tablo / hepsi ham-metin" seçimi ikincisini sessizce sıfır kayıtla
+    atlardı (tablo verenin varlığı yeter sayılır, ötekine hiç bakılmazdı)."""
+    kayitlar = []
+    for h in hamlar:
+        k = _tablo_satirlari([h])
+        if not k:
+            k = _ham_metin_satirlari([h])
+        kayitlar.extend(k)
+    return kayitlar
 
 
 # ----------------------------------------------------------------- BANKA
