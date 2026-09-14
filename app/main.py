@@ -50,7 +50,7 @@ class NoCacheMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(NoCacheMiddleware)
 
-TIPLER = ("banka", "fatura", "fatura_satis", "cek")
+TIPLER = ("banka", "fatura", "fatura_satis", "masraf", "cek")
 
 
 # ----------------------------------------------------------------- yardımcı

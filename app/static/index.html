@@ -45,7 +45,7 @@
   .kaynak.ogrenme{background:#dcedc8;color:#33691e}
   .kaynak.excel{background:#c8e0f0;color:#1f4e78}
   .kaynak.tahmin{background:#fff0c8;color:#8a6d1a}
-  .kaynak.banka,.kaynak.kdv,.kaynak.cek{background:#e8e8e8;color:#555}
+  .kaynak.banka,.kaynak.kdv,.kaynak.cek,.kaynak.masraf{background:#e8e8e8;color:#555}
   .uyari{color:#a23b2e;font-size:12px;margin-top:6px}
   .yukle-kutu{border:2px dashed var(--kenar);border-radius:8px;padding:14px;text-align:center;color:var(--muted);font-size:13px}
 </style>
@@ -65,6 +65,7 @@
     <div class="tab active" data-tip="banka" onclick="sekmeSec('banka')">🏦 Banka Dökümü</div>
     <div class="tab" data-tip="fatura" onclick="sekmeSec('fatura')">🧾 Fatura (Alış)</div>
     <div class="tab" data-tip="fatura_satis" onclick="sekmeSec('fatura_satis')">🧾 Fatura (Satış)</div>
+    <div class="tab" data-tip="masraf" onclick="sekmeSec('masraf')">💰 Fiş</div>
     <div class="tab" data-tip="cek" onclick="sekmeSec('cek')">📃 Çek Listesi</div>
   </div>
 
@@ -118,7 +119,7 @@
     <h2>3) İşle & Fiş Üret</h2>
     <div class="flex">
       <div id="bankaHesapWrap" style="display:none">
-        <label>Banka Hesabı (bu belgeler hangi hesaba ait)</label>
+        <label id="bankaHesapLabel">Banka Hesabı (bu belgeler hangi hesaba ait)</label>
         <select id="bankaHesapSel" style="min-width:220px"><option value="">— otomatik —</option></select>
       </div>
       <div><label>Başlangıç Fiş No</label><input id="fisBas" type="number" value="1" min="1" style="width:120px"></div>
@@ -143,6 +144,7 @@
 const $=id=>document.getElementById(id);
 function faturaTipiMi(tip){ return tip==='fatura'||tip==='fatura_satis'; }
 function satisMi(tip){ return tip==='fatura_satis'; }
+function karsiHesapGerekliMi(tip){ return tip==='banka'||tip==='masraf'; }
 let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
 let filtreHesap='', filtreDosya='', filtreEslesmeyen=false, sonR=null;
 let seciliSatirlar=new Set();  // sol taraftaki tik kutusuyla seçilen satır indeksleri — biri düzeltilince aynı hesap kodu diğerlerine de uygulanır
@@ -153,7 +155,8 @@ function sekmeSec(tip){
   aktifTip=tip;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tip===tip));
   $('kuralTip').textContent=tip; $('belgeTip').textContent=tip; $('fisListesiTip').textContent=tip;
-  $('bankaHesapWrap').style.display=(tip==='banka')?'':'none';
+  $('bankaHesapWrap').style.display=karsiHesapGerekliMi(tip)?'':'none';
+  $('bankaHesapLabel').textContent=(tip==='masraf')?'Karşı Hesap (Kasa/Ortak) Kodu':'Banka Hesabı (bu belgeler hangi hesaba ait)';
   $('fisListesiHesapWrap').style.display=faturaTipiMi(tip)?'none':'';
   $('fisListesiAciklama').textContent=faturaTipiMi(tip)?('geçmiş fişlerden cari→'+(satisMi(tip)?'gelir':'gider')+' hesabı öğren'):'geçmiş fişlerden karşı hesap öğren';
   satirlar=[]; duzenleMod=false; filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; sonR=null;
@@ -287,7 +290,7 @@ async function isle(){
   if(!firmaKod){alert('Önce firma seç');return;}
   $('durum').textContent='işleniyor (OCR sürebilir)...';
   const govde={firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||1};
-  if(aktifTip==='banka'){ const bh=$('bankaHesapSel').value; if(bh) govde.banka_hesap_kodu=bh; }
+  if(karsiHesapGerekliMi(aktifTip)){ const bh=$('bankaHesapSel').value; if(bh) govde.banka_hesap_kodu=bh; }
   const r=await (await fetch(`/api/firma/${firmaKod}/isle/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(govde)})).json();
   $('durum').textContent='';
@@ -490,7 +493,7 @@ loadFirmalar();
 // Sayfa ilk açıldığında sekme zaten "banka" olduğu halde sekmeSec() hiç
 // çalışmadığı için Banka Hesabı kutusu gizli kalıyordu — burada bir kez
 // senkronize ediyoruz.
-$('bankaHesapWrap').style.display=(aktifTip==='banka')?'':'none';
+$('bankaHesapWrap').style.display=karsiHesapGerekliMi(aktifTip)?'':'none';
 </script>
 </body>
 </html>

@@ -812,6 +812,127 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
 
 
 # ----------------------------------------------------------------- ÇEK
+# ----------------------------------------------------------------- masraf icmali (personel gider fişi)
+_KDV_ORAN_HESAP_MASRAF = {1: "191.01.001", 10: "191.01.010", 20: "191.01.020"}
+
+
+def _kdv_oran_yuzde(carpan):
+    """KDV çarpanından (matrah*çarpan=genel toplam, ör. 1.10 -> %10) yüzdeyi çıkarır."""
+    if not carpan:
+        return None
+    yuzde = round((carpan - 1) * 100)
+    return yuzde if yuzde > 0 else None
+
+
+def _masraf_excel_satirlari(hamlar):
+    """Personel masraf icmali Excel formatını tanır (ör. 'PERAKENDE SATIŞ
+    VESİKALARI İLE TEVSİK EDİLEN GİDERLER İCMALİ'): SIRA NO, TARİH, NO, FİRMA,
+    MATRAH, KDV ORANI, KDV TUTARI, GENEL TOPLAM, HESAP KODU, GİDER TÜRÜ
+    sütunları. Gider hesabı satırda zaten verili olduğundan kural motoruna/
+    cari eşleştirmeye gerek yoktur — doğrudan kullanılır."""
+    kayitlar = []
+    for h in hamlar:
+        for tablo in h.get("tablolar", []):
+            if not tablo:
+                continue
+            bas_idx = None; harita = {}
+            for i, row in enumerate(tablo[:15]):
+                nrow = [norm(str(c)) for c in row]
+                if "SIRA NO" not in nrow or "HESAP KODU" not in nrow:
+                    continue
+                for j, c in enumerate(nrow):
+                    if c == "SIRA NO":
+                        harita["sira"] = j
+                    elif c == "TARIH":
+                        harita["tarih"] = j
+                    elif c == "NO":
+                        harita["no"] = j
+                    elif c == "FIRMA":
+                        harita["firma"] = j
+                    elif c == "MATRAH":
+                        harita["matrah"] = j
+                    elif "KDV" in c and "ORAN" in c:
+                        harita["kdv_oran"] = j
+                    elif "KDV" in c and "TUTAR" in c:
+                        harita["kdv_tutar"] = j
+                    elif "GENEL TOPLAM" in c:
+                        harita["genel"] = j
+                    elif "HESAP KODU" in c:
+                        harita["hesap"] = j
+                    elif "GIDER TURU" in c:
+                        harita["gider_turu"] = j
+                bas_idx = i
+                break
+            if bas_idx is None:
+                continue
+            for row in tablo[bas_idx + 1:]:
+                def g(key):
+                    j = harita.get(key)
+                    return row[j] if j is not None and j < len(row) else None
+                if g("sira") in (None, ""):
+                    continue
+                hesap = str(g("hesap") or "").strip()
+                firma = str(g("firma") or "").strip()
+                genel = _sayi(g("genel"))
+                if not hesap or not firma or genel is None:
+                    continue
+                kayitlar.append({
+                    "tarih": _tarih_iso(g("tarih")),
+                    "firma": firma,
+                    "matrah": _sayi(g("matrah")) or 0,
+                    "kdv_carpan": _sayi(g("kdv_oran")),
+                    "kdv_tutar": _sayi(g("kdv_tutar")) or 0,
+                    "genel": genel,
+                    "hesap": hesap,
+                    "gider_turu": str(g("gider_turu") or "").strip(),
+                    "belge_no": str(g("no") or "").strip(),
+                    "dosya": h.get("dosya", ""),
+                })
+    return kayitlar
+
+
+def isle_masraf(hamlar, km, fis0, karsi_hesap_kodu=""):
+    """Personel masraf icmali (perakende satış vesikaları) -> HER SATIR AYRI
+    fiş: gider hesabı (dosyada verili HESAP KODU) borç + KDV oranına göre
+    191.xx borç + karşı hesap (Kasa/Ortak — UI'dan elle verilir) alacak.
+    Açıklama sadece firma adıdır. Cari eşleştirme motoru KULLANILMAZ çünkü
+    gider hesabı zaten dosyada satır satır verili."""
+    uyarilar = []
+    kayitlar = _masraf_excel_satirlari(hamlar)
+    if not kayitlar:
+        uyarilar.append("Masraf icmali tablo olarak okunamadı (SIRA NO + HESAP KODU sütunlu Excel bekleniyor)")
+        return [], uyarilar
+    karsi = (karsi_hesap_kodu or "").strip() or _CARI_BULUNAMADI_HESABI
+    fisler = []
+    fis = fis0
+    for k in kayitlar:
+        fisno = f"{fis:05d}"
+        firma = k["firma"]
+        matrah = round(k["matrah"], 2)
+        kdv = round(k["kdv_tutar"], 2)
+        genel = round(k["genel"], 2)
+        yuzde = _kdv_oran_yuzde(k["kdv_carpan"])
+        kdv_hesap = _KDV_ORAN_HESAP_MASRAF.get(yuzde) if yuzde else None
+        if kdv and not kdv_hesap:
+            # Bilinmeyen/tanımsız orandaki KDV'yi sessizce atmak yerine gider
+            # hesabına dahil eder — fiş her durumda dengeli çıkar.
+            uyarilar.append(f"{firma}: KDV oranı tanımlı değil (%{yuzde}), KDV tutarı gider hesabına dahil edildi")
+            matrah = round(matrah + kdv, 2)
+            kdv = 0
+        fisler.append(_sat(fisno, k["tarih"], firma, k["hesap"], matrah, 0,
+                            evrak_no=k["belge_no"], detay=firma, kaynak="masraf",
+                            kaynak_dosya=k["dosya"]))
+        if kdv:
+            fisler.append(_sat(fisno, k["tarih"], firma, kdv_hesap, kdv, 0,
+                                evrak_no=k["belge_no"], detay=firma, kaynak="kdv",
+                                kaynak_dosya=k["dosya"]))
+        fisler.append(_sat(fisno, k["tarih"], firma, karsi, 0, genel,
+                            evrak_no=k["belge_no"], detay=firma, kaynak="masraf",
+                            kaynak_dosya=k["dosya"]))
+        fis += 1
+    return fisler, uyarilar
+
+
 def isle_cek(hamlar, km, fis0):
     uyarilar = []
     kayitlar = _kayitlar(hamlar)
@@ -837,6 +958,8 @@ def isle(tip, hamlar, km, fis0, banka_hesap_kodu=""):
         return isle_fatura(hamlar, km, fis0)
     if tip == "fatura_satis":
         return isle_fatura(hamlar, km, fis0, yon="satis")
+    if tip == "masraf":
+        return isle_masraf(hamlar, km, fis0, banka_hesap_kodu)
     if tip == "cek":
         return isle_cek(hamlar, km, fis0)
     return [], ["Bilinmeyen tip"]
