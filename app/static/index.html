@@ -106,6 +106,7 @@
         <input id="fisListesiHesap" placeholder="ör. 102.01.004" style="width:150px">
       </div>
       <button class="btn btn-ana" onclick="fisListesiYukle()" style="align-self:flex-end">Öğren</button>
+      <button class="btn" onclick="fisListesiSunucudanOgren()" style="align-self:flex-end">📁 Sunucudan Öğren</button>
       <button class="btn btn-x" onclick="ogrenmeSil()" style="align-self:flex-end">🗑 Öğrenilenleri Sil</button>
       <span id="ogrenmePill" class="pill off" style="align-self:flex-end">öğrenilen yok</span>
     </div>
@@ -298,6 +299,21 @@ async function fisListesiYukle(){
   $('durum').textContent='';
   $('fisListesiFile').value='';
   alert(`${r.yeni_kural} yeni eşleştirme öğrenildi (toplam ${r.toplam_ogrenilen}).`);
+  firmaDurum();
+}
+async function fisListesiSunucudanOgren(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const govde={};
+  if(!faturaTipiMi(aktifTip)){
+    const hk=($('fisListesiHesap').value||'').trim(); if(!hk){alert('Hedef hesap kodu gir (ör. 102.01.004)');return;}
+    govde.banka_hesap_kodu=hk;
+  }
+  $('durum').textContent='sunucudan öğreniliyor...';
+  const r=await fetch(`/api/firma/${firmaKod}/ogren-fis-listesi-sunucudan/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(govde)});
+  const j=await r.json().catch(()=>({}));
+  $('durum').textContent='';
+  if(!r.ok){alert(j.detail||'Sunucudan öğrenilemedi');return;}
+  alert(`${j.kaynak_dosya}: ${j.yeni_kural} yeni eşleştirme öğrenildi (toplam ${j.toplam_ogrenilen}).`);
   firmaDurum();
 }
 async function ogrenmeSil(){
