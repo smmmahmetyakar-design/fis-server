@@ -84,6 +84,14 @@ def banka_kisa_adi(hesap_adi: str, hesap_kodu: str = "") -> str:
     return hesap_kodu or "BANKA"
 
 
+def hesap_doviz_kodu(hesap_adi: str) -> str:
+    ad_norm = norm(hesap_adi)
+    for kod in ("USD", "EUR", "GBP"):
+        if re.search(rf"\b{kod}\b", ad_norm):
+            return kod
+    return "TL"
+
+
 def norm(s: str) -> str:
     """Türkçe duyarsız normalize: büyük harf, aksan yok, sadece harf/rakam/boşluk."""
     if s is None:

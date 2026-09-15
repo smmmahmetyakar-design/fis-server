@@ -10,7 +10,7 @@ banka hesabı / karşı hesap mantığı geliştirilecek.
 """
 import io, re
 from datetime import datetime
-from app.kurallar import norm, dosya_banka_anahtari, banka_kisa_adi
+from app.kurallar import norm, dosya_banka_anahtari, banka_kisa_adi, hesap_doviz_kodu
 
 # Gerçek işlem değil, hesap özeti/metadata satırı olduğu belli olan açıklamalar
 # (ör. "Sicil: 26920050511927770340630") — bunlar tabloya karışırsa hem hesap
@@ -513,7 +513,8 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
         tutar = abs(k["tutar"])
         # Fiş Açıklama = "BANKA-TARİH" (ör. "YKB-05.04.2026"); Detay Açıklama
         # ise gerçek işlem metni. Tüm bankalarda aynı kural geçerli.
-        fis_aciklama = f"{banka_kisa_adi(km.hesap_adi(banka_hesap), banka_hesap)}-{_ddmmyyyy(k['tarih'])}"
+        banka_adi = km.hesap_adi(banka_hesap)
+        fis_aciklama = f"{banka_kisa_adi(banka_adi, banka_hesap)} {hesap_doviz_kodu(banka_adi)}-{_ddmmyyyy(k['tarih'])}"
         aciklama = k["aciklama"]
         pb = k.get("para_birimi") or ""
         kur = k.get("kur")
