@@ -17,6 +17,7 @@ import openpyxl
 # ----------------------------------------------------------------- dosyadan banka hesabı tanıma
 _IBAN_RE = re.compile(r"TR\d{2}(?:[ .]?\d{4}){5}[ .]?\d{2}")
 _HESAPNO_RE = re.compile(r"HESAP\s*NO\S*\s*[:\-]?\s*([0-9][0-9 .\-]{3,20}[0-9])")
+_MUSTERI_NO_RE = re.compile(r"M[UÜ][SŞ]TER[Iİ]\s*NUMARAS[Iİ]?\S*\s*[:\-]?\s*([0-9]{4,20})")
 
 
 def dosya_banka_anahtari(h: dict) -> str:
@@ -43,6 +44,12 @@ def dosya_banka_anahtari(h: dict) -> str:
         rakam = re.sub(r"[^0-9]", "", m.group(1))
         if len(rakam) >= 4:
             return rakam
+
+    m = _MUSTERI_NO_RE.search(metin)
+    if m:
+        rakam = re.sub(r"[^0-9]", "", m.group(1))
+        if len(rakam) >= 4:
+            return "MUS:" + rakam
 
     return ""
 
