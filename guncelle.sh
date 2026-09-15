@@ -15,6 +15,7 @@ docker stop fis-otomasyon 2>/dev/null || true
 docker rm fis-otomasyon 2>/dev/null || true
 docker run -d --name fis-otomasyon -p 8091:8091 \
   -v /home/ahmet/fis-server/data:/srv/data \
+  -v /home/ahmet/firmalar:/firmalar:ro \
   -v e6f12da3f5acc64d7ea20aac21055891ca1f82efc4121ccc1fc5bfd5cd5db59a:/data \
   -e FIS_DATA=/data \
   fis-server-fis:latest

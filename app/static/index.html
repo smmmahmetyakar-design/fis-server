@@ -76,6 +76,7 @@
         <label>Mizan (tüm hesaplar)</label>
         <input type="file" id="mizanFile" accept=".xlsx,.xls">
         <button class="btn btn-ana" onclick="mizanYukle()">Yükle</button>
+        <button class="btn" onclick="mizanSunucudanYukle()">📁 Sunucudan Yükle</button>
         <button class="btn btn-x" onclick="mizanSil()">🗑 Sil</button>
         <span id="mizanPill" class="pill off">mizan yok</span>
       </div>
@@ -251,6 +252,16 @@ async function mizanYukle(){
   const fd=new FormData(); fd.append('file',f);
   await fetch(`/api/firma/${firmaKod}/mizan`,{method:'POST',body:fd});
   $('mizanFile').value='';
+  firmaDurum(); loadHesaplar();
+}
+async function mizanSunucudanYukle(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  $('durum').textContent='sunucudan alınıyor...';
+  const r=await fetch(`/api/firma/${firmaKod}/mizan/sunucudan`,{method:'POST'});
+  const j=await r.json().catch(()=>({}));
+  $('durum').textContent='';
+  if(!r.ok){alert(j.detail||'Sunucudan mizan alınamadı');return;}
+  alert(`Mizan sunucudan alındı: ${j.kaynak_dosya} (${j.hesap_sayisi} hesap)`);
   firmaDurum(); loadHesaplar();
 }
 async function mizanSil(){

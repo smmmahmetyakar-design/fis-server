@@ -30,6 +30,23 @@ from app.routes.enhanced import router as enhanced_router
 DATA_DIR = Path(os.environ.get("FIS_DATA", "/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+FIRMALAR_KOK = Path(os.environ.get("FIRMALAR_KOK", "/firmalar"))
+KLASOR_ESLESTIRME_DOSYASI = DATA_DIR / "firma_klasor_eslestirme.json"
+
+
+def _firma_klasor_adi(kod: str):
+    return _read_json(KLASOR_ESLESTIRME_DOSYASI, {}).get(kod)
+
+
+def _en_yeni_xlsx(dizin: Path):
+    if not dizin.is_dir():
+        return None
+    adaylar = [f for f in dizin.iterdir()
+               if f.is_file() and f.suffix.lower() in (".xlsx", ".xls") and not f.name.startswith("~$")]
+    if not adaylar:
+        return None
+    return max(adaylar, key=lambda f: f.stat().st_mtime)
+
 app = FastAPI(title="Fiş Aktarım Aracı")
 app.include_router(enhanced_router)
 
@@ -131,6 +148,20 @@ def mizan_sil(kod: str):
     d = firma_dir(kod)
     (d / "mizan.xlsx").unlink(missing_ok=True)
     return {"ok": True}
+
+
+@app.post("/api/firma/{kod}/mizan/sunucudan")
+def mizan_sunucudan_yukle(kod: str):
+    d = firma_dir(kod)
+    klasor = _firma_klasor_adi(kod)
+    if not klasor:
+        raise HTTPException(404, f"'{kod}' icin sunucu klasor eslestirmesi tanimli degil ({KLASOR_ESLESTIRME_DOSYASI.name})")
+    kaynak = _en_yeni_xlsx(FIRMALAR_KOK / klasor / "mizan")
+    if not kaynak:
+        raise HTTPException(404, f"{FIRMALAR_KOK}/{klasor}/mizan altinda Excel dosyasi bulunamadi")
+    (d / "mizan.xlsx").write_bytes(kaynak.read_bytes())
+    hes = mizan_hesaplar(d / "mizan.xlsx")
+    return {"ok": True, "hesap_sayisi": len(hes), "kaynak_dosya": kaynak.name}
 
 
 @app.delete("/api/firma/{kod}/ogrenme/{tip}")
