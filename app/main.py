@@ -273,7 +273,7 @@ def belge_sayfa_gorsel(kod: str, tip: str, fname: str, sayfa: int):
 class IsleBody(BaseModel):
     firma_kod: str
     tip: str
-    dosyalar: list[str] = []       # işlenecek belgeler (boşsa tümü)
+    dosyalar: list[str] | None = None   # None: eski istemci uyumu (tümü); []: kullanıcı hiçbirini seçmedi
     fis_baslangic: int = 1         # başlangıç fiş no
     banka_hesap_kodu: str = ""     # opsiyonel: banka hesabını elle belirt (örn. 102.01.004)
 
@@ -287,7 +287,7 @@ def isle(kod: str, tip: str, body: IsleBody):
     km = KuralMotoru(d / "mizan.xlsx", d / f"kural_{tip}.xlsx", d / f"{tip}_ogrenme.json",
                       d / "banka_hesap_eslestirme.json", d / f"{tip}_gider_eslestirme.json")
 
-    dosyalar = body.dosyalar or [f.name for f in (d / tip).iterdir() if f.is_file()]
+    dosyalar = body.dosyalar if body.dosyalar is not None else [f.name for f in (d / tip).iterdir() if f.is_file()]
     tum_ham = []
     for fn in dosyalar:
         p = d / tip / fn

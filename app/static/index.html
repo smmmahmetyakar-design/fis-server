@@ -147,6 +147,7 @@ function satisMi(tip){ return tip==='fatura_satis'; }
 function karsiHesapGerekliMi(tip){ return tip==='banka'||tip==='masraf'; }
 let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
 let filtreHesap='', filtreDosya='', filtreEslesmeyen=false, sonR=null;
+let seciliBelgeler=new Set();
 let seciliSatirlar=new Set();  // sol taraftaki tik kutusuyla seçilen satır indeksleri — biri düzeltilince aynı hesap kodu diğerlerine de uygulanır
 let sonGosterIndices=[];  // render()'da hesaplanan, filtreye göre şu an görünen satır indeksleri — "tümünü seç" tik kutusu için
 let oncekiSatirlar=null;  // Düzenle moduna girerken satirlar'ın anlık kopyası — "Vazgeç" bunu geri yükler
@@ -161,6 +162,7 @@ function sekmeSec(tip){
   $('fisListesiAciklama').textContent=faturaTipiMi(tip)?('geçmiş fişlerden cari→'+(satisMi(tip)?'gelir':'gider')+' hesabı öğren'):'geçmiş fişlerden karşı hesap öğren';
   satirlar=[]; duzenleMod=false; filtreHesap=''; filtreDosya=''; filtreEslesmeyen=false; sonR=null;
   seciliSatirlar=new Set(); oncekiSatirlar=null;
+  seciliBelgeler=new Set();
   $('onizle').innerHTML=''; $('duzenleBtn').style.display='none'; $('satirEkleBtn').style.display='none'; $('vazgecBtn').style.display='none';
   if(firmaKod) firmaDurum();
   bankaHesapDoldur();
@@ -168,17 +170,15 @@ function sekmeSec(tip){
 
 function bankaHesapDoldur(){
   const sel=$('bankaHesapSel'); if(!sel) return;
-  const eski=sel.value;
   const secenekler=hesaplar.filter(h=>/^10[0-9]/.test(h.kod));
   sel.innerHTML='<option value="">— otomatik —</option>'+secenekler.map(h=>`<option value="${h.kod}">${h.kod} — ${h.ad}</option>`).join('');
-  if(secenekler.some(h=>h.kod===eski)) sel.value=eski;
 }
 
 async function loadFirmalar(){
   const list=await (await fetch('/api/firmalar')).json();
   $('firmaSel').innerHTML='<option value="">— firma seç —</option>'+list.map(f=>`<option value="${f.kod}">${f.ad}</option>`).join('');
 }
-$('firmaSel').onchange=e=>{firmaKod=e.target.value;if(firmaKod){firmaDurum();loadHesaplar();}};
+$('firmaSel').onchange=e=>{firmaKod=e.target.value;seciliBelgeler=new Set();if(firmaKod){firmaDurum();loadHesaplar();}};
 
 async function yeniFirma(){
   const ad=(prompt('Firma adı:')||'').trim(); if(!ad)return;
@@ -221,7 +221,26 @@ async function firmaDurum(){
   // belge listesi
   const bl=$('belgeListe');
   if(t.belgeler&&t.belgeler.length){
-    bl.innerHTML=t.belgeler.map(f=>`<div class="dosya-satir"><span style="flex:1">📎 ${f}</span><button class="btn btn-x" onclick="belgeSil('${f.replace(/'/g,"")}')">🗑</button></div>`).join('');
+    const tumuSeciliMi=t.belgeler.every(f=>seciliBelgeler.has(f));
+    bl.innerHTML=
+      `<label class="dosya-satir" style="font-weight:600">
+         <input type="checkbox" class="belge-tumu-chk" ${tumuSeciliMi?'checked':''}> Tümünü işleme dahil et / çıkar
+       </label>`+
+      t.belgeler.map(f=>`<div class="dosya-satir">
+        <label style="flex:1;display:flex;gap:8px;align-items:center;cursor:pointer">
+          <input type="checkbox" class="belge-chk" data-fn="${escapeHtml(f)}" ${seciliBelgeler.has(f)?'checked':''}>
+          📎 ${f}
+        </label>
+        <button class="btn btn-x" onclick="belgeSil('${f.replace(/'/g,"")}')">🗑</button>
+      </div>`).join('');
+    bl.querySelector('.belge-tumu-chk').onchange=e=>{
+      if(e.target.checked) t.belgeler.forEach(f=>seciliBelgeler.add(f));
+      else t.belgeler.forEach(f=>seciliBelgeler.delete(f));
+      firmaDurum();
+    };
+    bl.querySelectorAll('.belge-chk').forEach(cb=>{
+      cb.onchange=()=>{ const fn=cb.dataset.fn; if(cb.checked) seciliBelgeler.add(fn); else seciliBelgeler.delete(fn); };
+    });
   }else bl.innerHTML='<div class="hint">Henüz belge yok.</div>';
   loadCiktilar();
 }
@@ -274,22 +293,26 @@ async function belgeYukle(){
   $('durum').textContent='yükleniyor...';
   for(const f of files){
     const fd=new FormData(); fd.append('file',f);
-    await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}`,{method:'POST',body:fd});
+    const r=await (await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}`,{method:'POST',body:fd})).json();
+    if(r&&r.dosya) seciliBelgeler.add(r.dosya);
   }
   $('durum').textContent=''; $('belgeFile').value=''; firmaDurum();
 }
 async function belgeSil(fn){
   if(!confirm('Silinsin mi?\n'+fn))return;
   await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}/${encodeURIComponent(fn)}`,{method:'DELETE'});
+  seciliBelgeler.delete(fn);
   firmaDurum();
 }
 
 function nf(n){return (Math.round((n||0)*100)/100).toLocaleString('tr-TR',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
 async function isle(){
   if(!firmaKod){alert('Önce firma seç');return;}
+  if(!seciliBelgeler.size){alert('Hiç belge işaretlenmedi — işlenecek dosyaların yanındaki kutucukları işaretleyin.');return;}
   $('durum').textContent='işleniyor (OCR sürebilir)...';
-  const govde={firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||1};
+  const govde={firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||1,dosyalar:Array.from(seciliBelgeler)};
   if(karsiHesapGerekliMi(aktifTip)){ const bh=$('bankaHesapSel').value; if(bh) govde.banka_hesap_kodu=bh; }
   const r=await (await fetch(`/api/firma/${firmaKod}/isle/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(govde)})).json();
