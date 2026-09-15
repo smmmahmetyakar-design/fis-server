@@ -150,6 +150,17 @@ def mizan_sil(kod: str):
     return {"ok": True}
 
 
+@app.post("/api/firma/{kod}/klasor-eslestirme")
+def klasor_eslestirme_kaydet(kod: str, body: dict):
+    klasor = (body.get("klasor") or "").strip()
+    if not klasor:
+        raise HTTPException(400, "Klasor adi gerekli")
+    eslestirme = _read_json(KLASOR_ESLESTIRME_DOSYASI, {})
+    eslestirme[kod] = klasor
+    _write_json(KLASOR_ESLESTIRME_DOSYASI, eslestirme)
+    return {"ok": True, "kod": kod, "klasor": klasor}
+
+
 @app.post("/api/firma/{kod}/mizan/sunucudan")
 def mizan_sunucudan_yukle(kod: str):
     d = firma_dir(kod)
@@ -229,7 +240,7 @@ async def ogren_fis_listesi(kod: str, tip: str, banka_hesap_kodu: str = Form("")
 def firma_durum(kod: str):
     d = firma_dir(kod)
     hes = mizan_hesaplar(d / "mizan.xlsx") if (d / "mizan.xlsx").exists() else []
-    out = {"mizan_hesap": len(hes), "tipler": {}}
+    out = {"mizan_hesap": len(hes), "tipler": {}, "sunucu_klasoru": _firma_klasor_adi(kod)}
     for t in TIPLER:
         kp = d / f"kural_{t}.xlsx"
         k = kural_excel_oku(kp) if kp.exists() else {"hesaplar": [], "talimatlar": []}

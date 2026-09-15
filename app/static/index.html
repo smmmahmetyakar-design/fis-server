@@ -81,6 +81,13 @@
         <span id="mizanPill" class="pill off">mizan yok</span>
       </div>
     </div>
+    <div class="flex" style="margin-top:8px">
+      <div>
+        <label>Sunucu klasörü (/home/ahmet/firmalar altındaki gerçek klasör adı — "Sunucudan Yükle" buradan okur)</label>
+        <input type="text" id="sunucuKlasoru" placeholder="ör. 02_ARC_LTD" style="width:220px">
+        <button class="btn" onclick="klasorEslestirmeKaydet()">Kaydet</button>
+      </div>
+    </div>
     <div class="flex" style="margin-top:12px">
       <div>
         <label>Kural Dosyası (<span id="kuralTip">banka</span>) — SEZGIN gibi</label>
@@ -208,6 +215,7 @@ async function firmaDurum(){
   const mp=$('mizanPill');
   if(d.mizan_hesap){mp.className='pill';mp.textContent=d.mizan_hesap+' hesap';}
   else{mp.className='pill off';mp.textContent='mizan yok';}
+  $('sunucuKlasoru').value=d.sunucu_klasoru||'';
   const t=d.tipler[aktifTip]||{};
   const kp=$('kuralPill');
   if(t.kural_var){kp.className='pill';kp.textContent=t.kural_hesap+' kural + '+(t.ogrenilen||0)+' öğrenilen';}
@@ -253,6 +261,13 @@ async function mizanYukle(){
   await fetch(`/api/firma/${firmaKod}/mizan`,{method:'POST',body:fd});
   $('mizanFile').value='';
   firmaDurum(); loadHesaplar();
+}
+async function klasorEslestirmeKaydet(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const klasor=($('sunucuKlasoru').value||'').trim();
+  if(!klasor){alert('Klasör adı gir (ör. 02_ARC_LTD)');return;}
+  await fetch(`/api/firma/${firmaKod}/klasor-eslestirme`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({klasor})});
+  alert('Kaydedildi: '+klasor);
 }
 async function mizanSunucudanYukle(){
   if(!firmaKod){alert('Önce firma seç');return;}
