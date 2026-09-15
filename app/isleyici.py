@@ -472,9 +472,19 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
     for fn, kod in sorted(dosya_hesap.items()):
         uyarilar.append(f"{fn}: {kod} olarak otomatik tanındı (IBAN/hesap no eşleşmesi)")
     eksik_dosyalar = sorted(fn for fn in dosya_anahtar if fn not in dosya_hesap)
-    if eksik_dosyalar and varsayilan_kullanildi:
-        uyarilar.append("Banka hesabı belirlenemedi (kural/mizan'da net değil), 102.01.001 varsayıldı — "
-                        "isteğe banka_hesap_kodu vererek düzeltebilirsiniz: " + ", ".join(eksik_dosyalar))
+    if eksik_dosyalar:
+        # ÖNEMLİ: bu uyarı sadece "hiçbir banka hesabı tanımlı değil" durumunda
+        # değil, HER durumda verilmeli — aksi halde (ör. TL hesabı zaten
+        # tanımlıyken yeni bir döviz hesabı ilk kez yüklendiğinde) sistem bu
+        # dosyayı sessizce varsayılan (başka bir hesabın) koduna düşürür; çoklu
+        # döviz akışında bu, döviz hesabının kendi bacağının TL hesabıyla AYNI
+        # koda yazılıp fiilen "yok" gibi görünmesine yol açabilir (bkz.
+        # _banka_doviz_isle: iç dönüşümün karşı bacağı da bu koda düşer).
+        uyarilar.append(f"Banka hesabı tanınamadı (IBAN/hesap no daha önce öğrenilmemiş), "
+                        f"{varsayilan_hesap} varsayıldı — bu YANLIŞ olabilir (özellikle farklı "
+                        f"para birimindeki bir hesapsa): dosyayı TEK BAŞINA, 'Banka Hesabı' "
+                        f"kutusuna doğru hesap kodunu elle yazarak bir kez işleyin, böylece "
+                        f"kalıcı öğrenilir: " + ", ".join(eksik_dosyalar))
 
     fisler = []
     fis = fis0
