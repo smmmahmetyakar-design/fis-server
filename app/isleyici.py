@@ -83,14 +83,51 @@ def _sayi(s):
         return None
 
 
+_PARA_BIRIMI_RE = re.compile(r"\b(TRY|TL|USD|EUR|GBP|CHF|JPY)\b", re.IGNORECASE)
+
+
+def _para_birimi_tespit(hucre) -> str:
+    """Bir tutar hücresinin metninden para birimini çıkarır (ör. '-537,50 EUR'
+    -> 'EUR'); bulunamazsa (bankaların çoğu TL'de hiç sütun eklemez) 'TL'
+    varsayılır."""
+    if hucre is None:
+        return "TL"
+    m = _PARA_BIRIMI_RE.search(str(hucre))
+    if not m:
+        return "TL"
+    pb = m.group(1).upper()
+    return "TL" if pb == "TRY" else pb
+
+
+def _tarih_saat_dt(ham):
+    """Akbank CSV'sindeki 'YYYY-MM-DD-HH.MM.SS.mikrosaniye' ham tarih hücresini
+    saniye hassasiyetinde datetime'a çevirir (banka içi döviz dönüşüm
+    çiftlerini eşleştirmek için) — ayrıştıramazsa None döner."""
+    if ham is None:
+        return None
+    s = str(ham).strip()
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})-(\d{2})\.(\d{2})\.(\d{2})", s)
+    if not m:
+        return None
+    y, mo, d, h, mi, se = map(int, m.groups())
+    try:
+        return datetime(y, mo, d, h, mi, se)
+    except Exception:
+        return None
+
+
 # ----------------------------------------------------------------- fiş satırı
-def _sat(fisno, tarih, aciklama, hesap, borc, alacak, evrak_no="", detay="", kaynak="", kaynak_dosya="", iade=False, sayfa=None):
+def _sat(fisno, tarih, aciklama, hesap, borc, alacak, evrak_no="", detay="", kaynak="", kaynak_dosya="", iade=False, sayfa=None,
+          para_birimi="", kur=None, doviz_tutar=None):
     return {
         "fisno": fisno, "fis_tarih": tarih, "fis_aciklama": aciklama,
         "hesap": hesap, "evrak_no": evrak_no, "evrak_tarih": tarih,
         "detay": detay or aciklama, "borc": round(borc, 2), "alacak": round(alacak, 2),
         "belge_turu": "MF", "kaynak": kaynak, "kaynak_dosya": kaynak_dosya, "iade": iade,
         "sayfa": sayfa,  # kaynak PDF'te kaçıncı sayfa (fatura görseli için) — Excel kaynaklıysa None
+        # Döviz cinsinden bir banka hareketi TL karşılığıyla işlendiğinde
+        # (bkz. _banka_doviz_isle) bu üç alan doldurulur; TL işlemlerde boş kalır.
+        "para_birimi": para_birimi, "kur": kur, "doviz_tutar": doviz_tutar,
     }
 
 
@@ -141,8 +178,10 @@ def _tablo_satirlari(hamlar):
                     borc = _sayi(g("borc")) or 0
                     alacak = _sayi(g("alacak")) or 0
                     tutar = borc - alacak
+                    para_birimi = _para_birimi_tespit(g("borc")) or _para_birimi_tespit(g("alacak"))
                 else:
                     tutar = _sayi(g("tutar")) or 0
+                    para_birimi = _para_birimi_tespit(g("tutar"))
                 if not tarih and not acik:
                     continue
                 if tutar == 0:
@@ -151,8 +190,8 @@ def _tablo_satirlari(hamlar):
                     continue
                 if abs(tutar) > _MAKUL_TUTAR_UST_SINIR:
                     continue
-                kayitlar.append({"tarih": tarih, "aciklama": acik, "tutar": tutar,
-                                 "dosya": h.get("dosya", "")})
+                kayitlar.append({"tarih": tarih, "tarih_ham": g("tarih"), "aciklama": acik, "tutar": tutar,
+                                 "para_birimi": para_birimi, "dosya": h.get("dosya", "")})
     return kayitlar
 
 
@@ -231,7 +270,7 @@ def _ham_metin_satirlari(hamlar):
             if ek:
                 acik = re.sub(r"\s+", " ", acik + " " + " ".join(ek)).strip()
             kayitlar.append({"tarih": tarih, "aciklama": acik, "tutar": tutar,
-                             "dosya": h.get("dosya", "")})
+                             "para_birimi": "TL", "dosya": h.get("dosya", "")})
     return kayitlar
 
 
@@ -250,6 +289,113 @@ def _kayitlar(hamlar):
             k = _ham_metin_satirlari([h])
         kayitlar.extend(k)
     return kayitlar
+
+
+# ----------------------------------------------------------------- döviz (banka içi dönüşüm + tek taraflı hareketler)
+# "DÖVİZ SATIM/ALIM" gibi bankanın kendi TL<->döviz dönüşüm işlemi etiketleri
+# (norm() sonrası Türkçe aksan zaten sadeleşmiş olur: DÖVİZ -> DOVIZ).
+_DOVIZ_ICI_RE = re.compile(r"DOVIZ\s*(SATIM|ALIM|ALIS|SATIS)")
+_ESLESME_TOLERANSI_SN = 5  # aynı dönüşümün TL ve döviz bacağı arasında beklenen en fazla zaman farkı
+
+
+def _banka_doviz_isle(kayitlar, uyarilar=None):
+    """Birden fazla para birimindeki banka dosyaları (ör. Akbank TL+USD+EUR+GBP)
+    BİRLİKTE işlendiğinde uygulanan döviz muhasebe yöntemi:
+
+    1) Banka İÇİ dönüşümler (TL<->döviz): TL dosyasındaki ve döviz dosyasındaki
+       "DÖVİZ SATIM/ALIM" satırları aynı saniyeye yakın zaman damgasıyla
+       eşleştirilir. TL bacağı bankanın GERÇEKLEŞEN TL tutarıyla işlenmeye
+       devam eder (TCMB kuru KULLANILMAZ, hesaplama yapılmaz) — döviz bacağı
+       ayrı bir fiş üretmez, sadece TL bacağın Döviz Tutar/Kur/Para Birimi
+       bilgisini doldurmak için kullanılır.
+    2) Tek taraflı döviz hareketleri (banka masrafı, döviz hesabından doğrudan
+       çekiş, yurtdışı müşteri tahsilatı gibi TL karşılığı olmayan satırlar):
+       aynı gün varsa o günün banka-içi dönüşümlerinden (ağırlıklı ortalama,
+       TL tutarına göre ağırlıklandırılır) çıkarılan kur, yoksa o para birimi
+       için en yakın günün kuru ile TL karşılığına çevrilir; orijinal döviz
+       tutarı ve kullanılan kur ayrıca etiketlenir. Referans kur hiç
+       bulunamazsa (o para biriminde hiç banka-içi dönüşüm yoksa) satır YANLIŞ
+       bir TL tutarıyla işlenmez — atlanır ve uyarı listesine düşer.
+
+    TL dışı para birimi hiç yoksa (olağan/çoğunluk durum) bu fonksiyon devre
+    dışı kalır — kayıtlar aynen döner, tek para birimli hiçbir firmayı/akışı
+    etkilemez."""
+    if uyarilar is None:
+        uyarilar = []
+    para_birimleri = {(k.get("para_birimi") or "TL") for k in kayitlar}
+    if para_birimleri <= {"TL"}:
+        return kayitlar
+
+    tl_kayitlar = [k for k in kayitlar if (k.get("para_birimi") or "TL") == "TL"]
+    doviz_kayitlar = [k for k in kayitlar if (k.get("para_birimi") or "TL") != "TL"]
+
+    # 1) banka-içi dönüşüm eşleştirme
+    kullanilan = set()
+    icdonusum_kurlari = {}  # (tarih, para_birimi) -> [(agirlik_tl, kur), ...]
+    for tl_k in tl_kayitlar:
+        if not _DOVIZ_ICI_RE.search(norm(tl_k.get("aciklama", ""))):
+            continue
+        tl_zaman = _tarih_saat_dt(tl_k.get("tarih_ham"))
+        if not tl_zaman:
+            continue
+        en_yakin = None; en_yakin_fark = None
+        for d_k in doviz_kayitlar:
+            if id(d_k) in kullanilan:
+                continue
+            if not _DOVIZ_ICI_RE.search(norm(d_k.get("aciklama", ""))):
+                continue
+            d_zaman = _tarih_saat_dt(d_k.get("tarih_ham"))
+            if not d_zaman:
+                continue
+            fark = abs((tl_zaman - d_zaman).total_seconds())
+            if fark <= _ESLESME_TOLERANSI_SN and (en_yakin_fark is None or fark < en_yakin_fark):
+                en_yakin = d_k; en_yakin_fark = fark
+        if en_yakin is None:
+            continue
+        kullanilan.add(id(en_yakin))
+        doviz_tutar = en_yakin["tutar"]
+        pb = en_yakin.get("para_birimi")
+        if doviz_tutar:
+            kur = round(abs(tl_k["tutar"]) / abs(doviz_tutar), 4)
+            tl_k["kur"] = kur
+            icdonusum_kurlari.setdefault((tl_k.get("tarih"), pb), []).append((abs(tl_k["tutar"]), kur))
+        tl_k["para_birimi"] = pb
+        tl_k["doviz_tutar"] = doviz_tutar
+        tl_k["_karsi_dosya"] = en_yakin.get("dosya", "")
+
+    kalan_doviz = [k for k in doviz_kayitlar if id(k) not in kullanilan]
+
+    # günlük ağırlıklı ortalama kur (TL tutarına göre ağırlıklı)
+    gunluk_kur = {}
+    for (gun, pb), liste in icdonusum_kurlari.items():
+        toplam_agirlik = sum(a for a, _ in liste)
+        if toplam_agirlik:
+            gunluk_kur[(gun, pb)] = sum(a * k for a, k in liste) / toplam_agirlik
+
+    # 2) tek taraflı döviz hareketleri -> TL karşılığına çevir
+    sonuc = list(tl_kayitlar)
+    for k in kalan_doviz:
+        pb = k.get("para_birimi")
+        gun = k.get("tarih")
+        kur = gunluk_kur.get((gun, pb))
+        if kur is None and gun:
+            aday_gunler = sorted({g for (g, p) in gunluk_kur if p == pb and g})
+            if aday_gunler:
+                try:
+                    hedef = datetime.fromisoformat(gun)
+                    en_yakin_gun = min(aday_gunler, key=lambda g: abs((datetime.fromisoformat(g) - hedef).days))
+                    kur = gunluk_kur.get((en_yakin_gun, pb))
+                except Exception:
+                    kur = None
+        if kur:
+            k["doviz_tutar"] = k["tutar"]
+            k["kur"] = round(kur, 4)
+            k["tutar"] = round(k["tutar"] * kur, 2)
+            sonuc.append(k)
+        else:
+            uyarilar.append(f"{k.get('dosya','')}: {k.get('aciklama','')[:40]} ({pb} {k.get('tutar')}) — "
+                            f"bu ay için hiç banka-içi dönüşüm kuru bulunamadı, işlenemedi (elle girilmeli)")
+    return sonuc
 
 
 # ----------------------------------------------------------------- BANKA
@@ -278,6 +424,11 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
             if h.get("ham_metin"):
                 uyarilar.append(f"{h.get('dosya')}: tablo çıkarılamadı, ham metin var — elle düzenleme gerekebilir")
         return [], uyarilar
+
+    # Birden fazla para birimi (ör. Akbank TL+USD+EUR+GBP) birlikte yüklendiyse
+    # döviz muhasebe yöntemini uygula (bkz. _banka_doviz_isle) — tek para
+    # birimliyse (olağan durum) hiçbir şey değişmeden aynı liste döner.
+    kayitlar = _banka_doviz_isle(kayitlar, uyarilar)
 
     # 1) her dosyanın IBAN/hesap no anahtarını çıkar, öğrenilmiş eşleşmeye bak
     dosya_anahtar = {}
@@ -336,21 +487,37 @@ def isle_banka(hamlar, km, fis0, banka_hesap_kodu=""):
             grup_fisno[grup_anahtar] = f"{fis:05d}"
             fis += 1
         fisno = grup_fisno[grup_anahtar]
-        karsi, kaynak = km.eslestir(k["aciklama"])
-        if not karsi:
-            karsi = ""
-            uyarilar.append(f"{k['aciklama'][:30]}: hesap eşleşmedi")
+        karsi_dosya = k.get("_karsi_dosya")
+        if karsi_dosya:
+            # Banka içi TL<->döviz dönüşümünün karşı bacağı: km.eslestir()
+            # açıklama metninden (ör. "DÖVİZ SATIM") hangi para biriminin
+            # hesabı olduğunu ayırt edemez — karşı hesabı doğrudan eşleşen
+            # döviz dosyasının KENDİ banka hesabı olarak al.
+            karsi = dosya_hesap.get(karsi_dosya, varsayilan_hesap)
+            kaynak = "banka"
+        else:
+            karsi, kaynak = km.eslestir(k["aciklama"])
+            if not karsi:
+                karsi = _CARI_BULUNAMADI_HESABI
+                uyarilar.append(f"{k['aciklama'][:30]}: hesap eşleşmedi, {_CARI_BULUNAMADI_HESABI} varsayıldı")
         tutar = abs(k["tutar"])
         # Fiş Açıklama = "BANKA-TARİH" (ör. "YKB-05.04.2026"); Detay Açıklama
         # ise gerçek işlem metni. Tüm bankalarda aynı kural geçerli.
         fis_aciklama = f"{banka_kisa_adi(km.hesap_adi(banka_hesap), banka_hesap)}-{_ddmmyyyy(k['tarih'])}"
         aciklama = k["aciklama"]
+        pb = k.get("para_birimi") or ""
+        kur = k.get("kur")
+        doviz_tutar = k.get("doviz_tutar")
         if k["tutar"] >= 0:
-            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, banka_hesap, tutar, 0, detay=aciklama, kaynak="banka", kaynak_dosya=kd))
-            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, karsi, 0, tutar, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, banka_hesap, tutar, 0, detay=aciklama, kaynak="banka", kaynak_dosya=kd,
+                               para_birimi=pb, kur=kur, doviz_tutar=doviz_tutar))
+            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, karsi, 0, tutar, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd,
+                               para_birimi=pb, kur=kur, doviz_tutar=doviz_tutar))
         else:
-            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, karsi, tutar, 0, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd))
-            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, banka_hesap, 0, tutar, detay=aciklama, kaynak="banka", kaynak_dosya=kd))
+            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, karsi, tutar, 0, detay=aciklama, kaynak=kaynak, kaynak_dosya=kd,
+                               para_birimi=pb, kur=kur, doviz_tutar=doviz_tutar))
+            fisler.append(_sat(fisno, k["tarih"], fis_aciklama, banka_hesap, 0, tutar, detay=aciklama, kaynak="banka", kaynak_dosya=kd,
+                               para_birimi=pb, kur=kur, doviz_tutar=doviz_tutar))
     return fisler, uyarilar
 
 
@@ -1100,7 +1267,8 @@ def fis_xlsx(satirlar):
             r.get("fisno", ""), dt(r.get("fis_tarih", "")), r.get("fis_aciklama", ""),
             r.get("hesap", ""), evno, dt(r.get("evrak_tarih", "")), r.get("detay", ""),
             r.get("borc") or None, r.get("alacak") or None, None,
-            r.get("belge_turu", "MF"), "", "", "",
+            r.get("belge_turu", "MF"), r.get("para_birimi") or "", r.get("kur") or "",
+            r.get("doviz_tutar") if r.get("doviz_tutar") is not None else "",
         ])
     sfill = PatternFill("solid", start_color="FFF3CD")
     for row in ws.iter_rows(min_row=2, max_row=len(satirlar) + 1):

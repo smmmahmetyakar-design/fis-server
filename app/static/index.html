@@ -345,6 +345,7 @@ function render(r){
     const hesapDeger=s.hesap?(s.hesap+' — '+hesapAdi(s.hesap)):'';
     const dikkat=!s.hesap||s.iade;
     const gorselBtn=(s.kaynak_dosya&&s.sayfa)?` <button class="btn btn-gri" title="Fatura görselini aç" style="padding:2px 6px;font-size:12px" onclick="faturaGorselAc('${(s.kaynak_dosya||'').replace(/'/g,"\\'")}',${s.sayfa})">🖼</button>`:'';
+    const dovizEtiket=(s.doviz_tutar!=null&&s.doviz_tutar!==''&&s.para_birimi)?` <span class="kaynak" style="background:#e3f2fd;color:#0d47a1" title="Döviz tutarı ve kullanılan kur">💱 ${nf(Math.abs(s.doviz_tutar))} ${s.para_birimi}${s.kur?' @ '+s.kur:''}</span>`:'';
     if(dz){
       return `<tr class="${dikkat?'warn':''}">
         <td><input type="checkbox" ${seciliSatirlar.has(i)?'checked':''} onchange="satirSecToggle(${i},this.checked)"></td>
@@ -354,11 +355,11 @@ function render(r){
         <td class="l"><input list="hesapListe" value="${hesapDeger.replace(/"/g,'&quot;')}" placeholder="kod veya ad yaz…" onchange="editHesap(${i},this.value)" style="width:190px"></td>
         <td><input value="${s.borc||0}" onchange="edit(${i},'borc',this.value)" style="width:80px;text-align:right"></td>
         <td><input value="${s.alacak||0}" onchange="edit(${i},'alacak',this.value)" style="width:80px;text-align:right"></td>
-        <td class="l">${s.iade?'<span class="kaynak" style="background:#ffe0b2;color:#8a5a1a">İADE</span> ':''}<input value="${(s.detay||'').replace(/"/g,'&quot;')}" onchange="edit(${i},'detay',this.value)" style="width:100%;min-width:420px"></td>
+        <td class="l">${s.iade?'<span class="kaynak" style="background:#ffe0b2;color:#8a5a1a">İADE</span> ':''}<input value="${(s.detay||'').replace(/"/g,'&quot;')}" onchange="edit(${i},'detay',this.value)" style="width:100%;min-width:420px">${dovizEtiket}</td>
         <td><button class="btn btn-x" onclick="satirSil(${i})">🗑</button></td>
       </tr>`;
     }
-    return `<tr class="${dikkat?'warn':''}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.evrak_no||''}${gorselBtn}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.iade?'<span class="kaynak" style="background:#ffe0b2;color:#8a5a1a">İADE</span> ':''}${s.detay||''}</td></tr>`;
+    return `<tr class="${dikkat?'warn':''}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.evrak_no||''}${gorselBtn}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.iade?'<span class="kaynak" style="background:#ffe0b2;color:#8a5a1a">İADE</span> ':''}${s.detay||''}${dovizEtiket}</td></tr>`;
   }).join('');
   h+=`</tbody><tfoot><tr class="tot"><td colspan="${dz?5:4}" class="l">TOPLAM (tümü)</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';
