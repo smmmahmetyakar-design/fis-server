@@ -52,7 +52,7 @@ def _tarih_iso(s):
     # "20.08.2026 13:24" gibi tarih+saat birleşik hücrelerde (ör. Denizbank
     # Excel ekstresi) saat kısmını at, sadece tarihi ayrıştır.
     s = re.sub(r"\s+\d{1,2}:\d{2}(:\d{2})?\s*$", "", s)
-    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%y"):
+    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%y", "%d/%m/%y"):
         try:
             d = datetime.strptime(s, fmt)
             return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
