@@ -20,7 +20,7 @@ def _tarih_iso(s):
     if isinstance(s, datetime):
         return f"{s.year:04d}-{s.month:02d}-{s.day:02d}"
     s = str(s).strip()
-    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%y"):
+    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%y", "%d/%m/%y"):
         try:
             d = datetime.strptime(s, fmt)
             return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
