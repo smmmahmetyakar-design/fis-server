@@ -778,12 +778,39 @@ class KuralMotoru:
             sonuc["kaynak"] = "gecmis_fatura"
         return sonuc
 
+    def _mizan_isim_eslestir(self, aciklama: str):
+        """
+        Mizan hesap adlarıyla kelime bazlı kesin eşleştirme.
+        Açıklamadaki (LTD/ŞTİ/SAN/TİC vb. ekler hariç) TÜM anlamlı kelimeler
+        hesap adında geçmeli. En az 2 anlamlı kelime şart (tek kelimeyle
+        yanlış hesaba düşme riski yüksek). Birden fazla aday eşit ölçüde
+        uyuyorsa belirsiz kabul edilip boş döner (yanlış hesaba düşmesin).
+        """
+        qwords = kelimeler(aciklama)
+        if len(qwords) < 2:
+            return ""
+        adaylar = []
+        for kod, ad in self.hesaplar:
+            adwords = kelimeler(ad)
+            if qwords <= adwords:
+                adaylar.append((kod, len(adwords)))
+        if not adaylar:
+            return ""
+        adaylar.sort(key=lambda x: x[1])
+        if len(adaylar) > 1 and adaylar[0][1] == adaylar[1][1]:
+            return ""
+        return adaylar[0][0]
+
     def eslestir(self, aciklama: str):
         """
-        Hesap kodu eşleştirme. SADECE kesin eşleşmeler:
+        Hesap kodu eşleştirme:
         1) Kullanıcı öğretmişse (öğrenme) — TAM eşleşme
         2) Geçmiş fişlerde birebir geçiyorsa — TAM eşleşme
-        Bulanık/tahminli eşleşme YOK. Bulunamazsa boş döner → 198.01.001 fallback.
+        3) Mizan hesap adında açıklamanın TÜM anlamlı kelimeleri geçiyorsa
+           (LTD/ŞTİ/SAN/TİC gibi ekler hariç) — tek/en yakın aday kabul
+           edilir; birden fazla eşit aday varsa belirsiz sayılıp atlanır.
+        Tahmin/yarı-eşleşme YOK — üstteki 3 kesin kural dışında bulunamazsa
+        boş döner → 198.01.001 fallback.
         """
         nq = norm(aciklama)
         if not nq:
@@ -815,7 +842,13 @@ class KuralMotoru:
                 r = _mizan_kontrol(kod, "gecmis")
                 if r[0]: return r
 
-        # 3) Hiçbir kesin eşleşme yok → boş döner → 198.01.001
+        # 3) Mizan hesap adıyla kelime eşleşmesi — TÜM anlamlı kelimeler
+        #    (LTD/ŞTİ/SAN/TİC gibi ekler hariç) hesap adında geçmeli.
+        kod = self._mizan_isim_eslestir(aciklama)
+        if kod:
+            return kod, "mizan"
+
+        # 4) Hiçbir kesin eşleşme yok → boş döner → 198.01.001
         return "", ""
 
     def ogret(self, aciklama: str, kod: str):
