@@ -1,0 +1,12 @@
+services:
+  fis:
+    build: .
+    container_name: fis-otomasyon
+    restart: unless-stopped
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./data:/data
+    environment:
+      - FIS_DATA=/data
+    mem_limit: 1g
