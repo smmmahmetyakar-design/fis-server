@@ -569,9 +569,7 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                         sut["fatura_no"] = j
                     elif c == "FATURA TARIHI" or ("FATURA" in c and "TARIH" in c):
                         sut["tarih"] = j
-                    elif c in ("GONDERICI ADI", "ALICI ADI", "GONDERICI UNVAN", "ALICI UNVAN", "UNVAN", "GONDEREN ADI", "GONDEREN UNVAN", "SATICI ADI", "SATICI UNVAN", "SATICI UNVANI", "TEDARIKCI ADI", "TEDARIKCI UNVAN", "MUSTERI ADI", "MUSTERI UNVAN"):
-                        sut["cari_ad"] = j
-                    elif c == "ACIKLAMA" and "cari_ad" not in sut:
+                    elif c in ("GONDERICI ADI", "ALICI ADI", "ACIKLAMA"):
                         sut["cari_ad"] = j
                     elif c == "SENARYO":
                         sut["senaryo"] = j
