@@ -906,6 +906,293 @@ def _ham_metin_faturalar(hamlar, yon="alis"):
     return out
 
 
+# ------------------------------------------------------- PDF tekil e-Fatura (gerçek fatura PDF'i)
+# eLogo entegratör Excel listesi yoksa ve dosya market-fişi FOTOĞRAFI değil,
+# doğrudan bir e-Fatura/e-Arşiv PDF'iyse burası devreye girer. Her tedarikçi
+# kendi şablonunu kullandığından ürün/hizmet kalem tablosu yerine TÜM
+# şablonlarda ortak üst bilgi alanları hedeflenir: Fatura No/ID, Tarih,
+# "Mal/Hizmet Toplam Tutarı", "Hesaplanan KDV(...)", "Ödenecek Tutar" /
+# "Vergiler Dahil Toplam Tutar". Bu alanlar öncelikle sayfa sonundaki özet
+# TABLOSUNDAN (pdfplumber tablo çıkarımı), yoksa ham metinden regex ile okunur.
+# (Kaynak: GitHub'ın daha önce ayrı geliştirilen fatura modülünden — gerçek
+# tedarikçi PDF şablonlarıyla doğrulanmış — bu sunucudaki mizan-tabanlı hesap
+# eşleştirme mantığına uyacak şekilde uyarlanmıştır.)
+_PDF_FATURA_ID_RE = re.compile(r"Fatura\s*ID\s*:?\s*([A-Za-z0-9]+)", re.IGNORECASE)
+_PDF_FATURA_NO_RE = re.compile(r"Fatura\s*(?:No|Numaras[ıi])\s*:?\s*([A-Za-z0-9\-]+)", re.IGNORECASE)
+_PDF_FATURA_TARIHI_RE = re.compile(r"Fatura\s*Tarih[i]?\s*:?\s*(\d{1,2})[\s./-]+(\d{1,2})[\s./-]+(\d{2,4})", re.IGNORECASE)
+_PDF_TARIH_FALLBACK_RE = re.compile(r"(?:^|\n)\s*Tarih\s*:?\s*(\d{1,2})[\s./-]+(\d{1,2})[\s./-]+(\d{2,4})", re.IGNORECASE | re.MULTILINE)
+_PDF_TARIH_ANY_RE = re.compile(r"\b(\d{1,2})[.\-](\d{1,2})[.\-](\d{4})\b")
+_PDF_IADE_RE = re.compile(r"Fatura\s*Tipi\s*:?\s*IADE", re.IGNORECASE)
+_PDF_ODENECEK_RE = re.compile(r"(?:ÖDENECEK\s+(?:TUTAR|TOPLAM)|Ödenecek\s+Tutar)\s*:?\s*([\d.,]+)", re.IGNORECASE)
+_PDF_MAL_HIZMET_RE = re.compile(r"Mal\s*/?\s*Hizmet\s*Toplam\s*Tutar[ıi]\s*:?\s*([\d.,]+)\s*(?:TL|TRY)?", re.IGNORECASE)
+_PDF_HESAPLANAN_KDV_METIN_RE = re.compile(r"Hesaplanan\s+KDV[^(%\n]*[(%][^)]*?(\d+)[^)]*\)?\s*:?\s*([\d.,]+)\s*(?:TL|TRY)", re.IGNORECASE)
+_PDF_KDV_ORAN_RE = re.compile(r"%\s*(\d+)")
+_PDF_UNVAN_RE = re.compile(r"(ŞİRKETİ|SIRKETI|A\.\Ş\.|A\.S\.|LTD\.|ŞTİ\.|STI\.|ANONIM)", re.IGNORECASE)
+_PDF_GONDERICI_DUR_RE = re.compile(
+    r"VKN|TCKN|Vergi\s*Dairesi|Vergi\s*No|Tel:|Faks|Web\s*Sitesi|E-Posta|E-posta|"
+    r"Mah\.|Mahallesi|\bMh\.|Sokak|Sok\.|\bSk\.|Cadde|Cad\.|\bCd\.|No\s*:\s*\d", re.IGNORECASE)
+_PDF_METADATA_ALAN_RE = re.compile(r"Özelleştirme|Senaryo|Fatura\s*ID|Fatura\s*Tarih|Fatura\s*Tipi", re.IGNORECASE)
+_PDF_TUTAR_HUCRE_RE = re.compile(r"^[\d.,]+\s*(?:TL|TRY)?$")
+_PDF_SAYIN_ETIKET_RE = re.compile(r"^\s*(?:SAY[İI]N|AL[İI]C[İI])\s*:?\s*(.*)$", re.IGNORECASE)
+_PDF_VERGI_SATIRI_RE = re.compile(
+    r"^(.{3,60}?)\s*%\s*(\d+)\s*\(Matrah\w*\s*:?\s*([\d.,]+)\s*(?:TRY|TL)?\s*\)\s*([\d.,]+)\s*$",
+    re.IGNORECASE | re.MULTILINE)
+
+
+def _pdf_alici_adi_bul(metin: str) -> str:
+    """SATIŞ faturasında 'SAYIN'/'ALICI' etiketinin altındaki (veya aynı
+    satırındaki) alıcı unvanını çıkarır."""
+    satirlar_all = [s.strip() for s in metin.splitlines()]
+    for i, s in enumerate(satirlar_all):
+        m = _PDF_SAYIN_ETIKET_RE.match(s)
+        if not m:
+            continue
+        aday = []
+        inline = m.group(1).strip()
+        if inline:
+            aday.append(inline)
+        for s2 in satirlar_all[i + 1:i + 12]:
+            if len(aday) >= 2:
+                break
+            if not s2 or len(s2) < 3:
+                continue
+            if _PDF_GONDERICI_DUR_RE.search(s2):
+                break
+            aday.append(s2)
+        if aday:
+            return " ".join(aday)
+    return ""
+
+
+def _pdf_tekil_fatura_ayikla(ham, yon="alis"):
+    """Tek bir PDF sayfasını (=tek fatura, tedarikçiye özgü şablon) ayrıştırır.
+    Döndürür: {tarih, gonderici, kalemler:[(oran,matrah,kdv)], ek_vergiler,
+    fatura_no, iade, dosya} ya da None (ayrıştırılamadıysa)."""
+    metin = ham.get("ham_metin", "")
+    if not metin.strip() or len(metin) < 150:
+        return None
+
+    for tablo in ham.get("tablolar", []):
+        for row in tablo[:3]:
+            nrow = [norm(str(c)) for c in row]
+            if any("GONDERICI ADI" in c for c in nrow) and any("ALICI ADI" in c for c in nrow):
+                return None
+
+    m = _PDF_FATURA_ID_RE.search(metin) or _PDF_FATURA_NO_RE.search(metin)
+    fatura_no = m.group(1).strip() if m else ""
+
+    m = _PDF_FATURA_TARIHI_RE.search(metin) or _PDF_TARIH_FALLBACK_RE.search(metin)
+    d = mo = y = None
+    if m:
+        d, mo, y = m.groups()
+    else:
+        satirlar_ = metin.splitlines()
+        for i, s in enumerate(satirlar_):
+            if re.search(r"Fatura\s*Tarih", s, re.IGNORECASE):
+                for s2 in satirlar_[i:i + 3]:
+                    m2 = _PDF_TARIH_ANY_RE.search(s2)
+                    if m2:
+                        d, mo, y = m2.groups()
+                        break
+                break
+    tarih = _tarih_iso(f"{d}.{mo}.{y}") if d else ""
+
+    satirlar_all0 = [s.strip() for s in metin.splitlines()]
+    satirlar = satirlar_all0[1:]
+    gonderici = ""
+    if yon == "satis":
+        gonderici = _pdf_alici_adi_bul(metin)
+    if not gonderici:
+        for s in satirlar_all0[:20]:
+            if not s or s.lower() in ("e-fatura", "e-fatura."):
+                continue
+            if _PDF_SAYIN_ETIKET_RE.match(s):
+                break
+            if _PDF_METADATA_ALAN_RE.search(s):
+                continue
+            if re.match(r"^\s*(BANKA|ŞUBE|SUBE|HESAP|IBAN)\s*:", s, re.IGNORECASE):
+                continue
+            eslesmeler = list(_PDF_UNVAN_RE.finditer(s))
+            if not eslesmeler:
+                continue
+            bitis = eslesmeler[0].end()
+            for sonraki in eslesmeler[1:]:
+                if sonraki.start() - bitis <= 3:
+                    bitis = sonraki.end()
+                else:
+                    break
+            gonderici = s[:bitis].strip()
+            break
+    if not gonderici:
+        aday = []
+        for s in satirlar:
+            if not s or s.lower() in ("e-fatura", "e-fatura."):
+                continue
+            if _PDF_GONDERICI_DUR_RE.search(s):
+                break
+            aday.append(s)
+            if len(aday) >= 2:
+                break
+        gonderici = " ".join(aday)
+        if _PDF_METADATA_ALAN_RE.search(gonderici):
+            gonderici = ""
+
+    iade = bool(_PDF_IADE_RE.search(metin))
+
+    ozet = {}
+    for tablo in ham.get("tablolar", []):
+        for row in tablo:
+            hucreler = [c for c in row if c not in (None, "")]
+            if len(hucreler) < 2:
+                continue
+            son = " ".join(str(hucreler[-1]).split()).lstrip(":").strip()
+            if not _PDF_TUTAR_HUCRE_RE.match(son):
+                continue
+            deger = _sayi(son)
+            if deger is None:
+                continue
+            etiket = " ".join(str(hucreler[-2]).split())
+            ozet[etiket] = deger
+
+    matrah = None
+    kdv_kalemleri = []
+    ek_vergi = 0.0
+    toplam = None
+    for etiket, deger in ozet.items():
+        e = norm(etiket).replace(" ", "")
+        if e.startswith("MALHIZMETTOPLAMTUTARI") or e.startswith("VERGIHARICTUTAR"):
+            matrah = deger
+        elif e == "TOPLAM" and matrah is None:
+            matrah = deger
+        elif e.startswith("HESAPLANANKDV") or (e.startswith("HESAPLANAN") and ("KDV" in e or "KATMADEGER" in e)):
+            rm = _PDF_KDV_ORAN_RE.search(etiket)
+            kdv_kalemleri.append((int(rm.group(1)) if rm else 20, deger))
+        elif "KDV" in e:
+            rm = _PDF_KDV_ORAN_RE.search(etiket)
+            if rm:
+                kdv_kalemleri.append((int(rm.group(1)), deger))
+            else:
+                ek_vergi += deger
+        elif e.startswith("HESAPLANAN"):
+            ek_vergi += deger
+        elif (e.startswith("VERGILERDAHILTOPLAMTUTAR") or e.startswith("ODENECEKTUTAR")
+              or e.startswith("GENELTOPLAM") or e.startswith("FATURATUTARI")):
+            toplam = deger
+
+    if matrah is None:
+        m = _PDF_MAL_HIZMET_RE.search(metin)
+        if m:
+            matrah = _sayi(m.group(1))
+    if not kdv_kalemleri:
+        m = _PDF_HESAPLANAN_KDV_METIN_RE.search(metin)
+        if m:
+            kdv_kalemleri.append((int(m.group(1)), _sayi(m.group(2))))
+    if toplam is None:
+        m = _PDF_ODENECEK_RE.search(metin)
+        if m:
+            toplam = _sayi(m.group(1))
+
+    if matrah is None and not kdv_kalemleri:
+        for lbl, oran_s, matrah_s, tutar_s in _PDF_VERGI_SATIRI_RE.findall(metin):
+            oran_i = int(oran_s)
+            m_i = _sayi(matrah_s)
+            t_i = _sayi(tutar_s) or 0
+            lbl_n = norm(lbl)
+            if "KDV" in lbl_n or "KATMA DEGER" in lbl_n:
+                kdv_kalemleri.append((oran_i, t_i))
+                if m_i and (matrah is None or m_i > matrah):
+                    matrah = m_i
+            else:
+                ek_vergi += t_i
+
+    if matrah is None and toplam is not None:
+        kdv_toplam = sum(t for _, t in kdv_kalemleri)
+        matrah = round(toplam - kdv_toplam - ek_vergi, 2)
+
+    if toplam is not None:
+        kdv_toplam = sum(t for _, t in kdv_kalemleri)
+        fark = round(toplam - ((matrah or 0) + kdv_toplam + ek_vergi), 2)
+        if abs(fark) >= 0.01:
+            if matrah is None:
+                matrah = round(toplam - kdv_toplam - ek_vergi, 2)
+            else:
+                ek_vergi = round(ek_vergi + fark, 2)
+
+    if not (fatura_no or gonderici) or (matrah is None and toplam is None):
+        return None
+
+    if kdv_kalemleri:
+        kalemler = [(oran, matrah if i == 0 else 0, tutar) for i, (oran, tutar) in enumerate(kdv_kalemleri)]
+    elif matrah:
+        kalemler = [(0, matrah, 0)]
+    else:
+        kalemler = []
+    return {
+        "tarih": tarih, "gonderici": gonderici, "kalemler": kalemler,
+        "ek_vergiler": ek_vergi, "fatura_no": fatura_no, "iade": iade,
+        "dosya": ham.get("dosya", ""),
+    }
+
+
+def _pdf_gercek_fatura_ham(hamlar, yon="alis"):
+    """Excel entegratör listesi değil, tek tek fatura PDF'i/görüntüsü olan
+    dosyalar (her SAYFA = bir fatura, tedarikçi başına farklı şablon).
+    belge_oku 'sayfalar' alanı varsa sayfa bazlı işlenir (çok faturalı tek
+    PDF), yoksa dosyanın tamamı tek fatura sayılır (yaygın durum: avatar-tutor
+    her faturayı ayrı dosya olarak yolluyor)."""
+    kayitlar = []
+    for h in hamlar:
+        if h.get("tur") not in ("pdf", "pdf_ocr"):
+            continue
+        sayfalar = h.get("sayfalar") or [{"ham_metin": h.get("ham_metin", ""), "tablolar": h.get("tablolar", [])}]
+        for sayfa_no, sayfa in enumerate(sayfalar, start=1):
+            veri = {"ham_metin": sayfa.get("ham_metin", ""), "tablolar": sayfa.get("tablolar", []),
+                    "dosya": h.get("dosya", "")}
+            k = _pdf_tekil_fatura_ayikla(veri, yon=yon)
+            if k:
+                k["sayfa"] = sayfa_no
+                kayitlar.append(k)
+    return kayitlar
+
+
+def _pdf_gercek_faturalar(hamlar, yon="alis"):
+    """_pdf_gercek_fatura_ham'ın (gonderici/kalemler-tuple) ham çıktısını bu
+    dosyadaki isle_fatura'nın beklediği sözlük şekline (cari_ad/kalemler-dict)
+    çevirir — böylece hesap eşleştirmesi (mizan/geçmiş fiş) hiç değişmeden
+    aynı şekilde çalışır."""
+    ham_kayitlar = _pdf_gercek_fatura_ham(hamlar, yon=yon)
+    out = []
+    for k in ham_kayitlar:
+        cari_ad = (k.get("gonderici") or "").strip()
+        if not cari_ad:
+            continue
+        ham_kalemler = k.get("kalemler") or []
+        ek_vergi = round(k.get("ek_vergiler") or 0, 2)
+        iade = bool(k.get("iade"))
+        if not ham_kalemler and ek_vergi > 0:
+            # KDV kalemi yok, sadece Ek Vergiler (faktoring/BSMV tipik durumu)
+            kalemler = []
+            senaryo = "TEMELFATURA"
+        else:
+            kalemler = [{"oran": oran, "matrah": round(matrah, 2), "kdv": round(kdv, 2)}
+                        for oran, matrah, kdv in ham_kalemler if matrah or kdv]
+            senaryo = ""
+        toplam = round(sum(x["matrah"] + x["kdv"] for x in kalemler) + ek_vergi, 2)
+        out.append({
+            "fatura_no": (k.get("fatura_no") or "").strip(),
+            "tarih": k.get("tarih", ""),
+            "cari_ad": cari_ad,
+            "tur": "IADE" if iade else "SATIS",
+            "senaryo": senaryo,
+            "toplam": toplam,
+            "kalemler": kalemler,
+            "tevkifat": 0.0, "tevkifat_kod": "",
+            "ek_vergi": ek_vergi,
+            "yon": yon, "dosya": k.get("dosya", ""),
+        })
+    return out
+
+
 def isle_fatura(hamlar, km, fis0, yon="alis"):
     """
     Fatura listesi -> muhasebe fişi.
@@ -925,7 +1212,10 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
 
     faturalar = _elogo_fatura_satirlari(hamlar, yon)
     if not faturalar:
-        # eLogo listesi yok — OCR ham metninden perakende/e-fatura fotoğrafı olabilir
+        # eLogo listesi yok — gerçek e-Fatura/e-Arşiv PDF'i olabilir (tek tek fatura)
+        faturalar = _pdf_gercek_faturalar(hamlar, yon)
+    if not faturalar:
+        # PDF de değilse — OCR ham metninden perakende fiş fotoğrafı olabilir
         faturalar = _ham_metin_faturalar(hamlar, yon)
     if not faturalar:
         for h in hamlar:
@@ -942,6 +1232,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
         fatura_no = f["fatura_no"]
         toplam = f["toplam"]
 
+        if f.get("tur") == "IADE":
+            uyarilar.append(f"{cari_ad[:40]} ({fatura_no}): IADE faturasi - borc/alacak yonu kontrol edilmeli")
+
         # FATURA HESAPLARI: firma kuralı yerine geçmiş fişler referans alınır.
         # Aynı cari daha önce hangi 320/120 ve hangi gider/gelir hesabıyla
         # kullanılmışsa onu tercih ederiz. Geçmişte kayıt yoksa varsayılana düşeriz.
@@ -950,6 +1243,15 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
         gider_kod = gecmis_es.get("ana", "")
         cari_kaynak = gecmis_es.get("kaynak", "")
         gecmis_kdv = gecmis_es.get("kdv", [])
+
+        # Geçmiş fişlerde bu cari hiç geçmemişse (yeni tedarikçi/müşteri veya
+        # cari adı ilk kez okunuyor) mizan hesap adlarıyla da dene — bugünkü
+        # eslestir() düzeltmesiyle aynı mekanizma (kurallar.py).
+        if not cari_kod:
+            ek_kod, ek_kaynak = km.eslestir(cari_ad)
+            if ek_kod:
+                cari_kod = ek_kod
+                cari_kaynak = cari_kaynak or ek_kaynak
 
         # varsayılanlar — cari bilinmiyorsa 198.01.001, gider/gelir mizandan bulunur
         vars_cari = "198.01.001"
