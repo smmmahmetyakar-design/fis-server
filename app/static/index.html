@@ -9,16 +9,33 @@
   *{box-sizing:border-box}
   body{margin:0;font-family:"Segoe UI",system-ui,sans-serif;background:var(--bg);color:#222}
   header{background:var(--ana);color:#fff;padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-  header h1{margin:0;font-size:18px}
-  .firma-sel{margin-left:auto;display:flex;gap:8px;align-items:center}
+  header h1{margin:0;font-size:18px;white-space:nowrap}
+  .firma-sel{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   select,input{padding:7px 9px;border:1px solid var(--kenar);border-radius:6px;font-size:14px;font-family:inherit}
   .wrap{max-width:1100px;margin:16px auto;padding:0 16px}
-  .card{background:#fff;border:1px solid #e7e1d5;border-radius:10px;padding:16px 18px;margin-bottom:16px}
+  .card{background:#fff;border:1px solid #e7e1d5;border-radius:10px;padding:16px 18px;margin-bottom:16px;transition:box-shadow .2s}
+  .card:hover{box-shadow:0 2px 12px rgba(0,0,0,.06)}
   .card h2{margin:0 0 12px;font-size:15px;color:var(--ana)}
+  @media(max-width:700px){
+    header{padding:10px 12px;gap:8px}
+    header h1{font-size:15px}
+    .firma-sel select{min-width:140px!important}
+    .wrap{padding:0 8px;margin:8px auto}
+    .card{padding:12px}
+    .tabs{gap:2px}
+    .tab{padding:7px 10px;font-size:12px}
+    table{font-size:11px}
+    th,td{padding:3px 4px}
+    .btn{padding:6px 10px;font-size:12px}
+  }
   .tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
-  .tab{padding:9px 18px;border:1px solid var(--kenar);border-radius:8px 8px 0 0;background:#ece7db;cursor:pointer;font-weight:600;font-size:14px}
+  .tab{padding:9px 18px;border:1px solid var(--kenar);border-radius:8px 8px 0 0;background:#ece7db;cursor:pointer;font-weight:600;font-size:14px;transition:background .15s}
+  .tab:hover{background:#e4dfd3}
   .tab.active{background:#fff;border-bottom-color:#fff;color:var(--ana)}
-  .btn{padding:8px 14px;border:none;border-radius:7px;font-weight:600;cursor:pointer;font-size:14px}
+  .tab.active:hover{background:#fff}
+  .btn{padding:8px 14px;border:none;border-radius:7px;font-weight:600;cursor:pointer;font-size:14px;transition:opacity .15s,transform .1s}
+  .btn:hover{opacity:.88}
+  .btn:active{transform:scale(.97)}
   .btn-ana{background:var(--ana);color:#fff}
   .btn-yesil{background:var(--yesil);color:#fff}
   .btn-gri{background:#e5e0d4;color:#333}
@@ -42,13 +59,33 @@
   .kaynak.excel{background:#c8e0f0;color:#1f4e78}
   .kaynak.tahmin{background:#fff0c8;color:#8a6d1a}
   .kaynak.banka,.kaynak.kdv,.kaynak.cek{background:#e8e8e8;color:#555}
+  .kaynak.fatura{background:#fde0c8;color:#8a4a1a}
   .kaynak.gecmis{background:#e0d4ed;color:#5e3a87}
   .kaynak.gecmis_kayit{background:#f0ebe0;color:#7c6a3d}
   .detay-hucre{max-height:56px;overflow-y:auto;line-height:1.35;white-space:pre-wrap;word-break:break-word}
   td textarea{border:1px solid #cec6b5;border-radius:4px;box-sizing:border-box}
   td input[list="hesapDL"]{border:1px solid #cec6b5;border-radius:4px;padding:3px 5px}
   .uyari{color:#a23b2e;font-size:12px;margin-top:6px}
-  .yukle-kutu{border:2px dashed var(--kenar);border-radius:8px;padding:14px;text-align:center;color:var(--muted);font-size:13px}
+  .yukle-kutu{border:2px dashed var(--kenar);border-radius:8px;padding:14px;text-align:center;color:var(--muted);font-size:13px;transition:border-color .2s,background .2s}
+  .yukle-kutu.dragover{border-color:var(--ana);background:#eef3f8}
+  .overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.35);z-index:9999;justify-content:center;align-items:center}
+  .overlay.show{display:flex}
+  .overlay-box{background:#fff;padding:24px 36px;border-radius:12px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.2)}
+  .overlay-box .spinner{width:36px;height:36px;border:4px solid #e0ddd4;border-top-color:var(--ana);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:8px;color:#fff;font-size:13px;z-index:10000;opacity:0;transition:opacity .3s;pointer-events:none}
+  .toast.show{opacity:1}
+  .toast.ok{background:#27ae60}
+  .toast.err{background:#c0392b}
+  .modal-bg{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.4);z-index:9998;justify-content:center;align-items:center}
+  .modal-bg.show{display:flex}
+  .modal{background:#fff;border-radius:12px;padding:20px 24px;max-width:600px;width:92%;max-height:80vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.25)}
+  .modal h3{margin:0 0 12px;color:var(--ana);font-size:16px}
+  .modal .dosya-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #e7e1d5;border-radius:8px;margin-bottom:8px;cursor:pointer;transition:background .15s,border-color .15s}
+  .modal .dosya-item:hover{background:#f0ece2;border-color:var(--ana)}
+  .modal .dosya-item .firma-ad{font-weight:600;color:#333;flex:1}
+  .modal .dosya-item .meta{font-size:11px;color:var(--muted)}
+  .btn-sunucu{background:#5b7a54;color:#fff;font-size:12px;padding:5px 12px}
 </style>
 </head>
 <body>
@@ -58,6 +95,7 @@
     <label style="color:#fff;margin:0">Firma:</label>
     <select id="firmaSel" style="min-width:220px"><option value="">— firma seç —</option></select>
     <button class="btn btn-gri" onclick="yeniFirma()">+ Yeni</button>
+    <button class="btn btn-x" onclick="firmaSil()" title="Firmayı sil" style="font-size:12px;padding:4px 10px">🗑</button>
   </div>
 </header>
 
@@ -84,6 +122,7 @@
         <label>Mizan (tüm hesaplar)</label>
         <input type="file" id="mizanFile" accept=".xlsx,.xls">
         <button class="btn btn-ana" onclick="mizanYukle()">Yükle</button>
+        <button class="btn btn-sunucu" onclick="sunucudanSec('mizan')" title="Sunucudaki başka firmadan mizan kopyala">📂 Sunucudan</button>
         <span id="mizanPill" class="pill off">mizan yok</span>
       </div>
     </div>
@@ -92,8 +131,20 @@
         <label>Excel Fiş Listesi — <span id="fisListesiTip">seçili sekme için</span> geçmiş fişler & öğrenme kaynağı</label>
         <input type="file" id="fisListesiFile" accept=".xlsx,.xls">
         <button class="btn btn-ana" onclick="fisListesiYukle()">Yükle</button>
+        <button class="btn btn-sunucu" onclick="sunucudanSec('fis-listesi')" title="Sunucudaki başka firmadan fiş listesi kopyala">📂 Sunucudan</button>
         <span id="fisListesiPill" class="pill off">fiş listesi yok</span>
         <div class="hint" style="margin-top:4px">Fiş Aktarım Şablonu formatında (14 sütun) Excel. Bu sekme için geçmiş fişler, son fiş no ve hesap eşleştirmeleri buradan okunur.</div>
+      </div>
+    </div>
+    <div class="flex" style="margin-top:12px">
+      <div>
+        <label>Geçmiş Fiş PDF — fatura eşleştirmesi için yevmiye defteri PDF'i</label>
+        <input type="file" id="gecmisFisPdfFile" accept=".pdf">
+        <button class="btn btn-ana" onclick="gecmisFisPdfYukle()">Yükle</button>
+        <button class="btn btn-sunucu" onclick="sunucudanSec('gecmis-fis-pdf')" title="Sunucudaki başka firmadan PDF kopyala">📂 Sunucudan</button>
+        <span id="gecmisFisPdfPill" class="pill off">PDF yok</span>
+        <button class="btn btn-x" id="gecmisFisPdfSilBtn" onclick="gecmisFisPdfSil()" style="display:none;font-size:11px;padding:2px 8px" title="PDF'i sil">🗑</button>
+        <div class="hint" style="margin-top:4px">Yevmiye defteri PDF formatında. Fatura hesap eşleştirmesi için ek referans kaynağı.</div>
       </div>
     </div>
   </div>
@@ -169,7 +220,8 @@
       <div><label>Başlangıç Fiş No</label><input id="fisBaslangic" type="number" value="0" min="0" style="width:120px"><span id="fisSonNo" class="hint" style="margin-left:8px"></span></div>
       <button class="btn btn-yesil" onclick="fisIsle()" style="align-self:flex-end">⚙ Önizle</button>
       <button class="btn btn-edit" id="fisDuzenleBtn" onclick="fisDuzenleToggle()" style="display:none;align-self:flex-end">✎ Düzenle</button>
-      <button class="btn btn-ana" onclick="fisDisaAktar()" style="align-self:flex-end">⬇ Excel</button>
+      <button class="btn btn-ana" onclick="fisDisaAktar('xlsx')" style="align-self:flex-end">⬇ Excel</button>
+      <button class="btn btn-ana" onclick="fisDisaAktar('xml')" style="background:#2f5d6e;align-self:flex-end">⬇ XML</button>
       <span id="fisDurum" class="hint" style="align-self:flex-end"></span>
     </div>
     <div id="fisOnizle" style="margin-top:12px;overflow-x:auto"></div>
@@ -181,11 +233,31 @@
   </div>
 </div>
 
+<div class="modal-bg" id="sunucuModal" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal">
+    <h3 id="sunucuModalBaslik">Sunucudan Seç</h3>
+    <div id="sunucuModalIcerik" class="hint">Yükleniyor...</div>
+    <div style="text-align:right;margin-top:12px"><button class="btn btn-gri" onclick="$('sunucuModal').classList.remove('show')">Kapat</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="loadingOverlay">
+  <div class="overlay-box">
+    <div class="spinner"></div>
+    <div id="loadingMsg">İşleniyor...</div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
 <script>
 const $=id=>document.getElementById(id);
 let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
 let suzgec='hepsi'; // 'hepsi' | 'eslesmeyen' | 'eslesen'
 let bankaSuzgec='hepsi'; // 'hepsi' | banka hesap kodu (ör. '102.01.004')
+
+function showLoading(msg){$('loadingMsg').textContent=msg||'İşleniyor...';$('loadingOverlay').classList.add('show');}
+function hideLoading(){$('loadingOverlay').classList.remove('show');}
+function toast(msg,ok){const t=$('toast');t.textContent=msg;t.className='toast show '+(ok?'ok':'err');setTimeout(()=>t.classList.remove('show'),3500);}
 
 function sekmeSec(tip){
   aktifTip=tip;
@@ -215,6 +287,22 @@ async function yeniFirma(){
   await loadFirmalar(); $('firmaSel').value=r.kod; firmaKod=r.kod; firmaDurum(); loadHesaplar();
 }
 
+async function firmaSil(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const ad=$('firmaSel').selectedOptions[0]?.textContent||firmaKod;
+  if(!confirm(`"${ad}" firmasını ve TÜM verilerini kalıcı olarak silmek istediğinize emin misiniz?\n\nBu işlem geri alınamaz!`))return;
+  if(!confirm(`Son onay: "${ad}" silinecek. Devam?`))return;
+  try{
+    await fetch(`/api/firma/${firmaKod}`,{method:'DELETE'});
+    firmaKod=''; $('firmaSel').value='';
+    await loadFirmalar();
+    toast(ad+' silindi',true);
+    $('onizle').innerHTML=''; $('belgeListe').innerHTML=''; $('ciktilar').textContent='—';
+    $('mizanPill').className='pill off'; $('mizanPill').textContent='mizan yok';
+    $('fisListesiPill').className='pill off'; $('fisListesiPill').textContent='fiş listesi yok';
+  }catch(e){ toast('Silme hatası: '+e.message,false); }
+}
+
 async function loadHesaplar(){
   try{ hesaplar=(await (await fetch(`/api/firma/${firmaKod}/hesaplar`)).json()).hesaplar; }catch(e){ hesaplar=[]; }
 }
@@ -231,6 +319,10 @@ async function firmaDurum(){
   } else {
     kp.className='pill off'; kp.textContent='fiş listesi yok';
   }
+  // geçmiş fiş PDF durumu
+  const gfp=$('gecmisFisPdfPill'), gfpBtn=$('gecmisFisPdfSilBtn');
+  if(d.gecmis_fis_pdf){ gfp.className='pill'; gfp.textContent='PDF yüklü'; gfpBtn.style.display='inline-block'; }
+  else{ gfp.className='pill off'; gfp.textContent='PDF yok'; gfpBtn.style.display='none'; }
   // belge listesi
   const bl=$('belgeListe');
   if(t.belgeler&&t.belgeler.length){
@@ -282,15 +374,38 @@ async function fisListesiYukle(){
   loadHesaplar();
 }
 
+async function gecmisFisPdfYukle(){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const f=$('gecmisFisPdfFile').files[0]; if(!f){alert('PDF dosya seç');return;}
+  const fd=new FormData(); fd.append('file',f);
+  $('gecmisFisPdfPill').className='pill'; $('gecmisFisPdfPill').textContent='yükleniyor...';
+  try{
+    const r=await (await fetch(`/api/firma/${firmaKod}/gecmis-fis`,{method:'POST',body:fd})).json();
+    if(r.ok){ $('gecmisFisPdfPill').textContent=`${r.satir_sayisi} satır · ${r.fis_sayisi} fiş · son no ${r.son_fis_no}`; $('gecmisFisPdfSilBtn').style.display='inline-block'; }
+    else{ $('gecmisFisPdfPill').className='pill off'; $('gecmisFisPdfPill').textContent='hata'; }
+  }catch(e){ $('gecmisFisPdfPill').className='pill off'; $('gecmisFisPdfPill').textContent='hata: '+e.message; }
+  $('gecmisFisPdfFile').value='';
+}
+async function gecmisFisPdfSil(){
+  if(!confirm('Geçmiş fiş PDF silinsin mi?'))return;
+  await fetch(`/api/firma/${firmaKod}/gecmis-fis`,{method:'DELETE'});
+  $('gecmisFisPdfPill').className='pill off'; $('gecmisFisPdfPill').textContent='PDF yok';
+  $('gecmisFisPdfSilBtn').style.display='none';
+}
+
 async function belgeYukle(){
   if(!firmaKod){alert('Önce firma seç');return;}
   const files=$('belgeFile').files; if(!files.length){alert('Dosya seç');return;}
-  $('durum').textContent='yükleniyor...';
-  for(const f of files){
-    const fd=new FormData(); fd.append('file',f);
-    await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}`,{method:'POST',body:fd});
-  }
-  $('durum').textContent=''; $('belgeFile').value=''; firmaDurum();
+  showLoading(`${files.length} dosya yükleniyor...`);
+  try{
+    for(const f of files){
+      const fd=new FormData(); fd.append('file',f);
+      const r=await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}`,{method:'POST',body:fd});
+      if(!r.ok) toast(`${f.name} yükleme hatası`,false);
+    }
+    toast(`${files.length} dosya yüklendi`,true);
+  }catch(e){ toast('Yükleme hatası: '+e.message,false); }
+  hideLoading(); $('belgeFile').value=''; firmaDurum();
 }
 async function belgeSil(fn){
   if(!confirm('Silinsin mi?\n'+fn))return;
@@ -302,14 +417,20 @@ function nf(n){return (Math.round((n||0)*100)/100).toLocaleString('tr-TR',{minim
 
 async function isle(){
   if(!firmaKod){alert('Önce firma seç');return;}
-  $('durum').textContent='işleniyor (OCR sürebilir)...';
-  const yon = aktifTip==='fatura' ? (document.querySelector('input[name="fatYon"]:checked')||{value:'alis'}).value : 'alis';
-  const r=await (await fetch(`/api/firma/${firmaKod}/isle/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,yon})})).json();
-  $('durum').textContent='';
-  satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false; suzgec='hepsi'; bankaSuzgec='hepsi';
-  $('duzenleBtn').style.display=satirlar.length?'inline-block':'none';
-  render(r);
+  showLoading('İşleniyor (OCR sürebilir)...');
+  $('durum').textContent='işleniyor...';
+  try{
+    const yon = aktifTip==='fatura' ? (document.querySelector('input[name="fatYon"]:checked')||{value:'alis'}).value : 'alis';
+    const resp=await fetch(`/api/firma/${firmaKod}/isle/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,yon})});
+    if(!resp.ok){ const e=await resp.text(); toast('İşleme hatası: '+e,false); hideLoading(); $('durum').textContent=''; return; }
+    const r=await resp.json();
+    satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false; suzgec='hepsi'; bankaSuzgec='hepsi';
+    $('duzenleBtn').style.display=satirlar.length?'inline-block':'none';
+    render(r);
+    toast(`${r.yeni_satir_sayisi||satirlar.length} satır üretildi`,true);
+  }catch(e){ toast('Bağlantı hatası: '+e.message,false); }
+  hideLoading(); $('durum').textContent='';
 }
 function totals(){
   const b=satirlar.reduce((a,s)=>a+(parseFloat(s.borc)||0),0);
@@ -485,10 +606,14 @@ function duzenleToggle(){
 async function disaAktar(format){
   if(!satirlar.length){alert('Önce İşle');return;}
   $('durum').textContent=format+' hazırlanıyor...';
-  const r=await fetch(`/api/firma/${firmaKod}/export?format=${format}`,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,satirlar,donem:''})});
-  const blob=await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-  a.download=`FIS_${aktifTip}.${format}`; a.click();
+  try{
+    const r=await fetch(`/api/firma/${firmaKod}/export?format=${format}`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,satirlar,donem:''})});
+    if(!r.ok){ toast('Export hatası: '+(await r.text()),false); $('durum').textContent=''; return; }
+    const blob=await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download=`FIS_${aktifTip}.${format}`; a.click();
+    toast(format.toUpperCase()+' indirildi',true);
+  }catch(e){ toast('Bağlantı hatası: '+e.message,false); }
   $('durum').textContent=''; loadCiktilar();
 }
 
@@ -634,11 +759,17 @@ async function fisIsle(){
   const body={firma_kod:firmaKod, kalemler:fisKalemler,
               karsi_hesap:karsi, fis_baslangic:parseInt($('fisBaslangic').value)||0};
   $('fisDurum').textContent='hazırlanıyor...';
-  const r=await (await fetch(`/api/firma/${firmaKod}/isle-fis`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
-  $('fisDurum').textContent='';
-  fisOnizleSatir=r.satirlar.map(s=>({...s})); fisDuzenleMod=false;
-  $('fisDuzenleBtn').style.display=fisOnizleSatir.length?'inline-block':'none';
-  fisOnizleRender(r);
+  showLoading('Fiş üretiliyor...');
+  try{
+    const resp=await fetch(`/api/firma/${firmaKod}/isle-fis`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!resp.ok){ toast('İşleme hatası: '+(await resp.text()),false); hideLoading(); $('fisDurum').textContent=''; return; }
+    const r=await resp.json();
+    fisOnizleSatir=r.satirlar.map(s=>({...s})); fisDuzenleMod=false;
+    $('fisDuzenleBtn').style.display=fisOnizleSatir.length?'inline-block':'none';
+    fisOnizleRender(r);
+    toast(`${fisOnizleSatir.length} satır üretildi`,true);
+  }catch(e){ toast('Bağlantı hatası: '+e.message,false); }
+  hideLoading(); $('fisDurum').textContent='';
 }
 
 function fisOnizleRender(r){
@@ -680,14 +811,78 @@ function fisDuzenleToggle(){
   fisOnizleRender();
 }
 
-async function fisDisaAktar(){
+async function fisDisaAktar(format){
+  format=format||'xlsx';
   if(!fisOnizleSatir.length){alert('Önce Önizle');return;}
-  $('fisDurum').textContent='hazırlanıyor...';
-  const r=await fetch(`/api/firma/${firmaKod}/export?format=xlsx`,{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({firma_kod:firmaKod,tip:'fis',satirlar:fisOnizleSatir,donem:''})});
-  const blob=await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-  a.download=`FIS_${new Date().toISOString().slice(0,10)}.xlsx`; a.click();
+  $('fisDurum').textContent=format+' hazırlanıyor...';
+  try{
+    const r=await fetch(`/api/firma/${firmaKod}/export?format=${format}`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({firma_kod:firmaKod,tip:'fis',satirlar:fisOnizleSatir,donem:''})});
+    if(!r.ok){ const e=await r.text(); alert('Hata: '+e); $('fisDurum').textContent=''; return; }
+    const blob=await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download=`FIS_${new Date().toISOString().slice(0,10)}.${format}`; a.click();
+  }catch(e){ alert('Bağlantı hatası: '+e.message); }
   $('fisDurum').textContent=''; loadCiktilar();
+}
+
+// =================== SUNUCUDAN EKLE ===================
+async function sunucudanSec(tip){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const basliklar={'mizan':'Sunucudan Mizan Seç','fis-listesi':'Sunucudan Fiş Listesi Seç','gecmis-fis-pdf':'Sunucudan Geçmiş Fiş PDF Seç'};
+  $('sunucuModalBaslik').textContent=basliklar[tip]||'Sunucudan Seç';
+  $('sunucuModalIcerik').innerHTML='<div class="hint">Yükleniyor...</div>';
+  $('sunucuModal').classList.add('show');
+  try{
+    const r=await fetch(`/api/sunucu-dosyalar?tip=${tip}`);
+    const liste=await r.json();
+    // aktif firmayı çıkar
+    const filtreli=liste.filter(f=>f.firma_kod!==firmaKod);
+    if(!filtreli.length){
+      $('sunucuModalIcerik').innerHTML='<div class="hint" style="padding:20px;text-align:center">Sunucuda başka firmada bu dosya bulunamadı.</div>';
+      return;
+    }
+    let html='';
+    filtreli.forEach(f=>{
+      const tarih=f.tarih?(new Date(f.tarih)).toLocaleDateString('tr-TR'):'';
+      const tipStr=f.tip?` (${f.tip})`:'';
+      html+=`<div class="dosya-item" onclick="sunucudanKopyala('${tip}','${f.firma_kod}'${f.tip?",'"+f.tip+"'":''})">
+        <div class="firma-ad">${f.firma_ad}${tipStr}</div>
+        <div class="meta">${f.dosya} · ${f.boyut_kb} KB · ${tarih}</div>
+      </div>`;
+    });
+    $('sunucuModalIcerik').innerHTML=html;
+  }catch(e){
+    $('sunucuModalIcerik').innerHTML='<div class="hint" style="color:#c0392b">Hata: '+e.message+'</div>';
+  }
+}
+
+async function sunucudanKopyala(tip, kaynakFirma, kaynakTip){
+  $('sunucuModal').classList.remove('show');
+  showLoading('Sunucudan kopyalanıyor...');
+  try{
+    const body={tip, kaynak_firma:kaynakFirma};
+    if(kaynakTip) body.kaynak_tip=kaynakTip;
+    const r=await fetch(`/api/firma/${firmaKod}/sunucudan-kopyala`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!r.ok){ const e=await r.text(); toast('Kopyalama hatası: '+e,false); hideLoading(); return; }
+    const sonuc=await r.json();
+    let msg='Kopyalandı';
+    if(sonuc.hesap_sayisi) msg+=` · ${sonuc.hesap_sayisi} hesap`;
+    if(sonuc.satir_sayisi) msg+=` · ${sonuc.satir_sayisi} satır`;
+    toast(msg,true);
+    firmaDurum(); loadHesaplar();
+  }catch(e){ toast('Bağlantı hatası: '+e.message,false); }
+  hideLoading();
+}
+
+// Drag & Drop desteği
+const yukleKutu=document.querySelector('.yukle-kutu');
+if(yukleKutu){
+  yukleKutu.addEventListener('dragover',e=>{e.preventDefault();yukleKutu.classList.add('dragover');});
+  yukleKutu.addEventListener('dragleave',()=>yukleKutu.classList.remove('dragover'));
+  yukleKutu.addEventListener('drop',e=>{
+    e.preventDefault(); yukleKutu.classList.remove('dragover');
+    if(e.dataTransfer.files.length){ $('belgeFile').files=e.dataTransfer.files; belgeYukle(); }
+  });
 }
 
 loadFirmalar();

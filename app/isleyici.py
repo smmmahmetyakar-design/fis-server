@@ -569,9 +569,15 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                         sut["fatura_no"] = j
                     elif c == "FATURA TARIHI" or ("FATURA" in c and "TARIH" in c):
                         sut["tarih"] = j
-                    elif c in ("GONDERICI ADI", "ALICI ADI", "GONDERICI UNVAN", "ALICI UNVAN", "UNVAN", "GONDEREN ADI", "GONDEREN UNVAN", "SATICI ADI", "SATICI UNVAN", "SATICI UNVANI", "TEDARIKCI ADI", "TEDARIKCI UNVAN", "MUSTERI ADI", "MUSTERI UNVAN"):
+                    elif c in ("GONDERICI ADI", "ALICI ADI", "GONDERICI UNVAN", "ALICI UNVAN",
+                                "UNVAN", "GONDEREN ADI", "GONDEREN UNVAN",
+                                "SATICI ADI", "SATICI UNVAN", "SATICI UNVANI",
+                                "TEDARIKCI ADI", "TEDARIKCI UNVAN",
+                                "MUSTERI ADI", "MUSTERI UNVAN"):
                         sut["cari_ad"] = j
                     elif c == "ACIKLAMA" and "cari_ad" not in sut:
+                        # AÇIKLAMA sütunu sadece başka cari adı sütunu yoksa fallback olarak kullanılır.
+                        # GİB formatında bu sütun yazıyla tutarı içerir (örn. "Yalnız …TL")
                         sut["cari_ad"] = j
                     elif c == "SENARYO":
                         sut["senaryo"] = j
@@ -627,8 +633,12 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                 if not fno or not str(fno).strip():
                     continue
                 cari = str(g(row, "cari_ad") or "").strip()
+                # "Yalnız ... TL" gibi yazıyla tutar içeren açıklama cari ad değil
+                if cari and re.match(r"(?i)yaln[ıi]z\s", cari):
+                    cari = ""
                 if not cari:
-                    continue
+                    # cari adı boşsa fatura_no kullan (en azından bir referans olsun)
+                    cari = str(fno).strip()
                 # kalemler: sıfır olmayan her KDV oranı = bir kalem
                 kalemler = []
                 for oran, mat_k, kdv_k in [
