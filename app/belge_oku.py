@@ -17,7 +17,12 @@ def _ext(name: str) -> str:
 
 def excel_oku(path: Path):
     import openpyxl
-    wb = openpyxl.load_workbook(path, data_only=True)
+    # openpyxl dosya YOLUNDAKİ uzantıya bakar: '.xls' uzantılı ama içeriği
+    # gerçekte xlsx (ZIP) olan dosyaları reddeder. İçeriği BytesIO ile verince
+    # uzantıdan bağımsız, doğrudan içeriğe göre okur.
+    with open(path, "rb") as f:
+        raw = f.read()
+    wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
     tablolar = []
     for sn in wb.sheetnames:
         ws = wb[sn]
@@ -129,15 +134,98 @@ def _ocr_lang():
     return "eng"
 
 
+def html_tablo_oku(path: Path):
+    """Logo/e-Arşiv bazen '.xls' adıyla aslında HTML tablo üretir."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    metin = None
+    for enc in ("utf-8", "cp1254", "latin-1"):
+        try:
+            metin = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if metin is None:
+        metin = raw.decode("utf-8", "replace")
+    tablolar = []
+    try:  # varsa lxml/bs4 ile
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(metin, "html.parser")
+        for tbl in soup.find_all("table"):
+            satirlar = []
+            for tr in tbl.find_all("tr"):
+                hucreler = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
+                if any(h for h in hucreler):
+                    satirlar.append(hucreler)
+            if satirlar:
+                tablolar.append(satirlar)
+    except Exception:
+        import re
+        for tbl in re.findall(r"<table.*?</table>", metin, re.I | re.S):
+            satirlar = []
+            for tr in re.findall(r"<tr.*?</tr>", tbl, re.I | re.S):
+                hucreler = [re.sub(r"<[^>]+>", "", c).strip()
+                            for c in re.findall(r"<t[dh].*?</t[dh]>", tr, re.I | re.S)]
+                if any(h for h in hucreler):
+                    satirlar.append(hucreler)
+            if satirlar:
+                tablolar.append(satirlar)
+    return {"tur": "excel", "tablolar": tablolar, "ham_metin": "",
+            "uyari": "" if tablolar else "HTML tablo bulunamadı"}
+
+
+def _magic_tur(path: Path) -> str:
+    """Dosyanın GERÇEK türünü ilk baytlarından anlar (uzantıdan bağımsız)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(512)
+    except OSError:
+        return ""
+    if head[:4] == b"PK\x03\x04":
+        return "xlsx"                     # ZIP -> modern xlsx/xlsm
+    if head[:4] == b"\xd0\xcf\x11\xe0":
+        return "xls"                      # OLE2 -> eski xls
+    if head[:5] == b"%PDF-":
+        return "pdf"
+    if (head[:8] == b"\x89PNG\r\n\x1a\n" or head[:3] == b"\xff\xd8\xff"
+            or head[:6] in (b"GIF87a", b"GIF89a") or head[:4] == b"RIFF"
+            or head[:2] in (b"II", b"MM") and b"\x2a" in head[:4]):
+        return "resim"
+    dusuk = head.lstrip().lower()
+    if dusuk[:5] == b"<html" or dusuk[:6] == b"<table" or dusuk[:5] == b"<?xml" \
+            or dusuk[:9] == b"<!doctype":
+        return "html"
+    return ""
+
+
 def belge_oku(path: Path, orijinal_ad: str = ""):
     ext = _ext(orijinal_ad or path.name)
-    if ext == ".xls":
+    tur = _magic_tur(path)              # önce GERÇEK içerik türü
+
+    # İçerik türü kesinse ona güven (uzantı yalan söyleyebilir: Logo .xls der ama xlsx yazar)
+    if tur == "xlsx":
+        return excel_oku(path)
+    if tur == "xls":
         return xls_oku(path)
+    if tur == "pdf":
+        return pdf_oku(path)
+    if tur == "resim":
+        return resim_oku(path)
+    if tur == "html":
+        return html_tablo_oku(path)
+
+    # İçerikten anlaşılmadıysa uzantıya düş
     if ext in (".xlsx", ".xlsm"):
         return excel_oku(path)
+    if ext == ".xls":
+        # uzantı .xls ama içerik OLE2 değil: yine de xlsx dene, olmazsa HTML
+        try:
+            return excel_oku(path)
+        except Exception:
+            return html_tablo_oku(path)
     if ext == ".pdf":
         return pdf_oku(path)
     if ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"):
         return resim_oku(path)
     return {"tur": "bilinmeyen", "tablolar": [], "ham_metin": "",
-            "uyari": f"Desteklenmeyen dosya türü: {ext}"}
+            "uyari": f"Dosya türü tanınamadı (uzantı: {ext or 'yok'})"}
