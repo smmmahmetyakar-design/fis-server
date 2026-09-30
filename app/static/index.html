@@ -102,18 +102,13 @@
 <div class="wrap">
   <div class="tabs">
     <div class="tab active" data-tip="banka" onclick="sekmeSec('banka')">🏦 Banka Dökümü</div>
-    <div class="tab" data-tip="fatura" onclick="sekmeSec('fatura')">🧾 Fatura</div>
+    <div class="tab" data-tip="fatura_alis" onclick="sekmeSec('fatura_alis')">🧾 Alış Fatura</div>
+    <div class="tab" data-tip="fatura_satis" onclick="sekmeSec('fatura_satis')">📄 Satış Fatura</div>
     <div class="tab" data-tip="cek" onclick="sekmeSec('cek')">📃 Çek Listesi</div>
     <div class="tab" data-tip="fis" onclick="sekmeSec('fis')">📝 Fiş</div>
   </div>
 
-  <div id="faturaYon" class="card" style="display:none;padding:10px 18px">
-    <div class="flex" style="align-items:center">
-      <label style="margin:0;font-weight:600;color:#333">Fatura Yönü:</label>
-      <label style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:normal;color:#333"><input type="radio" name="fatYon" value="alis" checked style="width:auto"> Alış (gider + 191 borç / 320 cari alacak)</label>
-      <label style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:normal;color:#333"><input type="radio" name="fatYon" value="satis" style="width:auto"> Satış (120 cari borç / gelir + 391 alacak)</label>
-    </div>
-  </div>
+  <!-- faturaYon radio kaldırıldı — alış/satış artık ayrı sekmeler -->
 
   <div class="card">
     <h2>1) Mizan & Fiş Listesi</h2>
@@ -254,6 +249,9 @@ const $=id=>document.getElementById(id);
 let firmaKod='', aktifTip='banka', satirlar=[], duzenleMod=false, hesaplar=[];
 let suzgec='hepsi'; // 'hepsi' | 'eslesmeyen' | 'eslesen'
 let bankaSuzgec='hepsi'; // 'hepsi' | banka hesap kodu (ör. '102.01.004')
+// fatura_alis/fatura_satis → backend tip "fatura"
+function apiTip(){ return aktifTip.startsWith('fatura') ? 'fatura' : aktifTip; }
+function aktifYon(){ return aktifTip==='fatura_satis' ? 'satis' : 'alis'; }
 
 function showLoading(msg){$('loadingMsg').textContent=msg||'İşleniyor...';$('loadingOverlay').classList.add('show');}
 function hideLoading(){$('loadingOverlay').classList.remove('show');}
@@ -262,9 +260,10 @@ function toast(msg,ok){const t=$('toast');t.textContent=msg;t.className='toast s
 function sekmeSec(tip){
   aktifTip=tip;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tip===tip));
-  $('belgeTip').textContent=tip;
-  $('fisListesiTip').textContent=(tip==='banka'?'banka':tip==='fatura'?'fatura':tip==='cek'?'çek':'fiş');
-  $('faturaYon').style.display = (tip==='fatura') ? 'block' : 'none';
+  // fatura_alis/fatura_satis → backend tip "fatura", label de düzgün
+  const backTip = tip.startsWith('fatura') ? 'fatura' : tip;
+  $('belgeTip').textContent = (tip==='fatura_alis'?'alış fatura':tip==='fatura_satis'?'satış fatura':backTip);
+  $('fisListesiTip').textContent=(tip==='banka'?'banka':tip==='fatura_alis'?'alış fatura':tip==='fatura_satis'?'satış fatura':tip==='cek'?'çek':'fiş');
   // Fiş sekmesi: belge/işle kartlarını gizle, fiş kartını göster
   const fisMod = (tip==='fis');
   $('belgeKarti').style.display = fisMod ? 'none' : '';
@@ -312,7 +311,7 @@ async function firmaDurum(){
   const mp=$('mizanPill');
   if(d.mizan_hesap){mp.className='pill';mp.textContent=d.mizan_hesap+' hesap';}
   else{mp.className='pill off';mp.textContent='mizan yok';}
-  const t=d.tipler[aktifTip]||{};
+  const t=d.tipler[apiTip()]||{};
   const kp=$('fisListesiPill');
   if(t.fis_listesi_var){
     kp.className='pill'; kp.textContent=`${t.gecmis_satir||0} geçmiş satır · son no ${t.son_fis_no||0} · ${t.ogrenilen||0} öğrenilen`;
@@ -331,7 +330,7 @@ async function firmaDurum(){
   loadCiktilar();
   // fiş no önerisi
   try{
-    const on=await (await fetch(`/api/firma/${firmaKod}/onerilen-fisno/${aktifTip}`)).json();
+    const on=await (await fetch(`/api/firma/${firmaKod}/onerilen-fisno/${apiTip()}`)).json();
     if(on.gecmis_satir>0){
       $('fisOner').textContent=`(geçmiş: ${on.gecmis_satir} satır, son no ${on.son_fis_no} → öneri ${on.onerilen})`;
     }else{
@@ -352,7 +351,7 @@ async function fisListesiYukle(){
   const f=$('fisListesiFile').files[0]; if(!f){alert('Dosya seç');return;}
   const fd=new FormData(); fd.append('file',f);
   $('fisListesiPill').className='pill'; $('fisListesiPill').textContent='yükleniyor...';
-  const r=await (await fetch(`/api/firma/${firmaKod}/fis-listesi/${aktifTip}`,{method:'POST',body:fd})).json();
+  const r=await (await fetch(`/api/firma/${firmaKod}/fis-listesi/${apiTip()}`,{method:'POST',body:fd})).json();
   $('fisListesiFile').value='';
   if(r.ok){
     // Yükleme başarılı; parse arka planda dönüyor. Pill "işleniyor" göstersin;
@@ -400,7 +399,7 @@ async function belgeYukle(){
   try{
     for(const f of files){
       const fd=new FormData(); fd.append('file',f);
-      const r=await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}`,{method:'POST',body:fd});
+      const r=await fetch(`/api/firma/${firmaKod}/belge/${apiTip()}`,{method:'POST',body:fd});
       if(!r.ok) toast(`${f.name} yükleme hatası`,false);
     }
     toast(`${files.length} dosya yüklendi`,true);
@@ -409,7 +408,7 @@ async function belgeYukle(){
 }
 async function belgeSil(fn){
   if(!confirm('Silinsin mi?\n'+fn))return;
-  await fetch(`/api/firma/${firmaKod}/belge/${aktifTip}/${encodeURIComponent(fn)}`,{method:'DELETE'});
+  await fetch(`/api/firma/${firmaKod}/belge/${apiTip()}/${encodeURIComponent(fn)}`,{method:'DELETE'});
   firmaDurum();
 }
 
@@ -420,9 +419,9 @@ async function isle(){
   showLoading('İşleniyor (OCR sürebilir)...');
   $('durum').textContent='işleniyor...';
   try{
-    const yon = aktifTip==='fatura' ? (document.querySelector('input[name="fatYon"]:checked')||{value:'alis'}).value : 'alis';
-    const resp=await fetch(`/api/firma/${firmaKod}/isle/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,yon})});
+    const yon = aktifYon();
+    const resp=await fetch(`/api/firma/${firmaKod}/isle/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,yon})});
     if(!resp.ok){ const e=await resp.text(); toast('İşleme hatası: '+e,false); hideLoading(); $('durum').textContent=''; return; }
     const r=await resp.json();
     satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false; suzgec='hepsi'; bankaSuzgec='hepsi';
@@ -536,8 +535,8 @@ function edit(i,alan,deger){
   satirlar[i][alan]=deger;
   // hesap elle değişince öğret
   if(alan==='hesap' && deger && deger!==eski && satirlar[i].detay){
-    fetch(`/api/firma/${firmaKod}/ogret/${aktifTip}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,aciklama:satirlar[i].detay,kod:deger})}).catch(()=>{});
+    fetch(`/api/firma/${firmaKod}/ogret/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:satirlar[i].detay,kod:deger})}).catch(()=>{});
   }
   if(duzenleMod){
     const container = $('onizle').querySelector('div[style*="overflow-y"]');
@@ -608,10 +607,10 @@ async function disaAktar(format){
   $('durum').textContent=format+' hazırlanıyor...';
   try{
     const r=await fetch(`/api/firma/${firmaKod}/export?format=${format}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:aktifTip,satirlar,donem:''})});
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),satirlar,donem:''})});
     if(!r.ok){ toast('Export hatası: '+(await r.text()),false); $('durum').textContent=''; return; }
     const blob=await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
-    a.download=`FIS_${aktifTip}.${format}`; a.click();
+    a.download=`FIS_${apiTip()}_${aktifYon()}.${format}`; a.click();
     toast(format.toUpperCase()+' indirildi',true);
   }catch(e){ toast('Bağlantı hatası: '+e.message,false); }
   $('durum').textContent=''; loadCiktilar();
