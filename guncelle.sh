@@ -1,9 +1,9 @@
 #!/bin/bash
 # fis-server güncelleme betiği
-# Kullanım: bash /home/muhasebe/firmalar/fis-server/guncelle.sh
+# Kullanım: bash /srv/apps/fis-server/guncelle.sh
 
 set -e
-cd /home/muhasebe/firmalar/fis-server
+cd /srv/apps/fis-server
 
 echo "== GitHub'dan son sürüm çekiliyor =="
 sudo git pull origin main
@@ -13,8 +13,8 @@ sudo docker stop fis-otomasyon 2>/dev/null || true
 sudo docker rm fis-otomasyon 2>/dev/null || true
 sudo docker build -t fis-otomasyon .
 sudo docker run -d --name fis-otomasyon --restart unless-stopped \
-  -p 8091:8091 -v /home/muhasebe/firmalar/fis-server/data:/data \
-  -v /home/ahmet/firmalar:/firmalar:ro \
+  -p 8091:8091 -v /srv/apps/fis-server/data:/data \
+  -v /srv/veri/firmalar:/firmalar:ro \
   fis-otomasyon
 
 echo "== Bitti =="
