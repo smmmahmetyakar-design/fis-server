@@ -8,7 +8,7 @@ Her satır sözlük (14 sütun karşılığı):
 kural motoruyla eşleştirir, dengeli çift kayıt üretir. Kural dosyasındaki
 banka hesabı / karşı hesap mantığı geliştirilecek.
 """
-import io, re
+import io, re, itertools
 from datetime import datetime
 from app.kurallar import norm
 
@@ -753,6 +753,345 @@ def _bsmv_hesabi(kod_ad_list):
     return "780.02.001"
 
 
+# ------------------------------------------------- YAZAR KASA (perakende) FİŞİ
+# Market/esnaf yazar kasa fişi e-faturadan yapıca farklıdır:
+#   * KDV oranı departman adının yanındadır ("GIDA %01", "TEMİZLİK %10") ve
+#     OCR tam burayı bozar ("GIDA “01", "TEMİZLİK y4Q", "TOPKDV ağ").
+#   * Tutarlar "*" ile başlar, OCR sık sık virgülü düşürür ("*525 00").
+#   * Şahıs firmalarında unvan eki (LTD/A.Ş.) yoktur; bir taramada 4 fiş varsa
+#     unvandan bölme denemesi hepsini tek fiş sanır.
+# Bu yüzden:
+#   1) Fişler, her fişte bir kez geçen TOPKDV satırı ÇAPA alınarak bölünür.
+#   2) KDV oranı OCR'dan değil TOPLAM/TOPKDV ARİTMETİĞİNDEN türetilir — oran
+#      okunamasa bile sonuç doğru çıkar.
+#   3) POS slipleri (banka onay fişleri) TOPKDV içermediği için ayrı belge
+#      sayılmaz; alan okuma fiş gövdesiyle (TOPLAM satırına kadar) sınırlıdır.
+
+_YK_TOPKDV_RE = re.compile(r"\bTOP\s*K[DO][VU]\b")
+_YK_TOPLAM_RE = re.compile(r"\bTOPLAM\b")
+_YK_TARIH_RE = re.compile(r"(\d{1,2})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(20\d{2})")
+_YK_FISNO_RE = re.compile(r"\b(?:FIS|TIS|FLS|FIG)\s*NO\b\D{0,8}(\d{1,6})")
+_YK_VKN_RE = re.compile(r"\b(\d{10,11})\b")
+_YK_ORAN_RE = re.compile(r"[%‰]\s*(\d{1,2})\b")
+# Para: "160,00" / "1.234,56" / "525 ,00" / "525 00" (OCR virgülü düşürmüş)
+_YK_PARA_RE = re.compile(r"\d{1,3}(?:\.\d{3})*\s*[,.]\s*\d{2}\b|\b\d+\s+\d{2}\b")
+# Önceki fişin/POS slibinin bittiğini gösteren satırlar — blok başı ararken dur.
+# ("TEŞEKKÜRLER" bilerek yok: fiş başlığında da geçiyor.)
+_YK_KUYRUK_RE = re.compile(
+    r"EK[UÜ]\s*NO|\bZ\s*NO\b|DEGERI\s*YOKTUR|NUSHASI|SAKLAYINIZ|ONAY\s*KODU|"
+    r"ISYERI\s*NO|TERM\s*NO|BATCH|APP\s*LABEL|SIRA\s*NO|TEMASSIZ|KART\s*HAMILI|"
+    r"POS\s*NO|\bTOPLAM\b|TOP\s*K[DO][VU]|\bODEAL\b|\bKREDI\b|\bNAKIT\b|\bTUTAR\b")
+# Tek başına dursa bile asla atılmayacak fiş alanları (ödeme şekli, toplamlar)
+_YK_KORU_RE = re.compile(
+    r"\bKREDI\b|\bKART\b|\bNAKIT\b|\bPESIN\b|\bTOPLAM\b|TOP\s*K[DO][VU]|\bKDV\b|"
+    r"\bODEAL\b|\bTUTAR\b|\bTARIH\b|\bSAAT\b|\bFIS\b")
+# Türkiye'de yürürlükteki KDV oranları (eski 8/18 geçmiş fişler için korunuyor)
+_YK_KDV_ORANLARI = (1, 10, 20, 8, 18, 0)
+
+
+def _yk_para(hat: str) -> list:
+    """Yazar kasa satırındaki tutarları OCR toleranslı okur."""
+    out = []
+    temiz = re.sub(r"[*«»¥#£]", " ", hat)
+    for m in _YK_PARA_RE.finditer(temiz):
+        t = re.sub(r"\s*([,.])\s*", r"\1", m.group(0))   # "525 ,00" -> "525,00"
+        t = re.sub(r"^(\d+)\s+(\d{2})$", r"\1,\2", t)    # "525 00"  -> "525,00"
+        v = _sayi(t)
+        if v is not None:
+            out.append(v)
+    return out
+
+
+def _yk_oran_turet(toplam: float, kdv_tutar: float, ipucu=None):
+    """KDV dahil toplam + KDV tutarından oranı/matrahı türetir.
+    OCR oranı bozsa bile ("%01", "y4Q") aritmetik doğruyu verir.
+    Döner: (oran, matrah, kdv) veya None."""
+    if not toplam or toplam <= 0 or kdv_tutar is None:
+        return None
+    adaylar = list(_YK_KDV_ORANLARI)
+    if ipucu in adaylar:            # OCR'dan okunan oranı önce dene
+        adaylar.remove(ipucu)
+        adaylar.insert(0, ipucu)
+    for r in adaylar:
+        matrah = round(toplam / (1 + r / 100.0), 2)
+        kdv = round(toplam - matrah, 2)
+        if abs(kdv - kdv_tutar) <= 0.02:
+            return r, matrah, kdv
+    return None
+
+
+_YK_ADRES_RE = re.compile(
+    r"\bVD\b|\bV\s*\.?\s*D\b|VERGI\s*DAIRESI|MAHALLE|\bMAH\b|\bMH\b|\bSOK\b|"
+    r"\bSK\b|\bCD\b|\bCAD\b|\bNO\s*:|TEL\s*:|\bCEP\b|\bTARIH\b|\bSAAT\b|"
+    r"\bFIS\s*NO\b|\bZ\s*NO\b|EK[UÜ]\s*NO")
+
+
+def _yk_departmanlar(blok: list, ci: int) -> list:
+    """TOPKDV'den önceki departman satırlarını (tutar + varsa OCR oran ipucu)
+    toplar. Ör: 'GIDA %01 *160,00' -> {tutar: 160.00, ipucu: 1}"""
+    out = []
+    for i in range(ci):
+        h = blok[i]
+        if _YK_ADRES_RE.search(norm(h)) or _YK_TARIH_RE.search(h):
+            continue
+        p = _yk_para(h)
+        if not p:
+            continue
+        m = _YK_ORAN_RE.search(h)
+        ipucu = int(m.group(1)) if m and int(m.group(1)) in _YK_KDV_ORANLARI else None
+        out.append({"tutar": max(p), "ipucu": ipucu})
+    return out
+
+
+def _yk_kalemler(departmanlar: list, toplam: float, kdv_tutar: float):
+    """Çok KDV oranlı fişte her departmanın oranını çözer.
+    Market fişlerinde tek fişte %1 gıda + %20 temizlik birlikte olabilir;
+    TOPKDV ikisinin toplamıdır. OCR oranları güvenilmez olduğu için oranlar
+    departman tutarlarından ARANIR: hangi oran dizilimi TOPKDV'yi tutturuyorsa
+    o alınır, eşitlik birden çok dizilimde sağlanıyorsa OCR ipuçlarına en çok
+    uyan tercih edilir. Döner: kalem listesi veya None."""
+    tutarlar = [d["tutar"] for d in departmanlar]
+    n = len(tutarlar)
+    if not n or n > 5 or kdv_tutar is None:
+        return None
+    # Departman tutarları fiş toplamını tutmuyorsa satırları yanlış okumuşuz
+    if abs(sum(tutarlar) - toplam) > 0.05:
+        return None
+
+    best = None
+    for kombin in itertools.product(_YK_KDV_ORANLARI, repeat=n):
+        k = 0.0
+        for t, r in zip(tutarlar, kombin):
+            k += t - round(t / (1 + r / 100.0), 2)
+        if abs(round(k, 2) - kdv_tutar) <= 0.02 + 0.01 * n:
+            skor = sum(1 for d, r in zip(departmanlar, kombin) if d["ipucu"] == r)
+            # eşit skorda daha az farklı oran kullanan dizilim yalındır
+            anahtar = (skor, -len(set(kombin)))
+            if best is None or anahtar > best[0]:
+                best = (anahtar, kombin)
+    if not best:
+        return None
+
+    birlesik = {}
+    for t, r in zip(tutarlar, best[1]):
+        matrah = round(t / (1 + r / 100.0), 2)
+        kdv = round(t - matrah, 2)
+        if r not in birlesik:
+            birlesik[r] = {"oran": r, "matrah": 0.0, "kdv": 0.0}
+        birlesik[r]["matrah"] = round(birlesik[r]["matrah"] + matrah, 2)
+        birlesik[r]["kdv"] = round(birlesik[r]["kdv"] + kdv, 2)
+    return sorted(birlesik.values(), key=lambda x: x["oran"])
+
+
+def _yk_firma_adi(govde: list) -> str:
+    """Fiş başlığından firma unvanını çıkarır.
+    Başlık yapısı: [unvan] [unvan 2. satır] [adres] [VD] [TARİH] ...
+    Adres/VD/TARİH satırına kadar olan satırlar unvandır; aradaki OCR artıkları
+    ('2C 56551789', 'np AVa000108999') harf oranına bakılarak elenir."""
+    basliklar = []
+    for h in govde[:7]:
+        t = re.sub(r"\s+", " ", h).strip(" .,:;*-_|")
+        nt = norm(t)
+        if _YK_TARIH_RE.search(t) or _YK_ADRES_RE.search(nt):
+            break
+        harf = sum(1 for c in t if c.isalpha())
+        if len(t) < 5 or harf < 4 or harf < len(t) * 0.5:
+            continue                    # OCR artığı satır
+        basliklar.append(t)
+        if len(basliklar) == 2:         # unvan en fazla 2 satıra yayılır
+            break
+    if basliklar:
+        return " ".join(basliklar)
+    for h in govde[:3]:
+        t = re.sub(r"\s+", " ", h).strip()
+        if len(t) > 4:
+            return t
+    return ""
+
+
+def _yk_tarih(govde: list) -> tuple:
+    """Fiş tarihini okur. Gün 31'den büyükse (OCR '0'ı '6'/'8' okumuş olabilir)
+    baştaki rakamı '0' yapıp düzeltmeyi dener. Döner: (iso_tarih, uyari)."""
+    for h in govde:
+        m = _YK_TARIH_RE.search(h)
+        if not m:
+            continue
+        g, a, y = m.group(1), m.group(2), m.group(3)
+        iso = _tarih_iso(f"{int(g):02d}.{int(a):02d}.{y}") if int(g) <= 31 and int(a) <= 12 else ""
+        if iso:
+            return iso, ""
+        # gün bozuk: "64/10/2026" -> "04/10/2026"
+        if len(g) == 2 and int(g) > 31:
+            d = _tarih_iso(f"0{g[1]}.{int(a):02d}.{y}")
+            if d:
+                return d, f"tarih OCR'da '{g}/{a}/{y}' okundu, '{d}' varsayıldı — kontrol edin"
+    return "", ""
+
+
+def _yk_parse(blok: list, dosya: str = "") -> dict | None:
+    """Tek bir yazar kasa fişi bloğunu alanlarına ayırır."""
+    nblok = [norm(h) for h in blok]
+    ci = next((i for i, h in enumerate(nblok) if _YK_TOPKDV_RE.search(h)), None)
+    if ci is None:
+        return None
+    # TOPLAM satırı çapadan hemen sonra gelir
+    ti = next((i for i in range(ci + 1, min(len(blok), ci + 4))
+               if _YK_TOPLAM_RE.search(nblok[i])), None)
+    govde = blok[:(ti if ti is not None else ci) + 1]
+
+    # KDV tutarı: çapa satırında, yoksa bir sonraki satırda ("TOPKDV ağ" / "2,08")
+    kdv_tutar = None
+    for i in (ci, ci + 1):
+        if i >= len(blok) or (ti is not None and i == ti):
+            continue
+        p = _yk_para(blok[i])
+        if p:
+            kdv_tutar = p[0]
+            break
+
+    toplam = 0.0
+    if ti is not None:
+        p = _yk_para(blok[ti])
+        if p:
+            toplam = max(p)
+    if not toplam:          # TOPLAM okunamadı — departman satırlarının toplamı
+        for i in range(ci):
+            if _YK_ORAN_RE.search(blok[i]) or re.search(r"[*«]", blok[i]):
+                p = _yk_para(blok[i])
+                if p:
+                    toplam = max(toplam, max(p))
+    if toplam <= 0:
+        return None
+
+    # KDV oranı: önce OCR ipucu, sonra aritmetik doğrulama
+    ipucu = None
+    for i in range(ci):
+        m = _YK_ORAN_RE.search(blok[i])
+        if m and int(m.group(1)) in _YK_KDV_ORANLARI:
+            ipucu = int(m.group(1))
+            break
+
+    uyari = ""
+    # Önce departman satırlarından çöz (tek fişte birden çok KDV oranı olabilir),
+    # olmazsa fiş toplamından tek oran türet.
+    kalemler = _yk_kalemler(_yk_departmanlar(blok, ci), toplam, kdv_tutar) or []
+    if not kalemler:
+        turetim = _yk_oran_turet(toplam, kdv_tutar, ipucu)
+        if turetim:
+            oran, matrah, kdv = turetim
+            kalemler = [{"oran": oran, "matrah": matrah, "kdv": kdv}]
+        else:
+            uyari = (f"{dosya}: KDV oranı TOPLAM/TOPKDV'den türetilemedi "
+                     f"(toplam={toplam}, topkdv={kdv_tutar}) — KDV'yi elle ayırın")
+
+    firma = _yk_firma_adi(govde)
+    if not firma:
+        return None
+
+    tarih, t_uyari = _yk_tarih(govde)
+    if t_uyari:
+        uyari = (uyari + " | " if uyari else "") + f"{firma[:25]}: {t_uyari}"
+
+    fno = ""
+    for h in govde:
+        m = _YK_FISNO_RE.search(norm(h))
+        if m:
+            fno = m.group(1)
+            break
+
+    vkn = ""
+    for h in govde:
+        nh = norm(h)
+        if re.search(r"\bVD\b|\bV\s*\.?\s*D\b|VERGI\s*DAIRESI", nh):
+            m = _YK_VKN_RE.search(nh)
+            if m:
+                vkn = m.group(1)
+                break
+
+    # Ödeme şekli: gövdeden hemen sonraki birkaç satırda
+    odeme = ""
+    for h in blok[len(govde):len(govde) + 6]:
+        nh = norm(h)
+        if "NAKIT" in nh or "PESIN" in nh:
+            odeme = "NAKIT"
+            break
+        # ÖDEAL/banka POS satırı da kartla ödemeyi gösterir
+        if "KREDI" in nh or "KART" in nh or "ODEAL" in nh:
+            odeme = "KREDI KARTI"
+            break
+
+    return {
+        "fatura_no": fno,
+        "tarih": tarih,
+        "cari_ad": firma,
+        "tur": "SATIS", "senaryo": "PERAKENDE",
+        "toplam": round(toplam, 2),
+        "kalemler": kalemler,
+        "tevkifat": 0.0, "tevkifat_kod": "",
+        "ek_vergi": 0.0,
+        "yon": "alis", "dosya": dosya,
+        "vkn": vkn, "odeme": odeme, "belge_turu": "YAZARKASA",
+        "uyari": uyari,
+    }
+
+
+def _yk_satirlari(metin: str) -> list:
+    """Ham OCR metnini satırlara ayırırken fiş ayırıcı artıklarını atar.
+    Fişleri ayıran '****...****' çizgisi ve POS slip logoları OCR'da tek başına
+    duran anlamsız satırlara dönüşür ('EREARRA REARS ATRIA', 'ödeâ,',
+    '2C 56551789'); bunlar bir sonraki fişin unvanı sanılmasın diye elenir.
+    Ölçüt (hepsi birden): öncesi ve sonrası boş + hiç rakam yok + ':' yok +
+    fiş alanı anahtar kelimesi yok. Gerçek başlık satırları ardışık bir öbek
+    hâlinde gelir, fiş alanları ise ya rakam ya anahtar kelime taşır."""
+    ham = metin.splitlines()
+    out = []
+    for i, h in enumerate(ham):
+        t = h.rstrip()
+        if not t.strip():
+            continue
+        tek_basina = ((i == 0 or not ham[i - 1].strip())
+                      and (i == len(ham) - 1 or not ham[i + 1].strip()))
+        if (tek_basina and ":" not in t
+                and not any(c.isdigit() for c in t)
+                and not _YK_KORU_RE.search(norm(t))):
+            continue
+        out.append(t)
+    return out
+
+
+def _yazarkasa_fisleri(metin: str, dosya: str = "") -> list:
+    """Taramadaki yazar kasa fişlerini TOPKDV çapalarına göre böler ve okur."""
+    hatlar = _yk_satirlari(metin)
+    capalar = [i for i, h in enumerate(hatlar) if _YK_TOPKDV_RE.search(norm(h))]
+    if not capalar:
+        return []
+
+    baslar = []
+    for k, a in enumerate(capalar):
+        onceki = capalar[k - 1] if k > 0 else -1
+        # çapadan geriye bu fişin TARİH satırını bul
+        ti = a
+        for j in range(a - 1, onceki, -1):
+            if _YK_TARIH_RE.search(hatlar[j]):
+                ti = j
+                break
+        # TARİH'ten geriye başlık/adres satırlarını topla; önceki fişin
+        # kuyruğuna (TOPLAM/ÖDEAL/EKÜ NO/POS slip) çarpınca dur
+        s = ti
+        while (s - 1 > onceki and ti - s < 10
+               and not _YK_KUYRUK_RE.search(norm(hatlar[s - 1]))):
+            s -= 1
+        baslar.append(s)
+
+    fisler = []
+    for k, s in enumerate(baslar):
+        son = baslar[k + 1] if k + 1 < len(baslar) else len(hatlar)
+        f = _yk_parse(hatlar[s:son], dosya)
+        if f:
+            fisler.append(f)
+    return fisler
+
+
 def _ocr_fatura_ayikla(metin: str, dosya: str = "") -> list:
     """
     OCR ham metninden fatura(lar)ı çıkarır.
@@ -764,6 +1103,11 @@ def _ocr_fatura_ayikla(metin: str, dosya: str = "") -> list:
     hatlar = [h.rstrip() for h in metin.splitlines() if h.strip()]
     if not hatlar:
         return []
+
+    # Önce yazar kasa (perakende) fişi dene — TOPKDV çapası varsa bu yoldur.
+    yk = _yazarkasa_fisleri(metin, dosya)
+    if yk:
+        return yk
 
     # Fiş başlangıç adayları: "E-Arşiv", "E-Fatura", firma adı olabilecek satırlar
     # (büyük harfli, sonu "A.Ş." veya "LTD" ile biten)
@@ -1234,6 +1578,11 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
             if h.get("ham_metin"):
                 uyarilar.append(f"{h.get('dosya')}: fatura verisi çıkarılamadı (OCR gürültülü olabilir) — elle düzeltme gerekebilir")
         return [], uyarilar
+
+    # Parser'ın tek tek belge için ürettiği uyarılar (ör. OCR'da bozuk tarih)
+    for f in faturalar:
+        if f.get("uyari"):
+            uyarilar.append(f["uyari"])
 
     fisler = []
     fis = fis0
