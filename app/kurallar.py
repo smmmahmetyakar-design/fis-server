@@ -860,7 +860,9 @@ class KuralMotoru:
             elif len(qwords) >= 2 and qwords <= set(metin.split()):
                 aday.append((50 + len(qwords), idx, r))
 
+        zayif = False
         if not aday and ilk and len(qwords) >= 4:
+            zayif = True
             # Unvanın bir kısmı değişmiş olabilir ("NOYAN DEMİR METAL ELEKTRİK İNŞAAT" ->
             # geçmişte "NOYAN DEMİR METAL KİMYEVİ MADDELER İNŞAAT"). Adın İLK kelimesi
             # (ayırt edici marka) ile birlikte en az 3 kelime ve kelimelerin %60'ı tutmalı.
@@ -941,6 +943,7 @@ class KuralMotoru:
 
         if any(sonuc[k] for k in ("cari", "ana", "kdv", "tevkifat")):
             sonuc["kaynak"] = "gecmis_fatura"
+            sonuc["zayif"] = zayif      # unvanın yalnız bir kısmı tuttu — kontrol edilmeli
         return sonuc
 
     def _mizan_isim_eslestir(self, aciklama: str):

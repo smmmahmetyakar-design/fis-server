@@ -16,6 +16,7 @@ cd /srv/apps/fis-server
 # varsayılanlar; ayarlar.env varsa onlar geçerli
 OLLAMA_URL="http://host.docker.internal:11434"
 OLLAMA_MODEL="qwen3:14b,qwen2.5:14b"
+FATURA_PDF_YZ="0"                               # 1: eksik PDF'ler kendiliğinden yapay zekâya gider
 [ -f ayarlar.env ] && . ./ayarlar.env
 
 if [ "$1" != "--yeni-surum" ]; then
@@ -38,7 +39,7 @@ sudo docker run -d --name fis-otomasyon --restart unless-stopped \
   -p 8091:8091 -v /srv/apps/fis-server/data:/data \
   -v /srv/veri/firmalar:/firmalar:ro \
   --add-host=host.docker.internal:host-gateway \
-  -e OLLAMA_URL="$OLLAMA_URL" -e OLLAMA_MODEL="$OLLAMA_MODEL" \
+  -e OLLAMA_URL="$OLLAMA_URL" -e OLLAMA_MODEL="$OLLAMA_MODEL" -e FATURA_PDF_YZ="$FATURA_PDF_YZ" \
   fis-otomasyon
 
 echo "== Bitti =="

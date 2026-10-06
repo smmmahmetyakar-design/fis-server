@@ -1923,6 +1923,10 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         # cari adı ilk kez okunuyor) mizan hesap adlarıyla da dene — bugünkü
         # eslestir() düzeltmesiyle aynı mekanizma (kurallar.py).
         cari_onek = ("320", "329", "331", "335", "336") if yon == "alis" else ("120", "121")
+        # Kullanıcının bu cari için düzelttiği/onayladığı hesap her şeyden önce gelir
+        cari_ogr = km.ogrenme.get(norm(cari_ad)) if getattr(km, "ogrenme", None) else None
+        if cari_ogr and cari_ogr in alt_kodlar and cari_ogr.startswith(cari_onek):
+            cari_kod, cari_kaynak = cari_ogr, "ogrenme"
         if not cari_kod:
             ek_kod, ek_kaynak = km.eslestir(cari_ad, onekler=cari_onek)
             if ek_kod:
@@ -1986,6 +1990,24 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 s["rol"] = "cari"
             else:
                 s["rol"] = "diger"
+            # Doğrulanmamış hesaplar: Excel'e aktarılır ama fiş açıklamasına KONTROL yazılır
+            # (kullanıcı önizlemede düzeltir ya da onaylarsa işaret kalkar).
+            kontrol = []
+            if s["rol"] == "gider" and gider_kaynak in ("yz", "tahmin"):
+                kontrol.append("gider")
+            if s["rol"] == "kdv" and not hesap:
+                kontrol.append("kdv")
+            if s["rol"] == "cari":
+                if hesap == vars_cari:
+                    kontrol.append("cari")
+                if belge_rozet == "yz":
+                    kontrol.append("belge")
+            # (kullanıcı cariyi onayladıysa aynı geçmiş kaydından gelen gider de onaylı sayılır)
+            if gecmis_es.get("zayif") and cari_kaynak != "ogrenme" and \
+                    ((s["rol"] == "gider" and gider_kaynak == "gecmis") or s["rol"] == "cari"):
+                kontrol.append("benzer_ad")
+            if kontrol:
+                s["kontrol"] = kontrol
             return s
 
         def gecmis_kdv_sec(oran, yon):
@@ -2121,6 +2143,11 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
 
         fis += 1
 
+    kontrollu = sorted({s["evrak_no"] or s["fisno"] for s in fisler if s.get("kontrol")})
+    if kontrollu:
+        uyarilar.append(f"{len(kontrollu)} faturada doğrulanmamış hesap var (yapay zekâ/tahmin/benzer ad) — "
+                        f"sarı KONTROL işaretli satırları düzelt ya da ✓ ile onayla; onaylanmayanların "
+                        f"Excel'de açıklamasına KONTROL yazılır: {_kisa_liste(kontrollu, 4)}")
     if fark_yazilan:
         uyarilar.append(f"{len(fark_yazilan)} faturada liste toplamı kalemlerden fazlaydı (ÖİV/ÖTV gibi ek vergi "
                         f"sütunu olmayabilir); fark ayrı satıra yazıldı, kontrol et: {_kisa_liste(fark_yazilan, 4)}")
@@ -2475,6 +2502,29 @@ def fis_xlsx(satirlar):
     ws.freeze_panes = "A2"
     bio = io.BytesIO(); wb.save(bio); bio.seek(0)
     return bio
+
+
+KONTROL_ON = "KONTROL - "
+
+
+def kontrol_isaretle(satirlar: list) -> list:
+    """Dışa aktarımdan önce: içinde doğrulanmamış hesap ('kontrol') olan fişlerin
+    tüm satırlarında fiş açıklamasının, işaretli satırların detay açıklamasının
+    başına 'KONTROL - ' yazar. Logo'da fiş listesinde aranıp bulunabilsin diye."""
+    isaretli = {r.get("fisno") for r in satirlar if r.get("kontrol")}
+    out = []
+    for r in satirlar:
+        r = dict(r)
+        if r.get("fisno") in isaretli:
+            fa = str(r.get("fis_aciklama") or "")
+            if not fa.startswith(KONTROL_ON):
+                r["fis_aciklama"] = KONTROL_ON + fa
+            if r.get("kontrol"):
+                dt = str(r.get("detay") or "")
+                if not dt.startswith(KONTROL_ON):
+                    r["detay"] = KONTROL_ON + dt
+        out.append(r)
+    return out
 
 
 def fis_xml(satirlar, vir0=80001, tir0=950001):

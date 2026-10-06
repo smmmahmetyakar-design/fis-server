@@ -12,7 +12,7 @@ Okuma iki katmanlı:
 Durum: <firma>/fatura/pdf_<yon>/_okuma.json  (dosya adı -> okuma sonucu)
 Aynı dosya (sha1) ve aynı okuyucu sürümü için tekrar okunmaz.
 """
-import hashlib, json, queue, re, threading, time
+import hashlib, json, os, queue, re, threading, time
 from datetime import datetime
 from pathlib import Path
 
@@ -26,6 +26,11 @@ _kilit = threading.RLock()
 _kuyruk: "queue.Queue" = queue.Queue()
 _kuyrukta: set = set()
 _isci = None
+
+# Eksik alanlı PDF'ler yapay zekâya KENDİLİĞİNDEN gönderilsin mi? Varsayılan: hayır.
+# (Sahada katkısı az, kuyruğu uzun süre meşgul ediyordu.) Arayüzdeki "Yapay zekâ ile
+# oku" düğmesi her durumda çalışır. Açmak için ayarlar.env: FATURA_PDF_YZ=1
+YZ_OTOMATIK = os.environ.get("FATURA_PDF_YZ", "0").strip().lower() in ("1", "evet", "true", "acik")
 
 # Yapay zekâya ne zaman gidilir: bu alanlardan biri eksikse
 _YZ_ALANLARI = ("cari", "tarih", "fatura_no", "tutar", "kdv")
@@ -252,7 +257,7 @@ def oku(k: Path, p: Path, yon: str, yz_kuyruga: bool = True) -> dict:
             v = _oku(k)
             v[p.name] = kayit
             _yaz(k, v)
-    if yz_kuyruga and any(f.get("eksik") for f in kayit.get("faturalar") or []) \
+    if yz_kuyruga and YZ_OTOMATIK and any(f.get("eksik") for f in kayit.get("faturalar") or []) \
             and kayit.get("yz_durum") in ("", "yz_sirada", "yz_okunuyor"):
         yz_kuyruga_al(k, p.name, yon)
     return kayit

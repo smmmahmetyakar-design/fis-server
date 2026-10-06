@@ -637,7 +637,8 @@ def fatura_pdf_liste(kod: str, yon: str):
     _yon_kontrol(yon)
     d = firma_dir(kod)
     return {"dosyalar": fatura_pdf.liste(fatura_pdf.klasor(d, yon), yon),
-            "yapay_zeka": yapay_zeka.durum(), "kuyruk": fatura_pdf.kuyruk_bilgisi()}
+            "yapay_zeka": yapay_zeka.durum(), "kuyruk": fatura_pdf.kuyruk_bilgisi(),
+            "pdf_otomatik": fatura_pdf.YZ_OTOMATIK}
 
 
 @app.delete("/api/firma/{kod}/fatura-pdf/{yon}/{fname}")
@@ -660,6 +661,32 @@ def fatura_pdf_yz(kod: str, yon: str, fname: str):
     if not fatura_pdf.yz_kuyruga_al(k, fname, yon, zorla=True):
         raise HTTPException(503, "Yapay zekâ kullanılamıyor: " + yapay_zeka.durum(tazele=True)["hata"])
     return {"ok": True}
+
+
+@app.post("/api/firma/{kod}/yz-sinav/{yon}")
+def yz_sinav_baslat(kod: str, yon: str):
+    """Yapay zekâ sınavı: muavindeki carileri tek tek saklayıp gider hesabını sorar,
+    cevapları muavindeki gerçek kayıtla karşılaştırır (arka planda)."""
+    _yon_kontrol(yon)
+    d = firma_dir(kod)
+    if not yapay_zeka.durum(tazele=True)["etkin"]:
+        raise HTTPException(503, "Yapay zekâ kullanılamıyor: " + (yapay_zeka.durum()["hata"] or "kapalı"))
+    km = KuralMotoru(d / "mizan.xlsx", None, d / "fatura_ogrenme.json", _gecmis_kaynak(d, "fatura"))
+    if not km.hesaplar:
+        raise HTTPException(400, "Önce mizanı yükleyin")
+    if not km.gecmis.get("satirlar"):
+        raise HTTPException(400, "Önce 1. bölümden muavin defteri (ya da Excel fiş listesini) yükleyin")
+    v = gider_yz.sinav_baslat(d, km.hesaplar, isleyici.alt_hesap_kodlari(km.hesaplar), yon,
+                              km.gecmis["satirlar"])
+    if v.get("durum") == "yok":
+        raise HTTPException(400, v.get("hata", "Soru yok"))
+    return v
+
+
+@app.get("/api/firma/{kod}/yz-sinav/{yon}")
+def yz_sinav_durum(kod: str, yon: str):
+    _yon_kontrol(yon)
+    return gider_yz.sinav_oku(firma_dir(kod), yon)
 
 
 @app.get("/api/yapay-zeka")
@@ -719,8 +746,10 @@ def isle(kod: str, tip: str, body: IsleBody):
     gider_ogrenme, gider_onerici = None, None
     if tip == "fatura":
         gider_ogrenme = _read_json(d / "fatura_gider_ogrenme.json", {})
+        gecmis_s = km.gecmis.get("satirlar", [])
         gider_onerici = gider_yz.onerici(d, km.hesaplar, isleyici.alt_hesap_kodlari(km.hesaplar), body.yon,
-                                         gider_yz.kullanim_ozeti(km.gecmis.get("satirlar", []), body.yon))
+                                         gider_yz.kullanim_ozeti(gecmis_s, body.yon),
+                                         gider_yz.gecmis_ornekler(gecmis_s, body.yon))
     fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon, pdf_faturalar=pdf_faturalar,
                                      gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici)
     if yz_bekleyen:
@@ -882,6 +911,7 @@ def export(kod: str, body: ExportBody, format: str = "xlsx"):
     d = firma_dir(kod)
     if not body.satirlar:
         raise HTTPException(400, "Satır yok")
+    body.satirlar = isleyici.kontrol_isaretle(body.satirlar)
     if format == "xml":
         data = isleyici.fis_xml(body.satirlar)
         fname = f"FIS_{body.tip}_{datetime.now():%Y%m%d_%H%M%S}.xml"

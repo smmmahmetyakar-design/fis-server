@@ -257,7 +257,7 @@ def dogrula(sonuc: dict, metin: str) -> dict:
 
 
 # ------------------------------------------------------------------ gider / gelir hesabı seçimi
-GIDER_TALIMAT_SURUM = 2   # değişince önbellekteki eski öneriler yeniden sorulur
+GIDER_TALIMAT_SURUM = 3   # değişince önbellekteki eski öneriler yeniden sorulur
 
 _GIDER_TALIMAT = """Sen deneyimli bir Türk muhasebecisin (Tekdüzen Hesap Planı).
 Sana bir faturanın karşı tarafı, fatura kalemlerinin açıklamaları ve firmanın mizanındaki
@@ -271,11 +271,15 @@ Kurallar:
 - 150-157 stok hesapları (ör. 153 Ticari Mallar) yalnızca firmanın SATMAK için aldığı mallar
   içindir. Ofis, personel, temsil-ağırlama, iletişim, elektronik cihaz, yemek gibi firmanın
   kendi kullanımı için yapılan alımlar stok değil GİDER ya da demirbaştır.
+- "BU FİRMANIN GEÇMİŞ KAYITLARINDAN ÖRNEKLER" bölümü, bu firmanın muhasebecisinin benzer
+  firmaların faturalarını hangi hesaba yazdığını gösterir. En güçlü ipucu budur: sorulan
+  firma bir örnektekiyle aynı sektördeyse (ör. ikisi de nakliye, matbaa, akaryakıt) aynı hesabı seç.
 - Kalem açıklaması yoksa karşı tarafın unvanından (sektöründen) çıkarım yap.
 gerekce alanına seçimin nedenini tek kısa Türkçe cümleyle yaz."""
 
 
-def gider_sec(cari_ad: str, aciklamalar: list, yon: str, adaylar: list, kullanim: dict | None = None) -> dict | None:
+def gider_sec(cari_ad: str, aciklamalar: list, yon: str, adaylar: list, kullanim: dict | None = None,
+              ornekler: list | None = None) -> dict | None:
     """Fatura için gider (alış) / gelir (satış) hesabı önerir.
     adaylar: [(kod, ad)] — firmanın mizanındaki ALT hesaplar. Model yalnızca bunlardan
     seçebilir (JSON şemasında enum). Döner: {'kod', 'gerekce'} veya None."""
@@ -298,12 +302,18 @@ def gider_sec(cari_ad: str, aciklamalar: list, yon: str, adaylar: list, kullanim
               else "  [bu firmada hiç kullanılmamış]") if kullanim else ""
         satirlar_.append(f"{k} — {a}{ek}")
     hesaplar = "\n".join(satirlar_)
+    ad_of = dict(adaylar)
+    ornek_metni = ""
+    if ornekler:
+        ornek_metni = "BU FİRMANIN GEÇMİŞ KAYITLARINDAN ÖRNEKLER (karşı taraf → yazıldığı hesap):\n" + \
+            "\n".join(f"- {o['ad']} → {o['gider']} {ad_of.get(o['gider'], '')}"
+                      + (f" ({o['sayi']} fatura)" if o.get("sayi", 1) > 1 else "") for o in ornekler) + "\n\n"
     govde = {
         "model": aktif_model(), "stream": False, "format": sema,
         "options": {"temperature": 0, "num_ctx": 8192},
         "messages": [
             {"role": "system", "content": _GIDER_TALIMAT.format(ne=ne)},
-            {"role": "user", "content": f"KARŞI TARAF: {cari_ad}\n\nFATURA KALEMLERİ:\n{kalemler}\n\n"
+            {"role": "user", "content": f"{ornek_metni}KARŞI TARAF: {cari_ad}\n\nFATURA KALEMLERİ:\n{kalemler}\n\n"
                                         f"SEÇEBİLECEĞİN HESAPLAR (kod — ad):\n{hesaplar}"},
         ],
     }

@@ -106,6 +106,11 @@
   .fatura-pdf-alani h3{margin:0 0 4px;font-size:14px;color:var(--ana)}
   .yz-durum{font-size:12px;margin-top:10px;padding:6px 10px;border-radius:6px;background:#f4f4f4;color:#555}
   .yz-durum.acik{background:#eef3fb;color:#24456b}
+  .yz-sinav{font-size:12px;margin-top:8px}
+  .yz-sinav table{border-collapse:collapse;width:100%;margin-top:6px;font-size:11.5px}
+  .yz-sinav td,.yz-sinav th{border-bottom:1px solid #e3e3e3;padding:3px 6px;text-align:left;vertical-align:top}
+  .yz-sinav .s-dogru{color:#1e7d3a;font-weight:600} .yz-sinav .s-kabul{color:#8a6d1a;font-weight:600} .yz-sinav .s-yanlis{color:#b0322a;font-weight:600}
+  .yz-sinav .skor{font-size:14px;font-weight:700}
   .pdf-tablo{width:100%;border-collapse:collapse;font-size:12.5px}
   .pdf-tablo th,.pdf-tablo td{border:none;border-bottom:1px solid #efe9dc;padding:6px 6px;text-align:left;vertical-align:top}
   .pdf-tablo th{background:none;color:var(--muted);font-weight:600;font-size:11.5px}
@@ -121,6 +126,9 @@
   .yz-not{font-size:11px;color:var(--muted);margin-top:3px}
   .yz-not summary{cursor:pointer}
   .kaynak.yz{background:#e7defa;color:#4b2f86;cursor:help}
+  .kontrol-rozet{display:inline-block;background:#ffd84d;color:#5a4500;font-size:10.5px;font-weight:600;border-radius:3px;padding:0 5px;margin-left:4px;cursor:help}
+  .kontrol-onay{font-size:10.5px;padding:0 5px;margin-left:3px;border:1px solid #b9a24a;background:#fffbe6;color:#5a4500;border-radius:3px;cursor:pointer}
+  tr.kontrol-satir td{background:#fffbe0}
   .gerekce{font-size:10.5px;color:#6a5a8a;margin-top:2px;line-height:1.3;max-width:260px}
   .kaynak.belge-pdf{background:#e0ecf7;color:#24456b}
   .kaynak.belge-yz{background:#e7defa;color:#4b2f86}
@@ -211,6 +219,7 @@
         <div class="hint" style="margin-top:6px">Birden çok PDF seçebilir ya da buraya sürükleyebilirsin. Birden çok fatura içeren tek PDF de olur.</div>
       </div>
       <div id="yzDurum" class="yz-durum"></div>
+      <div id="yzSinav" class="yz-sinav"></div>
       <div id="faturaPdfListe" style="margin-top:8px"></div>
     </div>
   </div>
@@ -333,7 +342,7 @@ function sekmeSec(tip){
   const faturaMod = tip.startsWith('fatura');
   $('faturaPdfAlani').style.display = faturaMod ? '' : 'none';
   $('faturaPdfYon').textContent = tip==='fatura_satis' ? 'satış' : 'alış';
-  $('faturaPdfListe').innerHTML=''; $('yzDurum').innerHTML='';
+  $('faturaPdfListe').innerHTML=''; $('yzDurum').innerHTML=''; $('yzSinav').innerHTML='';
   clearTimeout(pdfIzleZamanlayici);
   satirlar=[]; duzenleMod=false; $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
   if(firmaKod) firmaDurum();
@@ -619,8 +628,12 @@ async function faturaPdfListele(){
   const yz=v.yapay_zeka||{};
   $('yzDurum').className='yz-durum'+(yz.etkin?' acik':'');
   $('yzDurum').innerHTML = yz.etkin
-    ? `Yapay zekâ hazır: <b>${esc(yz.model)}</b>. Yalnızca PDF metninden okunamayan alanlar için, arka planda kullanılır. Verdiği rakamlar fatura metniyle ve matrah + KDV = toplam kontrolüyle doğrulanmadan fişe girmez.${yz.not?`<br><b>Not:</b> ${esc(yz.not)}`:''}`
+    ? `Yapay zekâ hazır: <b>${esc(yz.model)}</b>. Geçmişte karşılığı olmayan carilerin gider hesabını önerir; önerdiği hesaplar önizlemede sarı <b>KONTROL</b> ile işaretlenir. `+
+      (v.pdf_otomatik?`PDF metninden okunamayan alanlar da arka planda yapay zekâya gönderilir.`
+        :`PDF'lerde okunamayan alanlar otomatik gönderilmez; gerekirse satırdaki "Yapay zekâ ile oku" düğmesini kullan.`)+
+      `${yz.not?`<br><b>Not:</b> ${esc(yz.not)}`:''}`
     : `Yapay zekâ kapalı (${esc(yz.hata||'ayarlı değil')}). PDF'ler yine metinden okunur; okunamayan alanları önizlemede elle düzeltebilirsin.`;
+  sinavGoster(yz.etkin);
   const d=v.dosyalar||[];
   if(!d.length){ $('faturaPdfListe').innerHTML='<div class="hint">Henüz PDF yok.</div>'; return; }
   let h='<table class="pdf-tablo"><thead><tr><th>Fatura no</th><th>Tarih</th><th>Cari</th><th style="text-align:right">Toplam</th><th>Durum</th><th></th></tr></thead><tbody>';
@@ -653,6 +666,42 @@ async function faturaPdfListele(){
   // yapay zekâ işi sürüyorsa birkaç saniyede bir yenile
   if(d.some(f=>f.durum==='yz_sirada'||f.durum==='yz_okunuyor'))
     pdfIzleZamanlayici=setTimeout(faturaPdfListele, 4000);
+}
+
+let sinavZamanlayici=null;
+async function sinavGoster(etkin){
+  clearTimeout(sinavZamanlayici);
+  if(!firmaKod || !aktifTip.startsWith('fatura')){ $('yzSinav').innerHTML=''; return; }
+  const yon=aktifYon(), firma=firmaKod;
+  let v={durum:'yok'}; try{ v=await (await fetch(`/api/firma/${firma}/yz-sinav/${yon}`)).json(); }catch(e){}
+  if(firma!==firmaKod || aktifYon()!==yon) return;
+  const calisiyor=v.durum==='sirada'||v.durum==='calisiyor';
+  let h=`<button class="btn btn-kucuk" onclick="sinavBaslat()" ${(!etkin||calisiyor)?'disabled':''} title="Muavindeki her cariyi sırayla yokmuş gibi saklayıp yapay zekâya sorar; cevapları muavindeki gerçek kayıtla karşılaştırır">🎓 Yapay zekâyı muavinle sına</button>`;
+  if(v.durum==='yok'){ $('yzSinav').innerHTML=h+' <span class="hint">Yapay zekânın bu firmada ne kadar doğru bildiğini ölçer.</span>'; return; }
+  const n=v.yapilan||0, yuz=x=>n?Math.round(100*x/n):0;
+  h+=` <span class="hint">${esc(v.model||'')} · ${(v.baslangic||'').replace('T',' ').slice(0,16)}</span><div style="margin-top:6px">`;
+  if(calisiyor) h+=`<b>Sınav sürüyor:</b> ${n}/${v.toplam} soru… `;
+  else if(v.durum==='hata') h+=`<b style="color:#b0322a">Sınav yarıda kaldı:</b> ${esc(v.hata||'')} `;
+  if(n) h+=`<span class="skor">Tam doğru: ${v.dogru}/${n} (%${yuz(v.dogru)})</span> · firmanın bu caride kullandığı başka bir hesap: ${v.kabul-v.dogru} · <span class="s-yanlis">yanlış: ${n-v.kabul}</span>`;
+  h+='</div>';
+  const sonuc=v.sonuclar||[], yanlis=sonuc.filter(x=>x.sonuc!=='dogru');
+  const SON={dogru:'doğru',kabul:'kabul',yanlis:'yanlış'};
+  const tablo=list=>`<table><thead><tr><th>Cari</th><th>Muavinde</th><th>Yapay zekâ</th><th></th></tr></thead><tbody>${list.map(x=>`<tr>
+    <td>${esc(x.ad)}<div class="hint">${x.sayi} fatura</div></td>
+    <td>${esc(x.dogru)} ${esc((x.dogru_ad||'').slice(0,28))}${x.kabul.length>1?`<div class="hint">ayrıca: ${esc(x.kabul.filter(k=>k!==x.dogru).join(', '))}</div>`:''}</td>
+    <td>${esc(x.cevap||'—')} ${esc((x.cevap_ad||'').slice(0,28))}${x.gerekce?`<div class="hint">${esc(x.gerekce)}</div>`:''}${x.hata?`<div class="hint">${esc(x.hata)}</div>`:''}</td>
+    <td class="s-${x.sonuc}">${SON[x.sonuc]}</td></tr>`).join('')}</tbody></table>`;
+  if(yanlis.length) h+=`<details ${calisiyor?'':'open'}><summary>Doğru bilemedikleri (${yanlis.length})</summary>${tablo(yanlis)}</details>`;
+  if(sonuc.length) h+=`<details><summary>Tüm sorular (${sonuc.length})</summary>${tablo(sonuc)}</details>`;
+  $('yzSinav').innerHTML=h;
+  if(calisiyor) sinavZamanlayici=setTimeout(()=>sinavGoster(etkin),5000);
+}
+async function sinavBaslat(){
+  const r=await fetch(`/api/firma/${firmaKod}/yz-sinav/${aktifYon()}`,{method:'POST'});
+  if(!r.ok){ toast((await r.json().catch(()=>({}))).detail||'Sınav başlatılamadı',false); return; }
+  const v=await r.json();
+  toast(`Sınav başladı: ${v.toplam} cari sorulacak (her biri birkaç saniye sürer)`,true);
+  sinavGoster(true);
 }
 
 async function faturaPdfSil(dosya){
@@ -793,6 +842,28 @@ function totals(){
   return {b,al,dengeli:Math.abs(b-al)<0.01};
 }
 const KAYNAK_AD={yz:'yapay zekâ', tahmin:'varsayılan', ogrenme:'öğrenilen', gecmis:'geçmiş fiş'};
+const KONTROL_AD={gider:'gider hesabı yapay zekâ/varsayılan', cari:'cari bulunamadı (198)', kdv:'KDV hesabı yok',
+  belge:'fatura bilgisi yapay zekâ ile okundu', benzer_ad:'geçmişte unvanın yalnız bir kısmı tuttu'};
+function kontrolHTML(s){
+  if(!s.kontrol||!s.kontrol.length) return '';
+  const neden=s.kontrol.map(k=>KONTROL_AD[k]||k).join(', ');
+  return ` <span class="kontrol-rozet" title="Doğrulanmamış: ${esc(neden)} — onaylanmazsa Excel'de açıklamaya KONTROL yazılır">KONTROL</span>`+
+    (s.hesap?`<button class="kontrol-onay" onclick="kontrolOnayla(${s._idx})" title="Bu hesap doğru — onayla ve öğret">✓ onayla</button>`:'');
+}
+function kontrolOnayla(i){
+  const s=satirlar[i]; if(!s||!s.hesap) return;
+  if(firmaKod && s.detay && (s.rol==='gider'||s.rol==='cari'||s.rol==='kdv')){
+    fetch(`/api/firma/${firmaKod}/ogret/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:s.detay,kod:s.hesap,rol:s.rol||'',yon:aktifYon(),oran:s.oran||0})}).catch(()=>{});
+  }
+  // aynı fişte aynı role ve hesaba sahip satırlar da (çok oranlı faturada birden çok gider satırı) onaylanır
+  const benzerAd=s.rol==='cari' && (s.kontrol||[]).includes('benzer_ad');
+  satirlar.forEach(x=>{ if(x.fisno===s.fisno && x.rol===s.rol && x.hesap===s.hesap) delete x.kontrol; });
+  // cari onaylandıysa aynı geçmiş kaydından gelen gider hesabı da onaylı sayılır
+  if(benzerAd) satirlar.forEach(x=>{ if(x.fisno===s.fisno && x.kontrol){ x.kontrol=x.kontrol.filter(k=>k!=='benzer_ad'); if(!x.kontrol.length) delete x.kontrol; } });
+  if(s.rol==='gider') satirlar.forEach(x=>{ if(x.fisno===s.fisno && x.rol==='gider'){ x.kaynak='ogrenme'; delete x.not; } });
+  render();
+}
 let sonIsleSonuc=null;   // süzgeç/düzenleme sonrası yeniden çizimde uyarılar kaybolmasın
 function render(r){
   if(r) sonIsleSonuc=r; else r=sonIsleSonuc;
@@ -804,11 +875,14 @@ function render(r){
   // Süzgeç butonları — Eşleşme durumu
   const eslesmeyen=satirlar.filter(s=>!s.hesap).length;
   const eslesen=satirlar.length-eslesmeyen;
+  const kontrolFis=new Set(satirlar.filter(s=>s.kontrol&&s.kontrol.length).map(s=>s.fisno));
+  const kontrolSayi=kontrolFis.size;
   h+=`<div style="margin-bottom:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
     <span style="font-size:12px;color:#666">Durum:</span>
     <button class="btn ${suzgec==='hepsi'?'btn-ana':''}" onclick="suzgecDegistir('hepsi')" style="padding:3px 10px;font-size:12px">Hepsi (${satirlar.length})</button>
     <button class="btn ${suzgec==='eslesmeyen'?'btn-ana':''}" onclick="suzgecDegistir('eslesmeyen')" style="padding:3px 10px;font-size:12px;${eslesmeyen?'background:#d4a017;color:#fff':''}">⚠ Eşleşmeyen (${eslesmeyen})</button>
     <button class="btn ${suzgec==='eslesen'?'btn-ana':''}" onclick="suzgecDegistir('eslesen')" style="padding:3px 10px;font-size:12px">✓ Eşleşen (${eslesen})</button>
+    ${kontrolSayi?`<button class="btn ${suzgec==='kontrol'?'btn-ana':''}" onclick="suzgecDegistir('kontrol')" style="padding:3px 10px;font-size:12px;background:#ffd84d;color:#5a4500">KONTROL (${kontrolSayi} fiş)</button>`:''}
   </div>`;
 
   // Süzgeç butonları — Banka bazlı
@@ -837,6 +911,7 @@ function render(r){
   let gosterilecek = satirlar.map((s,i)=>({...s,_idx:i}));
   if(suzgec==='eslesmeyen') gosterilecek=gosterilecek.filter(s=>!s.hesap);
   else if(suzgec==='eslesen') gosterilecek=gosterilecek.filter(s=>!!s.hesap);
+  else if(suzgec==='kontrol') gosterilecek=gosterilecek.filter(s=>kontrolFis.has(s.fisno));
   // Banka filtresi: seçilen bankanın fis_aciklama'sına sahip fişleri göster
   if(bankaSuzgec!=='hepsi'){
     const fisNolar = new Set();
@@ -862,8 +937,8 @@ function render(r){
         </select>
         <span style="position:absolute;right:4px;top:50%;transform:translateY(-50%);pointer-events:none;font-size:10px;color:#888">▼</span>
       </div>
-      ${hesapAdi?`<div class="hint" style="font-size:10px;margin-top:1px">${hesapAdi.slice(0,32)}</div>`:''}`;
-      return `<tr class="${s.hesap?'':'warn'}">
+      ${hesapAdi?`<div class="hint" style="font-size:10px;margin-top:1px">${hesapAdi.slice(0,32)}</div>`:''}${kontrolHTML(s)}`;
+      return `<tr class="${s.hesap?'':'warn'}${s.kontrol&&s.kontrol.length?' kontrol-satir':''}">
         <td><input type="checkbox" ${s.secili?'checked':''} onchange="edit(${i},'secili',this.checked)"></td>
         <td><input value="${s.fisno||''}" onchange="edit(${i},'fisno',this.value)" style="width:70px"></td>
         <td><input value="${s.fis_tarih||''}" onchange="edit(${i},'fis_tarih',this.value)" style="width:96px"></td>
@@ -878,7 +953,7 @@ function render(r){
         </td>
       </tr>`;
     }
-    return `<tr class="${s.hesap?'':'warn'}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}"${s.not?` title="${esc(s.not)}"`:''}>${KAYNAK_AD[s.kaynak]||s.kaynak}</span>`:''}${s.not?`<div class="gerekce">${esc(s.not)}</div>`:''}${s.belge?` <span class="kaynak belge-${s.belge}" title="${s.belge==='yz'?'Bu faturanın bir kısmı yapay zekâ ile okundu — kontrol et':'Bu faturanın bilgisi PDF\'ten geldi ya da tamamlandı'}">${s.belge==='yz'?'yapay zekâ':'PDF'}</span>`:''}</td><td style="font-size:11px;max-width:180px;word-break:break-all">${s.evrak_no||''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
+    return `<tr class="${s.hesap?'':'warn'}${s.kontrol&&s.kontrol.length?' kontrol-satir':''}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'}${kontrolHTML(s)} ${s.kaynak?`<span class="kaynak ${s.kaynak}"${s.not?` title="${esc(s.not)}"`:''}>${KAYNAK_AD[s.kaynak]||s.kaynak}</span>`:''}${s.not?`<div class="gerekce">${esc(s.not)}</div>`:''}${s.belge?` <span class="kaynak belge-${s.belge}" title="${s.belge==='yz'?'Bu faturanın bir kısmı yapay zekâ ile okundu — kontrol et':'Bu faturanın bilgisi PDF\'ten geldi ya da tamamlandı'}">${s.belge==='yz'?'yapay zekâ':'PDF'}</span>`:''}</td><td style="font-size:11px;max-width:180px;word-break:break-all">${s.evrak_no||''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
   }).join('');
   h+=`</tbody><tfoot style="position:sticky;bottom:0;z-index:1"><tr class="tot"><td colspan="5" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<ul class="uyari uyari-liste">'+r.uyarilar.slice(0,12).map(u=>`<li>${esc(u)}</li>`).join('')+(r.uyarilar.length>12?`<li>… ${r.uyarilar.length-12} uyarı daha</li>`:'')+'</ul>';
@@ -903,6 +978,8 @@ function edit(i,alan,deger){
       if(n) toast(`%${satirlar[i].oran} KDV: ${n} satır daha ${deger} hesabına geçti`,true);
     }
     if(satirlar[i].rol==='gider'){ satirlar[i].kaynak='ogrenme'; delete satirlar[i].not; }
+    // elle düzeltilen hesap doğrulanmış sayılır (yapay zekâ ile okunan fatura bilgisi işareti kalır)
+    if(satirlar[i].kontrol){ satirlar[i].kontrol=satirlar[i].kontrol.filter(k=>k==='belge'); if(!satirlar[i].kontrol.length) delete satirlar[i].kontrol; }
   }
   if(duzenleMod){
     const container = $('onizle').querySelector('div[style*="overflow-y"]');
