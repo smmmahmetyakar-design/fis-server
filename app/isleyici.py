@@ -1653,6 +1653,17 @@ def _pdf_gercek_faturalar(hamlar, yon="alis"):
     return out
 
 
+def alt_hesap_kodlari(hesaplar) -> set:
+    """Kayıt atılabilir (en alt kırılım) hesaplar: başka bir hesabın üst hesabı
+    olmayanlar. "740" ve "740.01" üst hesaptır, "740.01.001" alt hesaptır."""
+    ust = set()
+    for k, _ in hesaplar:
+        parca = k.split(".")
+        for i in range(1, len(parca)):
+            ust.add(".".join(parca[:i]))
+    return {k for k, _ in hesaplar if k not in ust}
+
+
 # ------------------------------------------------------- fatura listesi + fatura PDF'leri
 _EKSIK_AD = {"cari": "cari", "tarih": "tarih", "kdv": "KDV dağılımı", "tutar": "tutar", "fatura_no": "fatura no"}
 
@@ -1688,6 +1699,9 @@ def _liste_pdf_birlestir(liste, pdfler):
             continue
         kullanilan.add(a)
         f["pdf"] = p.get("dosya", "")
+        # fatura kalemlerinin açıklamaları (gider hesabı seçimi için) yalnız PDF'te var
+        if p.get("kalem_aciklamalari") and not f.get("kalem_aciklamalari"):
+            f["kalem_aciklamalari"] = p["kalem_aciklamalari"]
         eksik = list(f.get("eksik", []))
         dolan = []
         if "cari" in eksik and p.get("cari_ad"):
@@ -1766,7 +1780,8 @@ def _liste_pdf_birlestir(liste, pdfler):
     return liste, uyarilar
 
 
-def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None):
+def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
+                gider_ogrenme=None, gider_onerici=None):
     """
     Fatura listesi -> muhasebe fişi.
     ALIŞ: gider(7xx) + 191(indirilecek KDV) borç / 320(satıcı) alacak
@@ -1819,6 +1834,13 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None):
         if f.get("uyari"):
             uyarilar.append(f["uyari"])
 
+    alt_kodlar = alt_hesap_kodlari(km.hesaplar)
+    vars_gider = next((k for onek in (("740", "770", "760", "730", "150", "153") if yon == "alis"
+                                      else ("600", "601", "602"))
+                       for k, _ in km.hesaplar if k in alt_kodlar and (k == onek or k.startswith(onek + "."))),
+                      "198.01.001")
+    gider_bekleyen = set()
+
     fisler = []
     fis = fis0
     for f in sorted(faturalar, key=lambda x: x["tarih"] or ""):
@@ -1843,32 +1865,44 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None):
         # Geçmiş fişlerde bu cari hiç geçmemişse (yeni tedarikçi/müşteri veya
         # cari adı ilk kez okunuyor) mizan hesap adlarıyla da dene — bugünkü
         # eslestir() düzeltmesiyle aynı mekanizma (kurallar.py).
+        cari_onek = ("320", "329", "331", "335") if yon == "alis" else ("120", "121")
         if not cari_kod:
-            ek_kod, ek_kaynak = km.eslestir(cari_ad)
+            ek_kod, ek_kaynak = km.eslestir(cari_ad, onekler=cari_onek)
             if ek_kod:
                 cari_kod = ek_kod
                 cari_kaynak = cari_kaynak or ek_kaynak
 
-        # varsayılanlar — cari bilinmiyorsa 198.01.001, gider/gelir mizandan bulunur
-        vars_cari = "198.01.001"
-        # Gider hesabı: mizandan ilk 740 (alış) veya 600 (satış) hesabını bul
-        if yon == "alis":
-            vars_gider = next((k for k, a in km.hesaplar if k.startswith("740")), "198.01.001")
-        else:
-            vars_gider = next((k for k, a in km.hesaplar if k.startswith("600")), "198.01.001")
-
         # cari doğru öneke uymuyorsa varsayılan
-        if yon == "alis":
-            if not cari_kod or not cari_kod.startswith(("320", "329", "331", "335")):
-                cari_kod = vars_cari
-            # gider cari'yle aynıysa (aynı öğrenme sonucu) veya 320'yse varsayılana düş
-            if not gider_kod or gider_kod == cari_kod or gider_kod.startswith(("320", "120", "100", "102")):
-                gider_kod = vars_gider
-        else:  # satış
-            if not cari_kod or not cari_kod.startswith(("120", "121")):
-                cari_kod = vars_cari
-            if not gider_kod or gider_kod == cari_kod or gider_kod.startswith(("120", "320")):
-                gider_kod = vars_gider  # 600 gelir
+        vars_cari = "198.01.001"
+        if not cari_kod or not cari_kod.startswith(cari_onek):
+            cari_kod = vars_cari
+
+        # GİDER / GELİR HESABI — öncelik sırası:
+        #   1) kullanıcının bu cari için yaptığı düzeltme (gider öğrenmesi)
+        #   2) geçmiş fişlerde bu carinin karşısındaki hesap
+        #   3) yapay zekâ önerisi (fatura kalemleri + satıcı adı, yalnız mizandaki alt hesaplar)
+        #   4) varsayılan ALT hesap (ana hesap "740" değil — ona kayıt atılamaz)
+        gider_kaynak, gider_not = "", ""
+        yasak_onek = ("320", "329", "120", "121", "100", "102", "191", "391")
+        ogr = (gider_ogrenme or {}).get(f"{yon}|{norm(cari_ad)}")
+        if ogr and ogr in alt_kodlar:
+            gider_kod, gider_kaynak = ogr, "ogrenme"
+        elif gider_kod and gider_kod in alt_kodlar and gider_kod != cari_kod \
+                and not gider_kod.startswith(yasak_onek):
+            gider_kaynak = "gecmis"
+        else:
+            gider_kod = ""
+            # Cari adı okunamamış ve kalem açıklaması da yoksa modele verilecek bilgi yok
+            # (yalnız fatura no) — sormak boşuna Ollama'yı meşgul eder.
+            bilgi_var = bool(f.get("kalem_aciklamalari")) or "cari" not in f.get("eksik", [])
+            if gider_onerici and bilgi_var:
+                oneri = gider_onerici(cari_ad, f.get("kalem_aciklamalari") or [], yon)
+                if oneri and oneri.get("kod") in alt_kodlar:
+                    gider_kod, gider_kaynak, gider_not = oneri["kod"], "yz", oneri.get("gerekce", "")
+                elif oneri and oneri.get("bekliyor"):
+                    gider_bekleyen.add(cari_ad)
+            if not gider_kod:
+                gider_kod, gider_kaynak = vars_gider, "tahmin"
 
         # Belge kaynağı rozeti: yapay zekâ ile tamamlanan > PDF'ten gelen/tamamlanan
         belge_rozet = ("yz" if f.get("yz") else
@@ -1880,6 +1914,18 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None):
                      evrak_no=fatura_no, detay=cari_ad, kaynak=cari_kaynak or "fatura")
             if belge_rozet:
                 s["belge"] = belge_rozet
+            # rol: arayüzde düzeltme hangi öğrenmeye gidecek (gider düzeltmesi cariye öğrenilmesin)
+            if hesap == gider_kod and hesap != cari_kod:
+                s["rol"] = "gider"
+                s["kaynak"] = gider_kaynak
+                if gider_not:
+                    s["not"] = gider_not
+            elif hesap == cari_kod:
+                s["rol"] = "cari"
+            elif hesap.startswith(("191", "391")):
+                s["rol"] = "kdv"
+            else:
+                s["rol"] = "diger"
             return s
 
         def gecmis_kdv_sec(oran, yon):
@@ -1921,7 +1967,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None):
                     fisler.append(sat(kdv_kod, kdv, 0, f" (%{oran} KDV)"))
                 else:  # satış
                     kdv_kod = gecmis_kdv_sec(oran, "satis") or "391.02"
-                    fisler.append(sat(vars_gider, 0, matrah, f" (%{oran})"))
+                    fisler.append(sat(gider_kod or vars_gider, 0, matrah, f" (%{oran})"))
                     fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
 
             # tevkifat: satışta 391 alacaktan düşülür (biz KDV'nin bir kısmını
@@ -1947,9 +1993,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None):
         # gider/gelir yaz. Kullanıcı Düzenle'de KDV'yi ayırabilir.
         if not f["kalemler"] and toplam > 0:
             if yon == "alis":
-                fisler.append(sat(gider_kod or "", toplam, 0))
+                fisler.append(sat(gider_kod or vars_gider, toplam, 0))
             else:
-                fisler.append(sat(vars_gider, 0, toplam))
+                fisler.append(sat(gider_kod or vars_gider, 0, toplam))
         for k in f["kalemler"]:
             oran = k["oran"]
             matrah = k["matrah"]; kdv = k["kdv"]
@@ -1958,7 +2004,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None):
                 if yon == "alis":
                     fisler.append(sat(gider_kod or vars_gider, matrah, 0))
                 else:
-                    fisler.append(sat(vars_gider, 0, matrah))
+                    fisler.append(sat(gider_kod or vars_gider, 0, matrah))
                 continue
             if yon == "alis":
                 fisler.append(sat(gider_kod or vars_gider, matrah, 0, f" (%{oran})"))
@@ -1972,7 +2018,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None):
                 if not kdv_kod:
                     uyarilar.append(f"{cari_ad[:20]}: %{oran} için 391 hesaplanan KDV bulunamadı")
                     kdv_kod = "391.02"
-                fisler.append(sat(vars_gider, 0, matrah, f" (%{oran})"))
+                fisler.append(sat(gider_kod or vars_gider, 0, matrah, f" (%{oran})"))
                 fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
 
         # ek vergi (BSMV %5) — TTNET, faktoring karışık faturaları için
@@ -1991,6 +2037,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None):
 
         fis += 1
 
+    if gider_bekleyen:
+        uyarilar.insert(0, f"{len(gider_bekleyen)} cari için gider hesabı yapay zekâ ile seçiliyor; "
+                           f"şimdilik varsayılan hesap yazıldı — bitince tekrar İşle'ye basın")
     return fisler, uyarilar
 
 
@@ -2263,11 +2312,12 @@ def isle_fis(kalemler, km, fis0=1, karsi_hesap="198.01.001"):
     return fisler, uyarilar
 
 
-def isle(tip, hamlar, km, fis0, yon="alis", pdf_faturalar=None):
+def isle(tip, hamlar, km, fis0, yon="alis", pdf_faturalar=None, gider_ogrenme=None, gider_onerici=None):
     if tip == "banka":
         return isle_banka(hamlar, km, fis0)
     if tip == "fatura":
-        return isle_fatura(hamlar, km, fis0, yon=yon, pdf_faturalar=pdf_faturalar)
+        return isle_fatura(hamlar, km, fis0, yon=yon, pdf_faturalar=pdf_faturalar,
+                           gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici)
     if tip == "cek":
         return isle_cek(hamlar, km, fis0)
     if tip == "fis":

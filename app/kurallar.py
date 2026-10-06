@@ -801,8 +801,11 @@ class KuralMotoru:
             return ""
         return adaylar[0][0]
 
-    def eslestir(self, aciklama: str):
+    def eslestir(self, aciklama: str, onekler: tuple | None = None):
         """
+        onekler verilirse yalnızca bu öneklerle başlayan hesaplar kabul edilir
+        (örn. fatura carisi için 320/120). Böylece aynı açıklamaya öğrenilmiş
+        bir gider kodu cari eşleştirmesini kapatmaz.
         Hesap kodu eşleştirme:
         1) Kullanıcı öğretmişse (öğrenme) — TAM eşleşme
         2) Geçmiş fişlerde birebir geçiyorsa — TAM eşleşme
@@ -820,6 +823,8 @@ class KuralMotoru:
 
         def _mizan_kontrol(kod, kaynak):
             if not kod:
+                return "", ""
+            if onekler and not kod.startswith(onekler):
                 return "", ""
             if kod in mizan_kodlari:
                 return kod, kaynak
@@ -845,7 +850,7 @@ class KuralMotoru:
         # 3) Mizan hesap adıyla kelime eşleşmesi — TÜM anlamlı kelimeler
         #    (LTD/ŞTİ/SAN/TİC gibi ekler hariç) hesap adında geçmeli.
         kod = self._mizan_isim_eslestir(aciklama)
-        if kod:
+        if kod and (not onekler or kod.startswith(onekler)):
             return kod, "mizan"
 
         # 4) Hiçbir kesin eşleşme yok → boş döner → 198.01.001

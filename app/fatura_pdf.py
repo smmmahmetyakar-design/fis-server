@@ -19,11 +19,11 @@ from pathlib import Path
 from app import yapay_zeka
 from app.kurallar import norm
 
-OKUYUCU_SURUM = 1
+OKUYUCU_SURUM = 2   # 2: fatura kalem açıklamaları (gider seçimi için)
 YONLER = ("alis", "satis")
 
 _kilit = threading.RLock()
-_kuyruk: "queue.Queue[tuple[str, str, str]]" = queue.Queue()
+_kuyruk: "queue.Queue" = queue.Queue()
 _kuyrukta: set = set()
 _isci = None
 
@@ -145,6 +145,34 @@ def _eksikler(f: dict, metin: str) -> list:
     return e
 
 
+_KALEM_BASLIK = ("MAL HIZMET", "MAL/HIZMET", "ACIKLAMA", "URUN", "HIZMET", "CINSI", "STOK ADI", "MALZEME")
+
+
+def _kalem_aciklamalari(tablolar: list) -> list:
+    """Fatura kalem tablosundan mal/hizmet açıklamaları ("Nakliye bedeli",
+    "A4 fotokopi kağıdı"...). Gider hesabı seçiminde yapay zekâya verilir."""
+    out = []
+    for tb in tablolar or []:
+        for ri, row in enumerate(tb[:3]):
+            nrow = [norm(str(c or "")).replace("/", " ") for c in row]
+            j = next((j for j, c in enumerate(nrow)
+                      if any(b.replace("/", " ") in c for b in _KALEM_BASLIK)
+                      and not any(x in c for x in ("TOPLAM", "TUTAR", "KDV", "FIYAT", "ORAN", "MIKTAR"))), None)
+            if j is None:
+                continue
+            for r in tb[ri + 1:]:
+                if j < len(r):
+                    v = re.sub(r"\s+", " ", str(r[j] or "")).strip()
+                    if len(v) > 2 and not re.fullmatch(r"[\d.,%\s]+(TL)?", v):
+                        out.append(v[:120])
+            break
+    tekil = []
+    for v in out:
+        if v not in tekil:
+            tekil.append(v)
+    return tekil[:15]
+
+
 def _sayfa_oku(sayfa: dict, dosya: str, yon: str) -> dict | None:
     from app.isleyici import _pdf_tekil_fatura_ayikla
     k = _pdf_tekil_fatura_ayikla({**sayfa, "dosya": dosya}, yon=yon)
@@ -167,6 +195,7 @@ def _sayfa_oku(sayfa: dict, dosya: str, yon: str) -> dict | None:
         "tevkifat": 0.0, "tevkifat_kod": "",
         "ek_vergi": ek,
         "yon": yon, "dosya": dosya, "kaynak": "pdf", "yz": [],
+        "kalem_aciklamalari": _kalem_aciklamalari(sayfa.get("tablolar")),
     }
     f["eksik"] = _eksikler(f, metin)
     return f
@@ -217,6 +246,8 @@ def oku(k: Path, p: Path, yon: str, yz_kuyruga: bool = True) -> dict:
             kayit["faturalar"], _ = _dosya_oku(p, yon)
         except Exception as e:
             kayit["hata"] = f"{e.__class__.__name__}: {e}"
+        if eski and eski.get("sha1") == sha:
+            _yz_alanlarini_tasi(eski, kayit)
         with _kilit:
             v = _oku(k)
             v[p.name] = kayit
@@ -225,6 +256,31 @@ def oku(k: Path, p: Path, yon: str, yz_kuyruga: bool = True) -> dict:
             and kayit.get("yz_durum") in ("", "yz_sirada", "yz_okunuyor"):
         yz_kuyruga_al(k, p.name, yon)
     return kayit
+
+
+def _yz_alanlarini_tasi(eski: dict, yeni: dict):
+    """Okuyucu sürümü değişip PDF yeniden okunduğunda, aynı dosya için yapay
+    zekânın daha önce doldurduğu alanları yeni kayda aktarır (tekrar sorulmasın)."""
+    eski_fl = eski.get("faturalar") or []
+    for i, f in enumerate(yeni.get("faturalar") or []):
+        e = next((x for x in eski_fl if x.get("fatura_no") and x.get("fatura_no") == f.get("fatura_no")),
+                 eski_fl[i] if i < len(eski_fl) else None)
+        if not e or not e.get("yz"):
+            continue
+        for alan in e["yz"]:
+            if alan == "cari" and "cari" in f["eksik"]:
+                f["cari_ad"] = e["cari_ad"]
+            elif alan == "tarih" and "tarih" in f["eksik"]:
+                f["tarih"] = e["tarih"]
+            elif alan == "fatura_no" and "fatura_no" in f["eksik"]:
+                f["fatura_no"] = e["fatura_no"]
+            elif alan in ("tutar", "kdv") and ({"tutar", "kdv"} & set(f["eksik"])):
+                f["kalemler"], f["ek_vergi"], f["toplam"] = e["kalemler"], e["ek_vergi"], e["toplam"]
+                f["senaryo"] = e.get("senaryo", f.get("senaryo", ""))
+        f["yz"] = list(e["yz"])
+        f["eksik"] = [x for x in f["eksik"] if x not in e["yz"] and not (x == "tutar" and "kdv" in e["yz"])]
+    yeni["yz_durum"] = eski.get("yz_durum", "")
+    yeni["yz_notlar"] = eski.get("yz_notlar", [])
 
 
 def sil(k: Path, dosya: str):
@@ -279,7 +335,7 @@ def yz_kuyruga_al(k: Path, dosya: str, yon: str, zorla: bool = False) -> bool:
             if _oku(k).get(dosya, {}).get("yz_notlar") != not_:
                 _guncelle(k, dosya, yz_durum="", yz_notlar=not_)
         return False
-    anahtar = (k.as_posix(), dosya)
+    anahtar = ("pdf", k.as_posix(), dosya)
     with _kilit:
         if anahtar in _kuyrukta:
             return True
@@ -288,13 +344,30 @@ def yz_kuyruga_al(k: Path, dosya: str, yon: str, zorla: bool = False) -> bool:
             if dosya in v:
                 v[dosya]["yz_durum"] = ""
                 _yaz(k, v)
-        _kuyrukta.add(anahtar)
         _guncelle(k, dosya, yz_durum="yz_sirada")
-        _kuyruk.put((k.as_posix(), dosya, yon))
+    is_ekle(anahtar, lambda: _yz_isle(k, dosya, yon),
+            lambda e: _guncelle(k, dosya, yz_durum="yz_eksik",
+                                yz_notlar=[f"Yapay zekâ hatası: {e.__class__.__name__}: {e}"]))
+    return True
+
+
+def is_ekle(anahtar, fn, hata_fn=None) -> bool:
+    """Yapay zekâ işini tek işçili kuyruğa ekler (Ollama'yı aynı anda tek işle meşgul et).
+    Aynı anahtar zaten kuyruktaysa tekrar eklenmez."""
+    global _isci
+    with _kilit:
+        if anahtar in _kuyrukta:
+            return False
+        _kuyrukta.add(anahtar)
+        _kuyruk.put((anahtar, fn, hata_fn))
         if _isci is None or not _isci.is_alive():
-            _isci = threading.Thread(target=_isci_dongu, daemon=True, name="yz-fatura")
+            _isci = threading.Thread(target=_isci_dongu, daemon=True, name="yapay-zeka")
             _isci.start()
     return True
+
+
+def kuyrukta_mi(anahtar) -> bool:
+    return anahtar in _kuyrukta
 
 
 def kuyruk_bilgisi() -> dict:
@@ -303,15 +376,18 @@ def kuyruk_bilgisi() -> dict:
 
 def _isci_dongu():
     while True:
-        k_str, dosya, yon = _kuyruk.get()
-        k = Path(k_str)
+        anahtar, fn, hata_fn = _kuyruk.get()
         try:
-            _yz_isle(k, dosya, yon)
+            fn()
         except Exception as e:
-            _guncelle(k, dosya, yz_durum="yz_eksik", yz_notlar=[f"Yapay zekâ hatası: {e.__class__.__name__}: {e}"])
+            if hata_fn:
+                try:
+                    hata_fn(e)
+                except Exception:
+                    pass
         finally:
             with _kilit:
-                _kuyrukta.discard((k_str, dosya))
+                _kuyrukta.discard(anahtar)
             _kuyruk.task_done()
 
 

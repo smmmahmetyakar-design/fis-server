@@ -120,6 +120,8 @@
   .uyari-liste{margin:8px 0 0;padding-left:18px;line-height:1.5}
   .yz-not{font-size:11px;color:var(--muted);margin-top:3px}
   .yz-not summary{cursor:pointer}
+  .kaynak.yz{background:#e7defa;color:#4b2f86;cursor:help}
+  .gerekce{font-size:10.5px;color:#6a5a8a;margin-top:2px;line-height:1.3;max-width:260px}
   .kaynak.belge-pdf{background:#e0ecf7;color:#24456b}
   .kaynak.belge-yz{background:#e7defa;color:#4b2f86}
   .grp-a td{background:#fff}
@@ -790,6 +792,7 @@ function totals(){
   const al=satirlar.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0);
   return {b,al,dengeli:Math.abs(b-al)<0.01};
 }
+const KAYNAK_AD={yz:'yapay zekâ', tahmin:'varsayılan', ogrenme:'öğrenilen', gecmis:'geçmiş fiş'};
 let sonIsleSonuc=null;   // süzgeç/düzenleme sonrası yeniden çizimde uyarılar kaybolmasın
 function render(r){
   if(r) sonIsleSonuc=r; else r=sonIsleSonuc;
@@ -875,7 +878,7 @@ function render(r){
         </td>
       </tr>`;
     }
-    return `<tr class="${s.hesap?'':'warn'}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}${s.belge?` <span class="kaynak belge-${s.belge}" title="${s.belge==='yz'?'Bu faturanın bir kısmı yapay zekâ ile okundu — kontrol et':'Bu faturanın bilgisi PDF\'ten geldi ya da tamamlandı'}">${s.belge==='yz'?'yapay zekâ':'PDF'}</span>`:''}</td><td style="font-size:11px;max-width:180px;word-break:break-all">${s.evrak_no||''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
+    return `<tr class="${s.hesap?'':'warn'}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}"${s.not?` title="${esc(s.not)}"`:''}>${KAYNAK_AD[s.kaynak]||s.kaynak}</span>`:''}${s.not?`<div class="gerekce">${esc(s.not)}</div>`:''}${s.belge?` <span class="kaynak belge-${s.belge}" title="${s.belge==='yz'?'Bu faturanın bir kısmı yapay zekâ ile okundu — kontrol et':'Bu faturanın bilgisi PDF\'ten geldi ya da tamamlandı'}">${s.belge==='yz'?'yapay zekâ':'PDF'}</span>`:''}</td><td style="font-size:11px;max-width:180px;word-break:break-all">${s.evrak_no||''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
   }).join('');
   h+=`</tbody><tfoot style="position:sticky;bottom:0;z-index:1"><tr class="tot"><td colspan="5" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<ul class="uyari uyari-liste">'+r.uyarilar.slice(0,12).map(u=>`<li>${esc(u)}</li>`).join('')+(r.uyarilar.length>12?`<li>… ${r.uyarilar.length-12} uyarı daha</li>`:'')+'</ul>';
@@ -892,7 +895,8 @@ function edit(i,alan,deger){
   // hesap elle değişince öğret
   if(alan==='hesap' && deger && deger!==eski && satirlar[i].detay){
     fetch(`/api/firma/${firmaKod}/ogret/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:satirlar[i].detay,kod:deger})}).catch(()=>{});
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:satirlar[i].detay,kod:deger,rol:satirlar[i].rol||'',yon:aktifYon()})}).catch(()=>{});
+    if(satirlar[i].rol==='gider'){ satirlar[i].kaynak='ogrenme'; delete satirlar[i].not; }
   }
   if(duzenleMod){
     const container = $('onizle').querySelector('div[style*="overflow-y"]');

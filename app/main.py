@@ -29,7 +29,7 @@ from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar
 from app.belge_oku import belge_oku
 from app import isleyici
 from app import sunucu_klasor as sk
-from app import fatura_pdf, yapay_zeka
+from app import fatura_pdf, yapay_zeka, gider_yz
 
 DATA_DIR = Path(os.environ.get("FIS_DATA", "/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -704,7 +704,12 @@ def isle(kod: str, tip: str, body: IsleBody):
     pdf_faturalar, yz_bekleyen = [], 0
     if tip == "fatura" and body.yon in fatura_pdf.YONLER:
         pdf_faturalar, yz_bekleyen = fatura_pdf.faturalar(d, body.yon)
-    fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon, pdf_faturalar=pdf_faturalar)
+    gider_ogrenme, gider_onerici = None, None
+    if tip == "fatura":
+        gider_ogrenme = _read_json(d / "fatura_gider_ogrenme.json", {})
+        gider_onerici = gider_yz.onerici(d, km.hesaplar, isleyici.alt_hesap_kodlari(km.hesaplar), body.yon)
+    fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon, pdf_faturalar=pdf_faturalar,
+                                     gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici)
     if yz_bekleyen:
         uyarilar.insert(0, f"{yz_bekleyen} PDF hâlâ yapay zekâ ile okunuyor — bitince tekrar İşle'ye basın")
     if tip == "fatura":
@@ -795,6 +800,8 @@ class OgretBody(BaseModel):
     tip: str
     aciklama: str
     kod: str
+    rol: str = ""          # fatura satırının rolü: gider | cari | kdv | diger
+    yon: str = "alis"      # fatura için alis | satis
 
 
 @app.post("/api/firma/{kod}/ogret/{tip}")
@@ -802,6 +809,18 @@ def ogret(kod: str, tip: str, body: OgretBody):
     if tip not in TIPLER:
         raise HTTPException(400, "Geçersiz tip")
     d = firma_dir(kod)
+    if tip == "fatura" and body.rol in ("gider", "kdv", "diger"):
+        # Faturada bütün satırların açıklaması cari adıdır. Gider satırındaki
+        # düzeltme "cari adı -> kod" diye genel öğrenmeye yazılırsa cari
+        # eşleştirmesini bozar ve gider hiç hatırlanmaz. Gider kendi dosyasına,
+        # cari + yön anahtarıyla öğrenilir; KDV/diğer satırlar öğrenilmez.
+        if body.rol != "gider":
+            return {"ok": True, "ogrenilen": 0, "not": "bu satır türü öğrenilmez"}
+        p = d / "fatura_gider_ogrenme.json"
+        og = _read_json(p, {})
+        og[f"{body.yon}|{norm(body.aciklama)}"] = body.kod
+        _write_json(p, og)
+        return {"ok": True, "ogrenilen": len(og), "tur": "gider"}
     km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", gecmis_fis_pdf_yolu(d))
     km.ogret(body.aciklama, body.kod)
     return {"ok": True, "ogrenilen": len(km.ogrenme)}

@@ -225,3 +225,45 @@ def dogrula(sonuc: dict, metin: str) -> dict:
     if rakam_gecerli:
         alanlar.update(kalemler=kalemler, ek_vergi=ek, toplam=toplam)
     return {"alanlar": alanlar, "rakam_gecerli": rakam_gecerli, "notlar": notlar}
+
+
+# ------------------------------------------------------------------ gider / gelir hesabı seçimi
+_GIDER_TALIMAT = """Sen deneyimli bir Türk muhasebecisin (Tekdüzen Hesap Planı).
+Sana bir faturanın karşı tarafı ve fatura kalemlerinin açıklamaları verilecek.
+Bu faturanın {ne} için, firmanın mizanındaki hesaplardan EN UYGUN TEK hesabı seç.
+Yalnızca verilen listedeki kodlardan birini seçebilirsin. Hesap adlarına ve kalem açıklamalarına bak:
+ör. nakliye/taşıma -> nakliye gideri, akaryakıt -> akaryakıt/taşıt gideri, kırtasiye -> kırtasiye gideri,
+kira -> kira gideri, ticari mal alışı -> 153 Ticari Mallar, demirbaş/makine -> 255/253.
+Kalem açıklaması yoksa yalnızca karşı tarafın unvanından (sektöründen) çıkarım yap.
+gerekce alanına seçimin nedenini tek kısa Türkçe cümleyle yaz."""
+
+
+def gider_sec(cari_ad: str, aciklamalar: list, yon: str, adaylar: list) -> dict | None:
+    """Fatura için gider (alış) / gelir (satış) hesabı önerir.
+    adaylar: [(kod, ad)] — firmanın mizanındaki ALT hesaplar. Model yalnızca bunlardan
+    seçebilir (JSON şemasında enum). Döner: {'kod', 'gerekce'} veya None."""
+    if not OLLAMA_URL or not adaylar:
+        return None
+    kodlar = [k for k, _ in adaylar]
+    sema = {"type": "object",
+            "properties": {"kod": {"type": "string", "enum": kodlar},
+                           "gerekce": {"type": "string"}},
+            "required": ["kod", "gerekce"]}
+    ne = "gider/maliyet/stok kaydı (alış faturası)" if yon == "alis" else "gelir kaydı (satış faturası)"
+    kalemler = "\n".join(f"- {a}" for a in aciklamalar[:15]) or "(kalem açıklaması yok)"
+    hesaplar = "\n".join(f"{k} — {a}" for k, a in adaylar)
+    govde = {
+        "model": OLLAMA_MODEL, "stream": False, "format": sema,
+        "options": {"temperature": 0, "num_ctx": 8192},
+        "messages": [
+            {"role": "system", "content": _GIDER_TALIMAT.format(ne=ne)},
+            {"role": "user", "content": f"KARŞI TARAF: {cari_ad}\n\nFATURA KALEMLERİ:\n{kalemler}\n\n"
+                                        f"SEÇEBİLECEĞİN HESAPLAR (kod — ad):\n{hesaplar}"},
+        ],
+    }
+    yanit = _istek("/api/chat", govde, zaman_asimi=ZAMAN_ASIMI)
+    sonuc = json.loads((yanit.get("message") or {}).get("content", "") or "{}")
+    kod = str(sonuc.get("kod", "")).strip()
+    if kod not in kodlar:            # şema zorlasa da ikinci kez denetle
+        return None
+    return {"kod": kod, "gerekce": str(sonuc.get("gerekce", "")).strip()[:200]}
