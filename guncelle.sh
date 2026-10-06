@@ -18,8 +18,17 @@ OLLAMA_URL="http://host.docker.internal:11434"
 OLLAMA_MODEL="qwen3:14b,qwen2.5:14b"
 [ -f ayarlar.env ] && . ./ayarlar.env
 
-echo "== GitHub'dan son sürüm çekiliyor =="
-sudo git pull origin main
+if [ "$1" != "--yeni-surum" ]; then
+  echo "== GitHub'dan son sürüm çekiliyor =="
+  once=$(sha1sum guncelle.sh)
+  sudo git pull origin main
+  # Bu betiğin kendisi değiştiyse yeni sürümü baştan çalıştır; yoksa bu
+  # çalıştırmada eski sürümün ayarları (ör. model adı) kullanılmış olur.
+  if [ "$once" != "$(sha1sum guncelle.sh)" ]; then
+    echo "== guncelle.sh değişti, yeni sürümüyle devam ediliyor =="
+    exec bash ./guncelle.sh --yeni-surum
+  fi
+fi
 
 echo "== Docker container yeniden başlatılıyor =="
 sudo docker stop fis-otomasyon 2>/dev/null || true
