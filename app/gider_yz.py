@@ -75,8 +75,9 @@ def onerici(d: Path, hesaplar: list, alt_kodlar: set, yon: str):
         kayit = onbellek.get(a)
         if kayit and kayit.get("kod") in alt_kodlar:
             return {"kod": kayit["kod"], "gerekce": kayit.get("gerekce", "")}
-        if kayit and kayit.get("red"):
-            return None          # model geçersiz cevap verdi: varsayılan kullanılır, tekrar sorulmaz
+        if kayit and kayit.get("red") and kayit.get("model") == yapay_zeka.aktif_model():
+            return None          # bu model geçersiz cevap verdi: varsayılan kullanılır, tekrar sorulmaz
+                                 # (model değişirse yeni modele bir kez daha sorulur)
         if kayit and kayit.get("hata"):
             # bağlantı/zaman aşımı gibi geçici hata: bir saat dolmadan tekrar deneme
             try:
@@ -97,7 +98,7 @@ def onerici(d: Path, hesaplar: list, alt_kodlar: set, yon: str):
 def _kaydet(d: Path, anahtar: str, kayit: dict):
     with _kilit:
         v = _oku(d)
-        v[anahtar] = {**kayit, "model": yapay_zeka.OLLAMA_MODEL,
+        v[anahtar] = {**kayit, "model": yapay_zeka.aktif_model(),
                       "zaman": datetime.now().isoformat(timespec="seconds")}
         _yaz(d, v)
 

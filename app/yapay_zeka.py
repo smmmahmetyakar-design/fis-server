@@ -13,14 +13,41 @@ tarih / fatura no alınabilir.
 
 Ayarlar (ortam değişkeni):
   OLLAMA_URL           örn. http://host.docker.internal:11434  (boşsa kapalı)
-  OLLAMA_MODEL         varsayılan qwen2.5:14b
+  OLLAMA_MODEL         tercih sırası, virgülle: varsayılan "qwen3:14b,qwen2.5:14b"
+                       (sunucuda ilk bulunan kullanılır; büyük model henüz
+                       indirilmediyse araç yedekle çalışmaya devam eder)
   OLLAMA_ZAMAN_ASIMI   saniye, varsayılan 600 (CPU'da 14b bir fatura dakikalar sürebilir)
 """
 import json, os, re, time, urllib.request, urllib.error
 from datetime import datetime
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "").rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:14b,qwen2.5:14b")
+MODELLER = [m.strip() for m in OLLAMA_MODEL.split(",") if m.strip()]
+_aktif = {"model": MODELLER[0] if MODELLER else ""}
+
+
+def aktif_model() -> str:
+    """Sunucuda bulunan, tercih sırasındaki ilk model (durum() belirler)."""
+    return _aktif["model"]
+
+
+def _model_var(model: str, yuklu: list) -> bool:
+    # "qwen3:14b" ile "qwen3:14b-q4_K_M" gibi etiketleri de kabul et
+    return any(m == model or m.startswith(model + "-")
+               or (":" not in model and m.split(":")[0] == model) for m in yuklu)
+
+
+def _govde_hazirla(govde: dict) -> dict:
+    """Qwen3 varsayılan olarak cevaptan önce uzun bir 'düşünme' metni üretir:
+    yavaşlatır ve JSON çıktısını bozabilir. Kısa, yapılandırılmış işlerde kapatılır
+    (Ollama 'think' parametresi + Qwen3'ün /no_think anahtarı; eski Ollama
+    sürümleri bilmediği alanı yok sayar)."""
+    model = govde["model"]
+    if model.startswith("qwen3"):
+        govde["think"] = False
+        govde["messages"][-1]["content"] += "\n/no_think"
+    return govde
 ZAMAN_ASIMI = int(os.environ.get("OLLAMA_ZAMAN_ASIMI", "600"))
 
 _durum_cache = {"zaman": 0.0, "veri": None}
@@ -40,21 +67,23 @@ def durum(tazele: bool = False) -> dict:
     """Ollama erişilebilir mi, model yüklü mü. 30 sn önbellekli."""
     if not tazele and _durum_cache["veri"] and time.time() - _durum_cache["zaman"] < 30:
         return _durum_cache["veri"]
-    out = {"etkin": False, "url": OLLAMA_URL, "model": OLLAMA_MODEL,
-           "model_var": False, "modeller": [], "hata": ""}
+    out = {"etkin": False, "url": OLLAMA_URL, "model": aktif_model(), "tercih": MODELLER,
+           "model_var": False, "modeller": [], "hata": "", "not": ""}
     if not OLLAMA_URL:
         out["hata"] = "OLLAMA_URL ayarlı değil"
     else:
         try:
             tags = _istek("/api/tags", zaman_asimi=3)
             out["modeller"] = [m.get("name", "") for m in tags.get("models", [])]
-            # "qwen2.5:14b" ile "qwen2.5:14b-instruct-q4_K_M" gibi etiketleri de kabul et
-            out["model_var"] = any(m == OLLAMA_MODEL or m.startswith(OLLAMA_MODEL + "-")
-                                   or (":" not in OLLAMA_MODEL and m.split(":")[0] == OLLAMA_MODEL)
-                                   for m in out["modeller"])
-            out["etkin"] = out["model_var"]
-            if not out["model_var"]:
-                out["hata"] = f"'{OLLAMA_MODEL}' modeli Ollama'da yok"
+            secilen = next((m for m in MODELLER if _model_var(m, out["modeller"])), "")
+            if secilen:
+                _aktif["model"] = secilen
+                out.update(model=secilen, model_var=True, etkin=True)
+                if secilen != MODELLER[0]:
+                    out["not"] = (f"{MODELLER[0]} sunucuda yok, şimdilik {secilen} kullanılıyor "
+                                  f"(sunucuda: ollama pull {MODELLER[0]})")
+            else:
+                out["hata"] = f"Ollama'da şu modellerin hiçbiri yok: {', '.join(MODELLER)}"
         except Exception as e:
             out["hata"] = f"Ollama'ya ulaşılamadı: {e.__class__.__name__}"
     _durum_cache.update(zaman=time.time(), veri=out)
@@ -107,7 +136,7 @@ def fatura_cikar(metin: str) -> dict | None:
     if len(metin) > 12000:          # bağlam penceresini aşmasın; özet tablolar genelde sonda
         metin = metin[:6000] + "\n...\n" + metin[-6000:]
     govde = {
-        "model": OLLAMA_MODEL,
+        "model": aktif_model(),
         "stream": False,
         "format": _SEMA,
         "options": {"temperature": 0, "num_ctx": 8192},
@@ -116,7 +145,7 @@ def fatura_cikar(metin: str) -> dict | None:
             {"role": "user", "content": "FATURA METNİ:\n" + metin},
         ],
     }
-    yanit = _istek("/api/chat", govde, zaman_asimi=ZAMAN_ASIMI)
+    yanit = _istek("/api/chat", _govde_hazirla(govde), zaman_asimi=ZAMAN_ASIMI)
     icerik = (yanit.get("message") or {}).get("content", "")
     return json.loads(icerik)
 
@@ -253,7 +282,7 @@ def gider_sec(cari_ad: str, aciklamalar: list, yon: str, adaylar: list) -> dict 
     kalemler = "\n".join(f"- {a}" for a in aciklamalar[:15]) or "(kalem açıklaması yok)"
     hesaplar = "\n".join(f"{k} — {a}" for k, a in adaylar)
     govde = {
-        "model": OLLAMA_MODEL, "stream": False, "format": sema,
+        "model": aktif_model(), "stream": False, "format": sema,
         "options": {"temperature": 0, "num_ctx": 8192},
         "messages": [
             {"role": "system", "content": _GIDER_TALIMAT.format(ne=ne)},
@@ -261,7 +290,7 @@ def gider_sec(cari_ad: str, aciklamalar: list, yon: str, adaylar: list) -> dict 
                                         f"SEÇEBİLECEĞİN HESAPLAR (kod — ad):\n{hesaplar}"},
         ],
     }
-    yanit = _istek("/api/chat", govde, zaman_asimi=ZAMAN_ASIMI)
+    yanit = _istek("/api/chat", _govde_hazirla(govde), zaman_asimi=ZAMAN_ASIMI)
     sonuc = json.loads((yanit.get("message") or {}).get("content", "") or "{}")
     kod = str(sonuc.get("kod", "")).strip()
     if kod not in kodlar:            # şema zorlasa da ikinci kez denetle

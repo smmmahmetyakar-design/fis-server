@@ -4,7 +4,7 @@
 #
 # Sunucuya özel ayarlar (git'e girmez) — /srv/apps/fis-server/ayarlar.env :
 #   OLLAMA_URL=http://host.docker.internal:11434   # Ollama adresi; boş bırakılırsa yapay zekâ kapalı
-#   OLLAMA_MODEL=qwen2.5:14b
+#   OLLAMA_MODEL=qwen3:14b,qwen2.5:14b         # tercih sırası; sunucuda ilk bulunan kullanılır
 
 # Tüm betik bir fonksiyonda: bash önce tamamını okur, sonra çalıştırır.
 # (Aşağıdaki git pull bu dosyanın kendisini değiştirdiğinde yarıda kalan
@@ -15,7 +15,7 @@ cd /srv/apps/fis-server
 
 # varsayılanlar; ayarlar.env varsa onlar geçerli
 OLLAMA_URL="http://host.docker.internal:11434"
-OLLAMA_MODEL="qwen2.5:14b"
+OLLAMA_MODEL="qwen3:14b,qwen2.5:14b"
 [ -f ayarlar.env ] && . ./ayarlar.env
 
 echo "== GitHub'dan son sürüm çekiliyor =="

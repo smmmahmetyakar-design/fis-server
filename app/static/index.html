@@ -619,7 +619,7 @@ async function faturaPdfListele(){
   const yz=v.yapay_zeka||{};
   $('yzDurum').className='yz-durum'+(yz.etkin?' acik':'');
   $('yzDurum').innerHTML = yz.etkin
-    ? `Yapay zekâ hazır: <b>${esc(yz.model)}</b>. Yalnızca PDF metninden okunamayan alanlar için, arka planda kullanılır. Verdiği rakamlar fatura metniyle ve matrah + KDV = toplam kontrolüyle doğrulanmadan fişe girmez.`
+    ? `Yapay zekâ hazır: <b>${esc(yz.model)}</b>. Yalnızca PDF metninden okunamayan alanlar için, arka planda kullanılır. Verdiği rakamlar fatura metniyle ve matrah + KDV = toplam kontrolüyle doğrulanmadan fişe girmez.${yz.not?`<br><b>Not:</b> ${esc(yz.not)}`:''}`
     : `Yapay zekâ kapalı (${esc(yz.hata||'ayarlı değil')}). PDF'ler yine metinden okunur; okunamayan alanları önizlemede elle düzeltebilirsin.`;
   const d=v.dosyalar||[];
   if(!d.length){ $('faturaPdfListe').innerHTML='<div class="hint">Henüz PDF yok.</div>'; return; }
