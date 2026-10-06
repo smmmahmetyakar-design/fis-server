@@ -710,6 +710,12 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                 fno = g(row, "fatura_no")
                 if not fno or not str(fno).strip():
                     continue
+                # Listenin altındaki not / açıklama satırları ("E-Fatura içeriğine konu olan
+                # kargo gönderi detay bilgilerine ... adresinden ulaşabilirsiniz") fatura değildir.
+                # Fatura no boşluksuz, kısa bir koddur (GIB2026000000448).
+                fno_s = str(fno).strip()
+                if len(fno_s) > 30 or len(fno_s.split()) > 2 or "http" in fno_s.lower() or "www." in fno_s.lower():
+                    continue
                 eksik = []
                 cari = str(g(row, "cari_ad") or "").strip()
                 # "Yalnız ... TL" gibi yazıyla tutar içeren açıklama cari ad değil
@@ -810,9 +816,27 @@ def _kdv_hesabi_ad(kod_ad_list, oran, yon="alis"):
         # tam oran eşleşmesi: %20 ile %10 karışmasın
         if re.search(rf"%{oran_str}(?!\d)", nad_sp) or re.search(rf"(?<!\d){oran_str}(?!\d)", nad_sp):
             adaylar.append((kod.count("."), kod))
+    alt = alt_hesap_kodlari([(h["kod"], h["ad"]) for h in kod_ad_list])
     if adaylar:
-        adaylar.sort(reverse=True)
-        return adaylar[0][1]
+        # kayıt atılabilir (alt) hesabı tercih et
+        yapraklar = [a for a in adaylar if a[1] in alt]
+        (yapraklar or adaylar).sort(reverse=True)
+        return (yapraklar or adaylar)[0][1]
+    # Adında hiç oran yazmayan KDV hesabı (çoğu mizanda tek "İndirilecek KDV"):
+    # başka bir oranın hesabı olmadığı kesinse onu kullan.
+    genel = []
+    for h in kod_ad_list:
+        kod = h["kod"]
+        if kod not in alt or not kod.startswith(prefix):
+            continue
+        nad = norm(h["ad"])
+        if any(y in nad for y in YASAK):
+            continue
+        if re.search(r"%\s*\d|(?<!\d)(1|8|10|18|20)(?!\d)", nad.replace(".", " ")):
+            continue        # adında başka bir oran yazıyor
+        genel.append(kod)
+    if genel:
+        return sorted(genel)[0]
     return ""
 
 
@@ -1838,8 +1862,11 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
     vars_gider = next((k for onek in (("740", "770", "760", "730", "150", "153") if yon == "alis"
                                       else ("600", "601", "602"))
                        for k, _ in km.hesaplar if k in alt_kodlar and (k == onek or k.startswith(onek + "."))),
-                      "198.01.001")
+                      "")
+    if not vars_gider and yon == "alis":   # tercihli gruplarda yoksa herhangi bir 7xx gider alt hesabı
+        vars_gider = next((k for k, _ in km.hesaplar if k in alt_kodlar and k[:1] == "7" and not k.startswith("79")), "")
     gider_bekleyen = set()
+    kdv_eksik = {}      # "%20 için 191" -> {fatura no}
 
     fisler = []
     fis = fis0
@@ -1915,15 +1942,15 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             if belge_rozet:
                 s["belge"] = belge_rozet
             # rol: arayüzde düzeltme hangi öğrenmeye gidecek (gider düzeltmesi cariye öğrenilmesin)
-            if hesap == gider_kod and hesap != cari_kod:
+            if "KDV)" in detay_ek or hesap.startswith(("191", "391")):
+                s["rol"] = "kdv"
+            elif hesap == gider_kod and hesap != cari_kod:
                 s["rol"] = "gider"
                 s["kaynak"] = gider_kaynak
                 if gider_not:
                     s["not"] = gider_not
             elif hesap == cari_kod:
                 s["rol"] = "cari"
-            elif hesap.startswith(("191", "391")):
-                s["rol"] = "kdv"
             else:
                 s["rol"] = "diger"
             return s
@@ -1963,10 +1990,12 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 if yon == "alis":
                     # alışta: gider + %20 KDV borç
                     fisler.append(sat(gider_kod or vars_gider, matrah, 0, f" (%{oran})"))
-                    kdv_kod = gecmis_kdv_sec(oran, "alis") or "191.02"
+                    kdv_kod = gecmis_kdv_sec(oran, "alis") or ""
+                    if not kdv_kod: kdv_eksik.setdefault(f"%{oran} için 191", set()).add(fatura_no)
                     fisler.append(sat(kdv_kod, kdv, 0, f" (%{oran} KDV)"))
                 else:  # satış
-                    kdv_kod = gecmis_kdv_sec(oran, "satis") or "391.02"
+                    kdv_kod = gecmis_kdv_sec(oran, "satis") or ""
+                    if not kdv_kod: kdv_eksik.setdefault(f"%{oran} için 391", set()).add(fatura_no)
                     fisler.append(sat(gider_kod or vars_gider, 0, matrah, f" (%{oran})"))
                     fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
 
@@ -2010,14 +2039,12 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 fisler.append(sat(gider_kod or vars_gider, matrah, 0, f" (%{oran})"))
                 kdv_kod = gecmis_kdv_sec(oran, "alis")
                 if not kdv_kod:
-                    uyarilar.append(f"{cari_ad[:20]}: %{oran} için 191 indirilecek KDV bulunamadı")
-                    kdv_kod = "191.02"
+                    kdv_eksik.setdefault(f"%{oran} için 191", set()).add(fatura_no)
                 fisler.append(sat(kdv_kod, kdv, 0, f" (%{oran} KDV)"))
             else:
                 kdv_kod = gecmis_kdv_sec(oran, "satis")
                 if not kdv_kod:
-                    uyarilar.append(f"{cari_ad[:20]}: %{oran} için 391 hesaplanan KDV bulunamadı")
-                    kdv_kod = "391.02"
+                    kdv_eksik.setdefault(f"%{oran} için 391", set()).add(fatura_no)
                 fisler.append(sat(gider_kod or vars_gider, 0, matrah, f" (%{oran})"))
                 fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
 
@@ -2037,6 +2064,11 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
 
         fis += 1
 
+    for ne, nolar in kdv_eksik.items():
+        uyarilar.append(f"Mizanda {ne} KDV hesabı bulunamadı ({len(nolar)} fatura) — bu KDV satırları boş "
+                        f"hesapla bırakıldı; 'Eşleşmeyen' süzgecinden düzeltebilirsin")
+    if not vars_gider and fisler:
+        uyarilar.append("Mizanda gider/gelir için uygun alt hesap yok — eşleşmeyen gider satırları boş bırakıldı")
     if gider_bekleyen:
         uyarilar.insert(0, f"{len(gider_bekleyen)} cari için gider hesabı yapay zekâ ile seçiliyor; "
                            f"şimdilik varsayılan hesap yazıldı — bitince tekrar İşle'ye basın")
@@ -2299,8 +2331,7 @@ def isle_fis(kalemler, km, fis0=1, karsi_hesap="198.01.001"):
             if kdv > 0:
                 kdv_kod = _kdv_hesabi_ad(hes_list, oran_pct, "alis")
                 if not kdv_kod:
-                    uyarilar.append(f"{firma[:24]}: %{oran_pct} için 191 indirilecek KDV bulunamadı")
-                    kdv_kod = "191.02"
+                    uyarilar.append(f"{firma[:24]}: mizanda %{oran_pct} için 191 indirilecek KDV hesabı yok — satır boş hesapla bırakıldı")
                 fisler.append(sat(gider_kod, matrah, 0))
                 fisler.append(sat(kdv_kod, kdv, 0))
             else:

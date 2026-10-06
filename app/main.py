@@ -712,6 +712,9 @@ def isle(kod: str, tip: str, body: IsleBody):
                                      gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici)
     if yz_bekleyen:
         uyarilar.insert(0, f"{yz_bekleyen} PDF hâlâ yapay zekâ ile okunuyor — bitince tekrar İşle'ye basın")
+    if not km.hesaplar:
+        uyarilar.insert(0, "Bu firmada mizan yüklü değil ya da okunamadı — hesaplar eşleştirilemedi. "
+                           "Önce 1. bölümden mizanı yükle; bu önizlemeyi aktarma.")
     if tip == "fatura":
         # Karşı taraf firmanın kendisiyse fatura büyük ihtimalle yanlış sekmede
         # (alış faturası satışa ya da tersi): satışta cari = alıcı = biz olurdu.
@@ -738,6 +741,7 @@ def isle(kod: str, tip: str, body: IsleBody):
             })
     tum_satir = gecmis_satir + fisler
 
+    uyarilar = list(dict.fromkeys(uyarilar))
     tb = round(sum(f["borc"] for f in tum_satir), 2)
     ta = round(sum(f["alacak"] for f in tum_satir), 2)
     return {
