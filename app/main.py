@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar
 from app.belge_oku import belge_oku
 from app import isleyici
+from app import sunucu_klasor as sk
 
 DATA_DIR = Path(os.environ.get("FIS_DATA", "/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -37,13 +38,22 @@ app = FastAPI(title="Fiş Aktarım Aracı")
 TIPLER = ("banka", "fatura", "cek", "fis")
 
 
+def ortak_fis_listesi_yolu(d: Path) -> Path:
+    """Sunucu klasöründen (fislistesi/) alınan, tüm sekmelerde geçerli fiş listesi."""
+    return d / "_gecmis_ortak.xlsx"
+
+
 def fis_listesi_yolu(d: Path, tip: str) -> Path:
     """Firma+tip için geçmiş fiş listesi Excel'inin yolu.
-    Öncelik: <tip>/_gecmis.xlsx (yeni yapı).
-    Geriye dönük: kural.xlsx veya kural_<tip>.xlsx varsa oraya düş."""
+    İki kaynak olabilir: sekmeye elle yüklenen <tip>/_gecmis.xlsx ve sunucu
+    klasöründen gelen ortak _gecmis_ortak.xlsx. Hangisi daha YENİ yüklendiyse
+    o kullanılır — elle yüklenen sonra geldiyse sunucudakini geçersiz kılar,
+    sunucuya daha yeni liste gelirse o devralır.
+    Geriye dönük: ikisi de yoksa kural.xlsx veya kural_<tip>.xlsx."""
     yeni = d / tip / "_gecmis.xlsx"
-    if yeni.exists():
-        return yeni
+    mevcut = [p for p in (yeni, ortak_fis_listesi_yolu(d)) if p.exists()]
+    if mevcut:
+        return max(mevcut, key=lambda p: p.stat().st_mtime)
     # geriye dönük
     for eski in [d / "kural.xlsx", d / f"kural_{tip}.xlsx"]:
         if eski.exists():
@@ -88,6 +98,84 @@ def _write_json(p: Path, data):
     p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _kaynak_yaz(d: Path, anahtar: str, tur: str, dosya: str = ""):
+    """Bir dosyanın nereden geldiğini meta.json'a not eder.
+    anahtar: 'mizan' | 'fis-listesi' (ortak) | 'fis-listesi:<tip>' | 'gecmis-fis-pdf'
+    tur: 'sunucu' | 'elle' | 'firma' (başka firmadan kopya)"""
+    meta = _read_json(d / "meta.json", {})
+    meta.setdefault("kaynak", {})[anahtar] = {
+        "tur": tur, "dosya": dosya,
+        "zaman": datetime.now().isoformat(timespec="seconds"),
+    }
+    _write_json(d / "meta.json", meta)
+
+
+def _fis_listesi_arka_plan(hedef: Path):
+    """Fiş listesinin eski önbelleğini silip parse'ı arka planda başlatır."""
+    cache_path = hedef.with_suffix(hedef.suffix + ".cache.json")
+    if cache_path.exists():
+        try: cache_path.unlink()
+        except Exception: pass
+    import threading
+    from app.kurallar import gecmis_fisler_oku
+    def _arka_plan_parse():
+        try:
+            gecmis_fisler_oku(hedef)  # cache'i yazar
+        except Exception as e:
+            print(f"[fiş listesi arka plan parse hatası] {hedef}: {e}")
+    threading.Thread(target=_arka_plan_parse, daemon=True).start()
+
+
+def _ice_al(d: Path, tur: str, data: bytes, pdf_parse: bool = True,
+            mtime: float | None = None) -> dict:
+    """Mizan / ortak fiş listesi / geçmiş fiş PDF'ini firma veri klasörüne yazar.
+    Sunucu klasöründen alınan dosyalar buradan geçer; .xls otomatik .xlsx'e çevrilir.
+
+    mtime verilirse kopyaya kaynak dosyanın tarihi işlenir. Böylece "hangisi daha
+    yeni" kıyası yükleme anına göre değil BELGENİN tarihine göre yapılır: dün elle
+    yüklenen mizanı, geçen haftadan kalma sunucu dosyası otomatik eşitlemede ezmez."""
+    def _yaz(hedef: Path, icerik: bytes):
+        hedef.write_bytes(icerik)
+        if mtime:
+            os.utime(hedef, (mtime, mtime))
+
+    if tur == "mizan":
+        _yaz(d / "mizan.xlsx", sk.excel_xlsx_bytes(data))
+        return {"hesap_sayisi": len(mizan_hesaplar(d / "mizan.xlsx"))}
+    if tur == "fis-listesi":
+        hedef = ortak_fis_listesi_yolu(d)
+        _yaz(hedef, sk.excel_xlsx_bytes(data))
+        _fis_listesi_arka_plan(hedef)
+        return {"boyut_kb": round(len(data) / 1024, 1)}
+    if tur == "gecmis-fis-pdf":
+        hedef = gecmis_fis_pdf_yolu(d)
+        _yaz(hedef, data)
+        if not pdf_parse:
+            return {}
+        from app.kurallar import gecmis_fisler_oku
+        g = gecmis_fisler_oku(hedef)
+        return {"satir_sayisi": len(g.get("satirlar", [])),
+                "fis_sayisi": len(set(r.get("fisno") for r in g.get("satirlar", []))),
+                "son_fis_no": g.get("son_fis_no", 0)}
+    raise HTTPException(400, "Geçersiz tür: mizan | fis-listesi | gecmis-fis-pdf")
+
+
+def _firma_klasoru(d: Path) -> Path | None:
+    """Firmanın bağlı olduğu sunucu klasörü (yoksa None)."""
+    return sk.klasor_yolu(_read_json(d / "meta.json", {}).get("klasor", ""))
+
+
+def _bagli_klasorler() -> dict:
+    """klasör adı -> o klasöre bağlı firma kodu"""
+    out = {}
+    for d in DATA_DIR.iterdir():
+        if d.is_dir() and not d.name.startswith("_"):
+            k = _read_json(d / "meta.json", {}).get("klasor")
+            if k:
+                out[k] = d.name
+    return out
+
+
 # ----------------------------------------------------------------- firma yönetimi
 @app.get("/api/firmalar")
 def firmalar():
@@ -96,13 +184,14 @@ def firmalar():
         if not d.is_dir() or d.name.startswith("_"):
             continue
         meta = _read_json(d / "meta.json", {})
-        # Her tip için fiş listesi var mı
-        fis_listesi_var = {t: (d / t / "_gecmis.xlsx").exists() for t in TIPLER}
+        # Her tip için fiş listesi var mı (elle yüklenen veya sunucudan gelen ortak)
+        fis_listesi_var = {t: fis_listesi_yolu(d, t).exists() for t in TIPLER}
         # Geriye dönük: eski kural dosyaları varsa onlar da fiş listesi sayılır
         eski_kural_var = (d / "kural.xlsx").exists() or any((d / f"kural_{t}.xlsx").exists() for t in TIPLER)
         out.append({
             "kod": d.name,
             "ad": meta.get("ad", d.name),
+            "klasor": meta.get("klasor", ""),
             "mizan_var": (d / "mizan.xlsx").exists(),
             "gecmis_fis_pdf_var": gecmis_fis_pdf_yolu(d).exists(),
             "fis_listesi_var": fis_listesi_var,
@@ -113,10 +202,19 @@ def firmalar():
 
 @app.post("/api/firma")
 def firma_olustur(body: dict):
-    ad = (body.get("ad") or "").strip()
+    """Yeni firma. body: {ad?, klasor?} — klasor verilirse ad klasörden türetilir
+    ve firma o sunucu klasörüne bağlanır."""
+    klasor = (body.get("klasor") or "").strip()
+    if klasor and not sk.klasor_yolu(klasor):
+        raise HTTPException(404, f"Sunucuda '{klasor}' klasörü yok")
+    ad = (body.get("ad") or "").strip() or (sk.guzel_ad(klasor) if klasor else "")
     if not ad:
         raise HTTPException(400, "Firma adı gerekli")
-    kod = slugify(ad)
+    if klasor:
+        bagli = _bagli_klasorler().get(klasor)
+        if bagli:
+            raise HTTPException(409, f"'{klasor}' klasörü zaten '{bagli}' firmasına bağlı")
+    kod = slugify(klasor or ad)
     d = DATA_DIR / kod
     d.mkdir(parents=True, exist_ok=True)
     for t in TIPLER:
@@ -124,9 +222,111 @@ def firma_olustur(body: dict):
     (d / "cikti").mkdir(exist_ok=True)
     meta = _read_json(d / "meta.json", {})
     meta["ad"] = ad
+    if klasor:
+        meta["klasor"] = klasor
     meta.setdefault("olusturma", datetime.now().isoformat(timespec="seconds"))
     _write_json(d / "meta.json", meta)
-    return {"kod": kod, "ad": ad}
+    return {"kod": kod, "ad": ad, "klasor": meta.get("klasor", "")}
+
+
+# ----------------------------------------------------------------- sunucu firma klasörleri
+@app.get("/api/klasorler")
+def klasorler_listesi():
+    """/srv/veri/firmalar altındaki firma klasörleri ve bağlı oldukları firma."""
+    bagli = _bagli_klasorler()
+    return {
+        "erisim": sk.klasor_var_mi(),
+        "klasorler": [{**k, "firma_kod": bagli.get(k["klasor"], "")} for k in sk.klasorler()],
+    }
+
+
+@app.post("/api/firma/{kod}/klasor")
+def firma_klasor_bagla(kod: str, body: dict):
+    """Firmayı bir sunucu klasörüne bağlar. body: {klasor: str} — boş string bağlantıyı kaldırır."""
+    d = firma_dir(kod)
+    klasor = (body.get("klasor") or "").strip()
+    meta = _read_json(d / "meta.json", {})
+    if klasor:
+        if not sk.klasor_yolu(klasor):
+            raise HTTPException(404, f"Sunucuda '{klasor}' klasörü yok")
+        bagli = _bagli_klasorler().get(klasor)
+        if bagli and bagli != kod:
+            raise HTTPException(409, f"'{klasor}' klasörü zaten '{bagli}' firmasına bağlı")
+        meta["klasor"] = klasor
+    else:
+        meta.pop("klasor", None)
+    _write_json(d / "meta.json", meta)
+    return {"ok": True, "klasor": meta.get("klasor", "")}
+
+
+@app.get("/api/firma/{kod}/klasor-dosyalar")
+def klasor_dosyalar(kod: str, tur: str = "mizan"):
+    """Firmanın sunucu klasöründe verilen tür için bulunan dosyalar (en yeni önce)."""
+    d = firma_dir(kod)
+    kp = _firma_klasoru(d)
+    if not kp:
+        return {"klasor": "", "dosyalar": []}
+    if tur not in sk.TURLER:
+        raise HTTPException(400, "Geçersiz tür")
+    secili = _read_json(d / "meta.json", {}).get("kaynak", {}).get(tur, {})
+    return {"klasor": kp.name, "dosyalar": sk.adaylar(kp, tur),
+            "secili": secili.get("dosya", "") if secili.get("tur") == "sunucu" else ""}
+
+
+@app.post("/api/firma/{kod}/klasordan-al")
+def klasordan_al(kod: str, body: dict):
+    """Sunucu klasöründeki belirli bir dosyayı içe alır.
+    body: {tur: 'mizan'|'fis-listesi'|'gecmis-fis-pdf', dosya: '<firma klasörüne göre yol>'}"""
+    d = firma_dir(kod)
+    kp = _firma_klasoru(d)
+    if not kp:
+        raise HTTPException(400, "Firma bir sunucu klasörüne bağlı değil")
+    tur = body.get("tur", "")
+    try:
+        src = sk.guvenli_dosya(kp, body.get("dosya", ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    sonuc = _ice_al(d, tur, src.read_bytes())
+    _kaynak_yaz(d, tur, "sunucu", src.relative_to(kp.resolve()).as_posix())
+    return {"ok": True, "tur": tur, "dosya": src.name, **sonuc}
+
+
+@app.post("/api/firma/{kod}/sunucu-esitle")
+def sunucu_esitle(kod: str):
+    """Firma seçildiğinde çağrılır. Sunucu klasöründe mizan / fiş listesi /
+    geçmiş fiş PDF'i için araçtakinden DAHA YENİ dosya varsa otomatik içe alır.
+    Elle yüklenen dosya sunucudakinden yeniyse dokunulmaz."""
+    d = firma_dir(kod)
+    kp = _firma_klasoru(d)
+    if not kp:
+        return {"klasor": "", "alinan": [], "yanlis_yer": []}
+
+    # Mizan ve PDF'te elle yükleme de aynı dosyaya yazar, kıyas doğrudan onunla.
+    # Fiş listesinde sunucu kopyası ortak dosyadır; sekmeye elle yüklenen liste
+    # ayrı durur ve fis_listesi_yolu() ikisinden tarihi yeni olanı seçer.
+    mevcut = {
+        "mizan": d / "mizan.xlsx",
+        "fis-listesi": ortak_fis_listesi_yolu(d),
+        "gecmis-fis-pdf": gecmis_fis_pdf_yolu(d),
+    }
+    alinan, yanlis_yer = [], []
+    for tur in sk.TURLER:
+        liste = sk.adaylar(kp, tur)
+        yanlis_yer += [{"tur": tur, "yol": a["yol"]} for a in liste if not a["dogru_yer"]]
+        if not liste:
+            continue
+        aday, hedef = liste[0], mevcut[tur]
+        if hedef.exists() and aday["mtime"] <= hedef.stat().st_mtime:
+            continue        # araçtaki dosya zaten aynı ya da daha yeni
+        try:
+            src = sk.guvenli_dosya(kp, aday["yol"])
+            sonuc = _ice_al(d, tur, src.read_bytes(), pdf_parse=False, mtime=aday["mtime"])
+        except Exception as e:
+            yanlis_yer.append({"tur": tur, "yol": aday["yol"], "hata": str(e)})
+            continue
+        _kaynak_yaz(d, tur, "sunucu", aday["yol"])
+        alinan.append({"tur": tur, "dosya": aday["dosya"], "yol": aday["yol"], **sonuc})
+    return {"klasor": kp.name, "alinan": alinan, "yanlis_yer": yanlis_yer}
 
 
 @app.delete("/api/firma/{kod}")
@@ -159,18 +359,17 @@ def sunucu_dosyalar(tip: str = "mizan"):
                               "boyut_kb": round(st.st_size / 1024, 1),
                               "tarih": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")})
         elif tip == "fis-listesi":
+            gorulen = set()
             for t in TIPLER:
-                for isim in ["_gecmis.xlsx", f"../kural.xlsx", f"../kural_{t}.xlsx"]:
-                    if isim.startswith("../"):
-                        p = d / isim.replace("../", "")
-                    else:
-                        p = d / t / isim
-                    if p.exists():
-                        st = p.stat()
-                        sonuc.append({"firma_kod": d.name, "firma_ad": firma_ad,
-                                      "dosya": p.name, "tip": t, "yol": str(p),
-                                      "boyut_kb": round(st.st_size / 1024, 1),
-                                      "tarih": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")})
+                p = fis_listesi_yolu(d, t)      # o sekmede geçerli liste
+                if not p.exists() or p in gorulen:
+                    continue
+                gorulen.add(p)
+                st = p.stat()
+                sonuc.append({"firma_kod": d.name, "firma_ad": firma_ad,
+                              "dosya": p.name, "tip": t, "yol": str(p),
+                              "boyut_kb": round(st.st_size / 1024, 1),
+                              "tarih": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")})
         elif tip == "gecmis-fis-pdf":
             p = gecmis_fis_pdf_yolu(d)
             if p.exists():
@@ -200,36 +399,21 @@ def sunucudan_kopyala(kod: str, body: dict):
         src = kaynak_d / "mizan.xlsx"
         if not src.exists():
             raise HTTPException(404, "Kaynak firmada mizan yok")
-        shutil.copy2(src, d / "mizan.xlsx")
+        shutil.copy(src, d / "mizan.xlsx")      # copy: tarih = kopyalama anı
         hes = mizan_hesaplar(d / "mizan.xlsx")
+        _kaynak_yaz(d, "mizan", "firma", kaynak)
         return {"ok": True, "tip": "mizan", "kaynak": kaynak, "hesap_sayisi": len(hes)}
 
     elif tip == "fis-listesi":
         kaynak_tip = body.get("kaynak_tip", "banka")
-        # kaynak dosyayı bul
-        src = kaynak_d / kaynak_tip / "_gecmis.xlsx"
-        if not src.exists():
-            src = kaynak_d / "kural.xlsx"
-        if not src.exists():
-            src = kaynak_d / f"kural_{kaynak_tip}.xlsx"
+        src = fis_listesi_yolu(kaynak_d, kaynak_tip)
         if not src.exists():
             raise HTTPException(404, f"Kaynak firmada {kaynak_tip} fiş listesi yok")
-        # hedef
         (d / kaynak_tip).mkdir(exist_ok=True)
         hedef = d / kaynak_tip / "_gecmis.xlsx"
-        shutil.copy2(src, hedef)
-        # cache temizle
-        cache_path = hedef.with_suffix(hedef.suffix + ".cache.json")
-        if cache_path.exists():
-            try: cache_path.unlink()
-            except Exception: pass
-        # arka plan parse
-        import threading
-        from app.kurallar import gecmis_fisler_oku
-        def _bg():
-            try: gecmis_fisler_oku(hedef)
-            except Exception: pass
-        threading.Thread(target=_bg, daemon=True).start()
+        shutil.copy(src, hedef)
+        _fis_listesi_arka_plan(hedef)
+        _kaynak_yaz(d, f"fis-listesi:{kaynak_tip}", "firma", kaynak)
         return {"ok": True, "tip": "fis-listesi", "kaynak": kaynak, "kaynak_tip": kaynak_tip,
                 "boyut_kb": round(hedef.stat().st_size / 1024, 1)}
 
@@ -237,9 +421,10 @@ def sunucudan_kopyala(kod: str, body: dict):
         src = gecmis_fis_pdf_yolu(kaynak_d)
         if not src.exists():
             raise HTTPException(404, "Kaynak firmada geçmiş fiş PDF yok")
-        shutil.copy2(src, gecmis_fis_pdf_yolu(d))
+        shutil.copy(src, gecmis_fis_pdf_yolu(d))
         from app.kurallar import gecmis_fisler_oku
         g = gecmis_fisler_oku(gecmis_fis_pdf_yolu(d))
+        _kaynak_yaz(d, "gecmis-fis-pdf", "firma", kaynak)
         return {"ok": True, "tip": "gecmis-fis-pdf", "kaynak": kaynak,
                 "satir_sayisi": len(g.get("satirlar", [])), "son_fis_no": g.get("son_fis_no", 0)}
 
@@ -251,10 +436,9 @@ def sunucudan_kopyala(kod: str, body: dict):
 @app.post("/api/firma/{kod}/mizan")
 async def mizan_yukle(kod: str, file: UploadFile = File(...)):
     d = firma_dir(kod)
-    data = await file.read()
-    (d / "mizan.xlsx").write_bytes(data)
-    hes = mizan_hesaplar(d / "mizan.xlsx")
-    return {"ok": True, "hesap_sayisi": len(hes)}
+    sonuc = _ice_al(d, "mizan", await file.read())
+    _kaynak_yaz(d, "mizan", "elle", file.filename or "")
+    return {"ok": True, **sonuc}
 
 
 @app.post("/api/firma/{kod}/fis-listesi/{tip}")
@@ -273,12 +457,8 @@ async def fis_listesi_yukle(kod: str, tip: str, file: UploadFile = File(...)):
     (d / tip).mkdir(exist_ok=True)
     data = await file.read()
     hedef = d / tip / "_gecmis.xlsx"
-    hedef.write_bytes(data)
-    # eski cache'i sil (yeni dosya için)
-    cache_path = hedef.with_suffix(hedef.suffix + ".cache.json")
-    if cache_path.exists():
-        try: cache_path.unlink()
-        except Exception: pass
+    hedef.write_bytes(sk.excel_xlsx_bytes(data))   # .xls de kabul edilir
+    _kaynak_yaz(d, f"fis-listesi:{tip}", "elle", file.filename or "")
     # eski kural dosyalarını arşivle
     if (d / "kural.xlsx").exists():
         (d / "kural.xlsx").rename(d / "kural.xlsx.eski")
@@ -288,14 +468,7 @@ async def fis_listesi_yukle(kod: str, tip: str, file: UploadFile = File(...)):
             eski.rename(d / f"kural_{t}.xlsx.eski")
 
     # Parse'ı arka plana at — kullanıcı beklemez
-    import threading
-    from app.kurallar import gecmis_fisler_oku
-    def _arka_plan_parse():
-        try:
-            gecmis_fisler_oku(hedef)  # cache'i yazar
-        except Exception as e:
-            print(f"[fiş listesi arka plan parse hatası] {hedef}: {e}")
-    threading.Thread(target=_arka_plan_parse, daemon=True).start()
+    _fis_listesi_arka_plan(hedef)
 
     return {"ok": True, "gecmis_satir": None, "son_fis_no": None,
             "ogrenilen_eslesme": None,
@@ -337,12 +510,9 @@ async def gecmis_fis_yukle(kod: str, file: UploadFile = File(...)):
     data = await file.read()
     if not data:
         raise HTTPException(400, "PDF boş")
-    hedef = gecmis_fis_pdf_yolu(d)
-    hedef.write_bytes(data)
-    from app.kurallar import gecmis_fisler_oku
-    g = gecmis_fisler_oku(hedef)
-    return {"ok": True, "dosya": hedef.name, "fis_sayisi": len(set(r.get("fisno") for r in g.get("satirlar", []))),
-            "satir_sayisi": len(g.get("satirlar", [])), "son_fis_no": g.get("son_fis_no", 0)}
+    sonuc = _ice_al(d, "gecmis-fis-pdf", data)
+    _kaynak_yaz(d, "gecmis-fis-pdf", "elle", file.filename or "")
+    return {"ok": True, "dosya": gecmis_fis_pdf_yolu(d).name, **sonuc}
 
 
 @app.delete("/api/firma/{kod}/gecmis-fis")
@@ -358,8 +528,16 @@ def gecmis_fis_sil(kod: str):
 def firma_durum(kod: str):
     from app.kurallar import gecmis_fisler_oku
     d = firma_dir(kod)
+    meta = _read_json(d / "meta.json", {})
     hes = mizan_hesaplar(d / "mizan.xlsx") if (d / "mizan.xlsx").exists() else []
-    out = {"mizan_hesap": len(hes), "gecmis_fis_pdf": gecmis_fis_pdf_yolu(d).exists(), "tipler": {}}
+    kp = _firma_klasoru(d)
+    out = {
+        "mizan_hesap": len(hes), "gecmis_fis_pdf": gecmis_fis_pdf_yolu(d).exists(), "tipler": {},
+        "klasor": kp.name if kp else "",
+        # bağlı değilse ada en çok benzeyen sunucu klasörü (arayüz önerir, kendisi bağlamaz)
+        "klasor_oneri": "" if kp else sk.klasor_oner(meta.get("ad", ""), kod),
+        "kaynak": meta.get("kaynak", {}),
+    }
     for t in TIPLER:
         yol = fis_listesi_yolu(d, t)
         g = gecmis_fisler_oku(yol) if yol.exists() else {"satirlar": [], "son_fis_no": 0, "eslesmeler": {}}
@@ -372,6 +550,10 @@ def firma_durum(kod: str):
         og = _read_json(d / f"{t}_ogrenme.json", {})
         out["tipler"][t] = {
             "fis_listesi_var": yol.exists(),
+            # bu sekmede hangi liste geçerli: 'ortak' (sunucu) | 'sekme' (elle) | 'eski' (kural.xlsx)
+            "fis_listesi_kaynak": ("" if not yol.exists() else
+                                   "ortak" if yol == ortak_fis_listesi_yolu(d) else
+                                   "sekme" if yol.name == "_gecmis.xlsx" else "eski"),
             "gecmis_satir": len(g.get("satirlar", [])),
             "son_fis_no": g.get("son_fis_no", 0),
             "belge_sayisi": len(belgeler),

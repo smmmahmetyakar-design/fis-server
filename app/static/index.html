@@ -85,7 +85,24 @@
   .modal .dosya-item:hover{background:#f0ece2;border-color:var(--ana)}
   .modal .dosya-item .firma-ad{font-weight:600;color:#333;flex:1}
   .modal .dosya-item .meta{font-size:11px;color:var(--muted)}
-  .btn-sunucu{background:#5b7a54;color:#fff;font-size:12px;padding:5px 12px}
+  .btn-sunucu{background:#e5e0d4;color:#4a4334;font-size:12px;padding:5px 12px}
+  .btn-klasor{background:#5b7a54;color:#fff;font-size:12px;padding:5px 12px}
+  .btn-kucuk{background:#fff;border:1px solid var(--kenar);color:#333;font-size:12px;padding:4px 10px}
+  /* sunucu klasörü bağlantı satırı */
+  .klasor-satir{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;margin:-2px 0 14px;
+    background:#f3f6f0;border:1px solid #dbe4d4;border-radius:8px;font-size:13px}
+  .klasor-satir.bos{background:#fbf6ea;border-color:#eadfc4}
+  .klasor-satir .yol{font-weight:600;color:#33522c}
+  .klasor-satir select{font-size:13px;padding:5px 7px}
+  .kaynak-satir{font-size:12px;color:var(--muted);margin-top:4px;min-height:0}
+  .kaynak-satir b{color:#3d3a33;font-weight:600}
+  .yanlis-yer{margin-top:14px;padding:8px 10px;background:#fff8ec;border:1px solid #f0dcb4;border-radius:8px;font-size:12px;color:#7a5a1e}
+  .yanlis-yer ul{margin:4px 0 0;padding-left:18px}
+  .modal .dosya-item .rozet{font-size:10px;padding:1px 7px;border-radius:9px;margin-left:6px;font-weight:600;vertical-align:1px;white-space:nowrap;display:inline-block}
+  .rozet.yanlis{background:#fde8c8;color:#8a5a12}
+  .rozet.kullaniliyor{background:#dcedc8;color:#33691e}
+  .grp-a td{background:#fff}
+  .grp-b td{background:#faf8f3}
 </style>
 </head>
 <body>
@@ -112,13 +129,16 @@
 
   <div class="card">
     <h2>1) Mizan & Fiş Listesi</h2>
+    <div id="klasorSatir" class="klasor-satir"></div>
     <div class="flex">
       <div>
         <label>Mizan (tüm hesaplar)</label>
         <input type="file" id="mizanFile" accept=".xlsx,.xls">
         <button class="btn btn-ana" onclick="mizanYukle()">Yükle</button>
-        <button class="btn btn-sunucu" onclick="sunucudanSec('mizan')" title="Sunucudaki başka firmadan mizan kopyala">📂 Sunucudan</button>
+        <button class="btn btn-klasor" onclick="klasordenSec('mizan')" title="Firmanın sunucu klasöründeki mizanlardan seç">📁 Klasörden seç</button>
+        <button class="btn btn-sunucu" onclick="sunucudanSec('mizan')" title="Araçtaki başka bir firmanın mizanını kopyala">Başka firmadan</button>
         <span id="mizanPill" class="pill off">mizan yok</span>
+        <div id="mizanKaynak" class="kaynak-satir"></div>
       </div>
     </div>
     <div id="fisListesiAlani" class="flex" style="margin-top:12px">
@@ -126,9 +146,11 @@
         <label>Excel Fiş Listesi — <span id="fisListesiTip">seçili sekme için</span> geçmiş fişler & öğrenme kaynağı</label>
         <input type="file" id="fisListesiFile" accept=".xlsx,.xls">
         <button class="btn btn-ana" onclick="fisListesiYukle()">Yükle</button>
-        <button class="btn btn-sunucu" onclick="sunucudanSec('fis-listesi')" title="Sunucudaki başka firmadan fiş listesi kopyala">📂 Sunucudan</button>
+        <button class="btn btn-klasor" onclick="klasordenSec('fis-listesi')" title="Firmanın sunucu klasöründeki fiş listelerinden seç">📁 Klasörden seç</button>
+        <button class="btn btn-sunucu" onclick="sunucudanSec('fis-listesi')" title="Araçtaki başka bir firmanın fiş listesini kopyala">Başka firmadan</button>
         <span id="fisListesiPill" class="pill off">fiş listesi yok</span>
-        <div class="hint" style="margin-top:4px">Fiş Aktarım Şablonu formatında (14 sütun) Excel. Bu sekme için geçmiş fişler, son fiş no ve hesap eşleştirmeleri buradan okunur.</div>
+        <div id="fisListesiKaynak" class="kaynak-satir"></div>
+        <div class="hint" style="margin-top:4px">Sunucu klasöründen gelen liste tüm sekmelerde kullanılır. Bir sekmeye elle yüklediğin liste daha yeniyse o sekmede onun yerine geçer.</div>
       </div>
     </div>
     <div class="flex" style="margin-top:12px">
@@ -136,12 +158,15 @@
         <label>Geçmiş Fiş PDF — fatura eşleştirmesi için yevmiye defteri PDF'i</label>
         <input type="file" id="gecmisFisPdfFile" accept=".pdf">
         <button class="btn btn-ana" onclick="gecmisFisPdfYukle()">Yükle</button>
-        <button class="btn btn-sunucu" onclick="sunucudanSec('gecmis-fis-pdf')" title="Sunucudaki başka firmadan PDF kopyala">📂 Sunucudan</button>
+        <button class="btn btn-klasor" onclick="klasordenSec('gecmis-fis-pdf')" title="Firmanın sunucu klasöründeki PDF'lerden seç">📁 Klasörden seç</button>
+        <button class="btn btn-sunucu" onclick="sunucudanSec('gecmis-fis-pdf')" title="Araçtaki başka bir firmanın PDF'ini kopyala">Başka firmadan</button>
         <span id="gecmisFisPdfPill" class="pill off">PDF yok</span>
         <button class="btn btn-x" id="gecmisFisPdfSilBtn" onclick="gecmisFisPdfSil()" style="display:none;font-size:11px;padding:2px 8px" title="PDF'i sil">🗑</button>
+        <div id="gecmisFisPdfKaynak" class="kaynak-satir"></div>
         <div class="hint" style="margin-top:4px">Yevmiye defteri PDF formatında. Fatura hesap eşleştirmesi için ek referans kaynağı.</div>
       </div>
     </div>
+    <div id="yanlisYer" class="yanlis-yer" style="display:none"></div>
   </div>
 
   <div class="card" id="belgeKarti">
@@ -274,16 +299,149 @@ function sekmeSec(tip){
   if(fisMod && firmaKod) fisSekmeHazirla();
 }
 
-async function loadFirmalar(){
-  const list=await (await fetch('/api/firmalar')).json();
-  $('firmaSel').innerHTML='<option value="">— firma seç —</option>'+list.map(f=>`<option value="${f.kod}">${f.ad}</option>`).join('');
+// HTML'e basılan her metin buradan geçer (firma/dosya adlarında ' " < & olabilir)
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function trTarih(iso){
+  if(!iso) return '';
+  const d=new Date(iso); if(isNaN(d)) return iso;
+  const p=n=>String(n).padStart(2,'0');
+  return `${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-$('firmaSel').onchange=e=>{firmaKod=e.target.value;if(firmaKod){firmaDurum();loadHesaplar();}};
+const TUR_ADI={'mizan':'mizan','fis-listesi':'fiş listesi','gecmis-fis-pdf':'geçmiş fiş PDF'};
+
+// Sunucudaki firma klasörleri (/srv/veri/firmalar)
+let klasorBilgi={erisim:false,klasorler:[]};
+let yanlisYer=[];          // son eşitlemede yanlış alt klasörde bulunan dosyalar
+let klasorDegistir=false;  // bağlı klasörü değiştirme formu açık mı
+
+async function loadFirmalar(){
+  const [list,kl]=await Promise.all([
+    (await fetch('/api/firmalar')).json(),
+    fetch('/api/klasorler').then(r=>r.json()).catch(()=>({erisim:false,klasorler:[]})),
+  ]);
+  klasorBilgi=kl;
+  let h='<option value="">— firma seç —</option>';
+  h+=list.map(f=>`<option value="${esc(f.kod)}">${esc(f.ad)}${f.klasor?'':' (klasörsüz)'}</option>`).join('');
+  // araçta henüz açılmamış sunucu klasörleri: seçince firma açılır ve klasöre bağlanır
+  const acilmamis=kl.klasorler.filter(k=>!k.firma_kod);
+  if(acilmamis.length){
+    h+=`<optgroup label="Sunucuda var, araçta henüz açılmamış">`+
+       acilmamis.map(k=>`<option value="klasor:${esc(k.klasor)}">📁 ${esc(k.ad)} (${esc(k.klasor)})</option>`).join('')+
+       `</optgroup>`;
+  }
+  $('firmaSel').innerHTML=h;
+  if(firmaKod) $('firmaSel').value=firmaKod;
+}
+
+$('firmaSel').onchange=async e=>{
+  const v=e.target.value;
+  if(v.startsWith('klasor:')){
+    const klasor=v.slice(7);
+    const r=await fetch('/api/firma',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({klasor})});
+    if(!r.ok){ toast('Firma açılamadı: '+(await r.text()),false); e.target.value=firmaKod; return; }
+    const f=await r.json();
+    toast(`${f.ad} açıldı ve ${klasor} klasörüne bağlandı`,true);
+    firmaKod=f.kod; await loadFirmalar();
+  } else {
+    firmaKod=v;
+  }
+  if(firmaKod) firmaSec();
+};
+
+// Firma seçilince: önce sunucu klasöründen yeni dosyaları al, sonra durumu çiz
+async function firmaSec(){
+  klasorDegistir=false; yanlisYer=[];
+  await sunucuEsitle(true);
+  firmaDurum(); loadHesaplar();
+}
+
+async function sunucuEsitle(sessiz){
+  if(!firmaKod) return;
+  try{
+    const r=await (await fetch(`/api/firma/${firmaKod}/sunucu-esitle`,{method:'POST'})).json();
+    yanlisYer=r.yanlis_yer||[];
+    if(r.alinan&&r.alinan.length){
+      toast('Sunucu klasöründen alındı: '+r.alinan.map(a=>TUR_ADI[a.tur]).join(', '),true);
+      if(r.alinan.some(a=>a.tur==='fis-listesi')) fisListesiBekle();
+      loadHesaplar();
+    } else if(!sessiz){
+      toast(r.klasor?'Sunucu klasöründe daha yeni dosya yok':'Firma bir sunucu klasörüne bağlı değil',!!r.klasor);
+    }
+    return r;
+  }catch(e){ if(!sessiz) toast('Sunucu klasörü okunamadı: '+e.message,false); }
+}
+
+async function klasorBagla(){
+  const klasor=$('klasorSec')?.value||'';
+  if(!klasor){ toast('Bir klasör seç',false); return; }
+  const r=await fetch(`/api/firma/${firmaKod}/klasor`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({klasor})});
+  if(!r.ok){ toast('Bağlanamadı: '+(await r.text()),false); return; }
+  toast(`${klasor} klasörüne bağlandı`,true);
+  klasorDegistir=false;
+  await loadFirmalar();
+  await sunucuEsitle(true);
+  firmaDurum(); loadHesaplar();
+}
+async function klasorBaglantiKaldir(){
+  if(!confirm('Bu firmanın sunucu klasörü bağlantısı kaldırılsın mı?\nDaha önce alınan mizan ve fiş listesi araçta kalır.')) return;
+  await fetch(`/api/firma/${firmaKod}/klasor`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({klasor:''})});
+  klasorDegistir=false; yanlisYer=[];
+  await loadFirmalar(); firmaDurum();
+}
+function klasorDegistirAc(){ klasorDegistir=true; firmaDurum(); }
+
+function klasorSatirCiz(d){
+  const el=$('klasorSatir');
+  if(!klasorBilgi.erisim){
+    el.className='klasor-satir bos';
+    el.innerHTML='<span>Sunucu firma klasörleri bu kurulumda görünmüyor. Mizan ve fiş listesini aşağıdan elle yükleyebilirsin.</span>';
+    return;
+  }
+  if(d.klasor && !klasorDegistir){
+    el.className='klasor-satir';
+    el.innerHTML=`📁 <span>Sunucu klasörü: <span class="yol">${esc(d.klasor)}</span></span>
+      <span class="hint">— mizan ve fiş listesi buradan otomatik alınır</span>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn btn-kucuk" onclick="sunucuEsitle(false).then(firmaDurum)">Yeni dosya var mı bak</button>
+        <button class="btn btn-kucuk" onclick="klasorDegistirAc()">Klasörü değiştir</button>
+      </span>`;
+    return;
+  }
+  // bağlı değil (ya da değiştiriliyor): seçim formu
+  const secenekler=klasorBilgi.klasorler.filter(k=>!k.firma_kod||k.firma_kod===firmaKod||k.klasor===d.klasor);
+  const onerilen=d.klasor||d.klasor_oneri||'';
+  el.className='klasor-satir bos';
+  el.innerHTML=`<span>${d.klasor?'Klasörü değiştir:':'Bu firma bir sunucu klasörüne bağlı değil.'}</span>
+    <select id="klasorSec"><option value="">— klasör seç —</option>${
+      secenekler.map(k=>`<option value="${esc(k.klasor)}" ${k.klasor===onerilen?'selected':''}>${esc(k.klasor)}</option>`).join('')
+    }</select>
+    <button class="btn btn-klasor" onclick="klasorBagla()">Bağla</button>
+    ${d.klasor_oneri&&!d.klasor?`<span class="hint">Ada göre önerilen: ${esc(d.klasor_oneri)}</span>`:''}
+    ${d.klasor?`<button class="btn btn-kucuk" onclick="klasorDegistir=false;firmaDurum()">Vazgeç</button>
+                <button class="btn btn-kucuk" onclick="klasorBaglantiKaldir()" style="color:#a23b2e">Bağlantıyı kaldır</button>`:''}`;
+}
+
+// Dosyanın nereden geldiği: sunucu klasörü / elle / başka firma
+function kaynakMetni(k){
+  if(!k) return '';
+  const ne=k.tur==='sunucu'?'Sunucu klasöründen':k.tur==='elle'?'Elle yüklendi':k.tur==='firma'?'Başka firmadan kopyalandı':'';
+  const ad=(k.dosya||'').split('/').pop();
+  const dosya=!ad?'':k.tur==='firma'?` (${esc(ad)})`:`: <b>${esc(ad)}</b>`;
+  return `${ne}${dosya}${k.zaman?' · '+trTarih(k.zaman):''}`;
+}
+
+function yanlisYerCiz(){
+  const el=$('yanlisYer');
+  if(!yanlisYer.length){ el.style.display='none'; return; }
+  el.style.display='';
+  el.innerHTML=`Sunucu klasöründe beklenen yerde durmayan dosyalar var. Araç bunları adından tanıdı, ama düzen için taşınmaları iyi olur:
+    <ul>${yanlisYer.map(y=>`<li>${esc(y.yol)} → <b>${y.tur==='mizan'?'mizan/':'fislistesi/'}</b>${y.hata?' (okunamadı: '+esc(y.hata)+')':''}</li>`).join('')}</ul>`;
+}
 
 async function yeniFirma(){
-  const ad=(prompt('Firma adı:')||'').trim(); if(!ad)return;
+  const ad=(prompt('Firma adı:\n\n(Sunucuda klasörü olan firmalar listede "araçta henüz açılmamış" başlığı altında; onları oradan seçmen yeterli.)')||'').trim(); if(!ad)return;
   const r=await (await fetch('/api/firma',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ad})})).json();
-  await loadFirmalar(); $('firmaSel').value=r.kod; firmaKod=r.kod; firmaDurum(); loadHesaplar();
+  firmaKod=r.kod; await loadFirmalar(); firmaSec();
 }
 
 async function firmaSil(){
@@ -299,6 +457,8 @@ async function firmaSil(){
     $('onizle').innerHTML=''; $('belgeListe').innerHTML=''; $('ciktilar').textContent='—';
     $('mizanPill').className='pill off'; $('mizanPill').textContent='mizan yok';
     $('fisListesiPill').className='pill off'; $('fisListesiPill').textContent='fiş listesi yok';
+    ['mizanKaynak','fisListesiKaynak','gecmisFisPdfKaynak','klasorSatir'].forEach(id=>$(id).innerHTML='');
+    $('klasorSatir').className=''; yanlisYer=[]; yanlisYerCiz();
   }catch(e){ toast('Silme hatası: '+e.message,false); }
 }
 
@@ -307,10 +467,15 @@ async function loadHesaplar(){
 }
 
 async function firmaDurum(){
+  if(!firmaKod) return;
   const d=await (await fetch(`/api/firma/${firmaKod}/durum`)).json();
+  klasorSatirCiz(d);
+  yanlisYerCiz();
+  const kaynak=d.kaynak||{};
   const mp=$('mizanPill');
   if(d.mizan_hesap){mp.className='pill';mp.textContent=d.mizan_hesap+' hesap';}
   else{mp.className='pill off';mp.textContent='mizan yok';}
+  $('mizanKaynak').innerHTML=d.mizan_hesap?kaynakMetni(kaynak['mizan']):'';
   const t=d.tipler[apiTip()]||{};
   const kp=$('fisListesiPill');
   if(t.fis_listesi_var){
@@ -318,10 +483,17 @@ async function firmaDurum(){
   } else {
     kp.className='pill off'; kp.textContent='fiş listesi yok';
   }
+  // bu sekmede geçerli fiş listesi: sunucudan gelen ortak liste mi, sekmeye elle yüklenen mi
+  const fk=t.fis_listesi_kaynak;
+  $('fisListesiKaynak').innerHTML=
+    fk==='ortak' ? kaynakMetni(kaynak['fis-listesi'])+' <span class="hint">(tüm sekmeler)</span>' :
+    fk==='sekme' ? kaynakMetni(kaynak['fis-listesi:'+apiTip()]||{tur:'elle',dosya:'',zaman:''})+' <span class="hint">(yalnızca bu sekme)</span>' :
+    fk==='eski'  ? 'Eski kural dosyasından (kural.xlsx)' : '';
   // geçmiş fiş PDF durumu
   const gfp=$('gecmisFisPdfPill'), gfpBtn=$('gecmisFisPdfSilBtn');
   if(d.gecmis_fis_pdf){ gfp.className='pill'; gfp.textContent='PDF yüklü'; gfpBtn.style.display='inline-block'; }
   else{ gfp.className='pill off'; gfp.textContent='PDF yok'; gfpBtn.style.display='none'; }
+  $('gecmisFisPdfKaynak').innerHTML=d.gecmis_fis_pdf?kaynakMetni(kaynak['gecmis-fis-pdf']):'';
   // belge listesi
   const bl=$('belgeListe');
   if(t.belgeler&&t.belgeler.length){
@@ -354,23 +526,69 @@ async function fisListesiYukle(){
   const r=await (await fetch(`/api/firma/${firmaKod}/fis-listesi/${apiTip()}`,{method:'POST',body:fd})).json();
   $('fisListesiFile').value='';
   if(r.ok){
-    // Yükleme başarılı; parse arka planda dönüyor. Pill "işleniyor" göstersin;
-    // firmaDurum periyodik yenilesin.
     $('fisListesiPill').textContent=`${r.boyut_kb} KB · arka planda işleniyor...`;
-    // 1.5 saniye aralıklarla durumu yenile; parse bitince pill gerçek değerleri gösterir
-    let sayac=0;
-    const yenile=async()=>{
-      sayac++;
-      await firmaDurum();
-      const pilltext=$('fisListesiPill').textContent||'';
-      if(!pilltext.includes('işleniyor') && !pilltext.includes('yükleniyor')){
-        return; // parse bitti (pill artık "3502 satır ..." gösteriyor)
-      }
-      if(sayac<40) setTimeout(yenile, 1500); // 60 sn'ye kadar dene
-    };
-    setTimeout(yenile, 1500);
+    fisListesiBekle();
   }
   loadHesaplar();
+}
+
+// Fiş listesi arka planda parse edilir; büyük listeler birkaç saniye sürer.
+// İlk durum çağrısı parse'ı bekleyip gerçek sayıları getirir — o gelene kadar
+// pill "işleniyor" der. Hem elle hem sunucudan yüklemede kullanılır.
+function fisListesiBekle(){
+  const kp=$('fisListesiPill');
+  kp.className='pill'; kp.textContent='fiş listesi işleniyor...';
+  const firma=firmaKod;
+  setTimeout(async()=>{ if(firma===firmaKod) await firmaDurum(); }, 1500);
+}
+
+// ---- Sunucu klasöründen belirli bir dosya seç ----
+async function klasordenSec(tur){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  $('sunucuModalBaslik').textContent=`Sunucu klasöründen ${TUR_ADI[tur]} seç`;
+  $('sunucuModalIcerik').innerHTML='<div class="hint">Yükleniyor...</div>';
+  $('sunucuModal').classList.add('show');
+  try{
+    const r=await (await fetch(`/api/firma/${firmaKod}/klasor-dosyalar?tur=${tur}`)).json();
+    if(!r.klasor){
+      $('sunucuModalIcerik').innerHTML='<div class="hint" style="padding:16px;text-align:center">Firma bir sunucu klasörüne bağlı değil. Önce yukarıdan bir klasör bağla.</div>';
+      return;
+    }
+    if(!r.dosyalar.length){
+      const alt=tur==='mizan'?'mizan/':'fislistesi/';
+      $('sunucuModalIcerik').innerHTML=`<div class="hint" style="padding:16px;text-align:center">${esc(r.klasor)} klasöründe ${TUR_ADI[tur]} bulunamadı.<br>Dosyayı sunucuda <b>${esc(r.klasor)}/${alt}</b> içine koyabilir ya da aşağıdan elle yükleyebilirsin.</div>`;
+      return;
+    }
+    $('sunucuModalIcerik').innerHTML=`<div class="hint" style="margin-bottom:8px">${esc(r.klasor)} — en yenisi üstte</div>`+
+      r.dosyalar.map(f=>`<div class="dosya-item" data-tur="${esc(tur)}" data-yol="${esc(f.yol)}">
+        <div class="firma-ad">${esc(f.dosya)}
+          ${f.yol===r.secili?'<span class="rozet kullaniliyor">kullanılıyor</span>':''}
+          ${f.dogru_yer?'':'<span class="rozet yanlis">yanlış klasörde</span>'}</div>
+        <div class="meta">${esc(f.yol)} · ${f.boyut_kb} KB · ${trTarih(f.tarih)}</div>
+      </div>`).join('');
+    $('sunucuModalIcerik').querySelectorAll('.dosya-item').forEach(el=>{
+      el.onclick=()=>klasordanAl(el.dataset.tur, el.dataset.yol);
+    });
+  }catch(e){
+    $('sunucuModalIcerik').innerHTML='<div class="hint" style="color:#c0392b">Hata: '+esc(e.message)+'</div>';
+  }
+}
+
+async function klasordanAl(tur, yol){
+  $('sunucuModal').classList.remove('show');
+  showLoading('Sunucu klasöründen alınıyor...');
+  try{
+    const r=await fetch(`/api/firma/${firmaKod}/klasordan-al`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tur,dosya:yol})});
+    if(!r.ok){ toast('Alınamadı: '+(await r.text()),false); hideLoading(); return; }
+    const s=await r.json();
+    let msg=`${s.dosya} alındı`;
+    if(s.hesap_sayisi!=null) msg+=` · ${s.hesap_sayisi} hesap`;
+    if(s.satir_sayisi!=null) msg+=` · ${s.satir_sayisi} satır`;
+    toast(msg,true);
+    hideLoading();
+    if(tur==='fis-listesi') fisListesiBekle(); else firmaDurum();
+    loadHesaplar();
+  }catch(e){ hideLoading(); toast('Bağlantı hatası: '+e.message,false); }
 }
 
 async function gecmisFisPdfYukle(){
