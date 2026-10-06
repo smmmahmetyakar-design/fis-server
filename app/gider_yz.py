@@ -55,12 +55,31 @@ def _yaz(d: Path, veri: dict):
 
 def _anahtar(cari: str, aciklamalar: list, yon: str, aday: list) -> str:
     h = hashlib.sha1()
-    h.update("|".join([yon, norm(cari), "\n".join(sorted(aciklamalar)),
+    h.update("|".join([f"t{yapay_zeka.GIDER_TALIMAT_SURUM}", yon, norm(cari), "\n".join(sorted(aciklamalar)),
                        ",".join(k for k, _ in aday)]).encode("utf-8"))
     return h.hexdigest()[:20]
 
 
-def onerici(d: Path, hesaplar: list, alt_kodlar: set, yon: str):
+def kullanim_ozeti(gecmis_satirlar: list, yon: str) -> dict:
+    """Geçmiş kayıtlardan (fiş listesi / muavin) hesap -> (kullanım sayısı, örnek açıklamalar).
+    Yapay zekâ firmanın kendi alışkanlığını görsün diye aday listesine eklenir."""
+    import re
+    out = {}
+    for r in gecmis_satirlar:
+        tutar = float((r.get("borc") if yon == "alis" else r.get("alacak")) or 0)
+        if tutar <= 0:
+            continue
+        kod = str(r.get("hesap", "")).strip()
+        sayi, ornek = out.get(kod, (0, []))
+        # "03/06/2026-YKA2026002941352-YURTİÇİ KARGO..." -> "YURTİÇİ KARGO..."
+        acik = re.sub(r"^\s*\d{1,2}[./]\d{1,2}[./]\d{4}\s*-\s*[^-]*-\s*", "", str(r.get("detay", ""))).strip()[:40]
+        if acik and acik not in ornek and len(ornek) < 3:
+            ornek = ornek + [acik]
+        out[kod] = (sayi + 1, ornek)
+    return out
+
+
+def onerici(d: Path, hesaplar: list, alt_kodlar: set, yon: str, kullanim: dict | None = None):
     """isle_fatura'ya verilecek fonksiyon: (cari, aciklamalar, yon) -> öneri.
     Önbellekte varsa {'kod','gerekce'}; yoksa işi kuyruğa atar ve {'bekliyor': True};
     yapay zekâ kapalıysa None."""
@@ -88,7 +107,7 @@ def onerici(d: Path, hesaplar: list, alt_kodlar: set, yon: str):
         if not etkin:
             return None
         fatura_pdf.is_ekle(("gider", d.as_posix(), a),
-                           lambda: _calistir(d, a, cari, list(aciklamalar), yon_, aday),
+                           lambda: _calistir(d, a, cari, list(aciklamalar), yon_, aday, kullanim),
                            lambda e: _kaydet(d, a, {"kod": "", "hata": f"{e.__class__.__name__}: {e}",
                                                     "cari": cari, "yon": yon_}))
         return {"bekliyor": True}
@@ -103,8 +122,8 @@ def _kaydet(d: Path, anahtar: str, kayit: dict):
         _yaz(d, v)
 
 
-def _calistir(d: Path, anahtar: str, cari: str, aciklamalar: list, yon: str, aday: list):
-    sonuc = yapay_zeka.gider_sec(cari, aciklamalar, yon, aday)
+def _calistir(d: Path, anahtar: str, cari: str, aciklamalar: list, yon: str, aday: list, kullanim=None):
+    sonuc = yapay_zeka.gider_sec(cari, aciklamalar, yon, aday, kullanim)
     if not sonuc:
         # Model listede olmayan kod döndürdü — bunu da kaydet ki her İşle'de yeniden sorulmasın
         _kaydet(d, anahtar, {"kod": "", "red": True, "cari": cari, "yon": yon,

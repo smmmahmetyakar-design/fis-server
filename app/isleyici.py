@@ -621,7 +621,8 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                         sut["tevkifat"] = j
                     elif c == "ILK TEVKIFAT KODU":
                         sut["tevkifat_kod"] = j
-                    elif c == "EK VERGILER":
+                    elif c in ("EK VERGILER", "EK VERGI", "DIGER VERGILER", "OIV", "OIV TUTARI", "OTV", "OTV TUTARI") \
+                            or "OZEL ILETISIM" in c or "OZEL TUKETIM" in c:
                         sut["ek_vergi"] = j
                     elif "OZEL" in c and "MATRAH" in c:
                         sut["ozel_matrah"] = j
@@ -1888,6 +1889,10 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         vars_gider = next((k for k, _ in km.hesaplar if k in alt_kodlar and k[:1] == "7" and not k.startswith("79")), "")
     gider_bekleyen = set()
     kdv_eksik = {}      # "%20 için 191" -> {fatura no}
+    fark_yazilan, fark_dengesiz, yeni_hesap = [], [], {}
+    # bu firmanın geçmiş kayıtlarında (fiş listesi / muavin) gider-gelir tarafında kullanılmış hesaplar
+    kullanilan_gider = {str(r.get("hesap", "")).strip() for r in km.gecmis.get("satirlar", [])
+                        if float((r.get("borc") if yon == "alis" else r.get("alacak")) or 0) > 0}
 
     fisler = []
     fis = fis0
@@ -2046,6 +2051,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             continue
 
         # NORMAL SATIŞ/ALIŞ FATURASI (çok KDV oranlı olabilir)
+        fatura_bas = len(fisler)
         # Kalem yok ama toplam varsa (OCR gürültülü perakende fişi): tek satır
         # gider/gelir yaz. Kullanıcı Düzenle'de KDV'yi ayırabilir.
         if not f["kalemler"] and toplam > 0:
@@ -2086,14 +2092,40 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             else:
                 fisler.append(sat(bsmv_kod, 0, f["ek_vergi"]))
 
+        # Denge emniyeti: liste toplamı yazılan kalemlerden fazlaysa (ör. Turkcell'de ÖİV
+        # sütunu listede yok) fark kaybolup fiş dengesiz çıkıyordu. Fark carinin geçmişteki
+        # ek vergi hesabına (yoksa gider hesabına) yazılır ve uyarılır.
+        yazilan = round(sum((x["borc"] if yon == "alis" else x["alacak"]) for x in fisler[fatura_bas:]), 2)
+        fark = round(toplam - yazilan, 2)
+        if fark > 0.01:
+            ek_k = gecmis_es.get("ek", "")
+            fark_kod = ek_k if ek_k and ek_k in alt_kodlar else (gider_kod or vars_gider)
+            fisler.append(sat(fark_kod, fark, 0) if yon == "alis" else sat(fark_kod, 0, fark))
+            fark_yazilan.append(f"{fatura_no} ({fark:,.2f} → {fark_kod or 'boş'})")
+        elif fark < -0.01:
+            fark_dengesiz.append(f"{fatura_no} ({-fark:,.2f})")
+
         # karşı taraf (tek satır)
         if yon == "alis":
             fisler.append(sat(cari_kod or "198.01.001", 0, toplam))
         else:
             fisler.append(sat(cari_kod or "198.01.001", toplam, 0))
 
+        # Bu firmanın geçmişinde hiç kullanılmamış gider hesabı (yapay zekâ/varsayılan seçtiyse)
+        if gider_kaynak in ("yz", "tahmin") and kullanilan_gider and gider_kod and gider_kod not in kullanilan_gider:
+            yeni_hesap.setdefault(gider_kod, []).append(fatura_no)
+
         fis += 1
 
+    if fark_yazilan:
+        uyarilar.append(f"{len(fark_yazilan)} faturada liste toplamı kalemlerden fazlaydı (ÖİV/ÖTV gibi ek vergi "
+                        f"sütunu olmayabilir); fark ayrı satıra yazıldı, kontrol et: {_kisa_liste(fark_yazilan, 4)}")
+    if fark_dengesiz:
+        uyarilar.insert(0, f"{len(fark_dengesiz)} faturada kalemler liste toplamından fazla — fiş DENGESİZ, "
+                           f"aktarmadan önce düzelt: {_kisa_liste(fark_dengesiz, 4)}")
+    for kod, nolar in yeni_hesap.items():
+        uyarilar.append(f"{kod} {km.hesap_adi(kod)[:30]} bu firmanın geçmiş kayıtlarında hiç kullanılmamış "
+                        f"({len(nolar)} fatura) — kontrol et: {_kisa_liste(nolar, 4)}")
     if kdv_eksik:
         onek_ = "191" if yon == "alis" else "391"
         mevcut = [f"{k} {a}" for k, a in km.hesaplar if k.startswith(onek_) and k in alt_kodlar]

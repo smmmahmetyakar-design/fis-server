@@ -257,17 +257,25 @@ def dogrula(sonuc: dict, metin: str) -> dict:
 
 
 # ------------------------------------------------------------------ gider / gelir hesabı seçimi
+GIDER_TALIMAT_SURUM = 2   # değişince önbellekteki eski öneriler yeniden sorulur
+
 _GIDER_TALIMAT = """Sen deneyimli bir Türk muhasebecisin (Tekdüzen Hesap Planı).
-Sana bir faturanın karşı tarafı ve fatura kalemlerinin açıklamaları verilecek.
-Bu faturanın {ne} için, firmanın mizanındaki hesaplardan EN UYGUN TEK hesabı seç.
-Yalnızca verilen listedeki kodlardan birini seçebilirsin. Hesap adlarına ve kalem açıklamalarına bak:
-ör. nakliye/taşıma -> nakliye gideri, akaryakıt -> akaryakıt/taşıt gideri, kırtasiye -> kırtasiye gideri,
-kira -> kira gideri, ticari mal alışı -> 153 Ticari Mallar, demirbaş/makine -> 255/253.
-Kalem açıklaması yoksa yalnızca karşı tarafın unvanından (sektöründen) çıkarım yap.
+Sana bir faturanın karşı tarafı, fatura kalemlerinin açıklamaları ve firmanın mizanındaki
+aday hesaplar verilecek. Bu faturanın {ne} için EN UYGUN TEK hesabı seç.
+
+Kurallar:
+- Yalnızca verilen listedeki kodlardan birini seçebilirsin.
+- Her hesabın yanında BU FİRMADA geçmişte kaç kez kullanıldığı ve örnek açıklamalar yazar.
+  Firmanın kendi alışkanlığı esastır: benzer harcamayı geçmişte hangi hesaba yazdıysa onu seç.
+  Hiç kullanılmamış bir hesabı ancak geçmişte uygun bir hesap yoksa seç.
+- 150-157 stok hesapları (ör. 153 Ticari Mallar) yalnızca firmanın SATMAK için aldığı mallar
+  içindir. Ofis, personel, temsil-ağırlama, iletişim, elektronik cihaz, yemek gibi firmanın
+  kendi kullanımı için yapılan alımlar stok değil GİDER ya da demirbaştır.
+- Kalem açıklaması yoksa karşı tarafın unvanından (sektöründen) çıkarım yap.
 gerekce alanına seçimin nedenini tek kısa Türkçe cümleyle yaz."""
 
 
-def gider_sec(cari_ad: str, aciklamalar: list, yon: str, adaylar: list) -> dict | None:
+def gider_sec(cari_ad: str, aciklamalar: list, yon: str, adaylar: list, kullanim: dict | None = None) -> dict | None:
     """Fatura için gider (alış) / gelir (satış) hesabı önerir.
     adaylar: [(kod, ad)] — firmanın mizanındaki ALT hesaplar. Model yalnızca bunlardan
     seçebilir (JSON şemasında enum). Döner: {'kod', 'gerekce'} veya None."""
@@ -280,7 +288,16 @@ def gider_sec(cari_ad: str, aciklamalar: list, yon: str, adaylar: list) -> dict 
             "required": ["kod", "gerekce"]}
     ne = "gider/maliyet/stok kaydı (alış faturası)" if yon == "alis" else "gelir kaydı (satış faturası)"
     kalemler = "\n".join(f"- {a}" for a in aciklamalar[:15]) or "(kalem açıklaması yok)"
-    hesaplar = "\n".join(f"{k} — {a}" for k, a in adaylar)
+    kullanim = kullanim or {}
+    # firmanın sık kullandığı hesaplar önce
+    sirali = sorted(adaylar, key=lambda x: -kullanim.get(x[0], (0, []))[0])
+    satirlar_ = []
+    for k, a in sirali:
+        sayi, ornek = kullanim.get(k, (0, []))
+        ek = (f"  [bu firmada {sayi} kez: {'; '.join(ornek[:3])}]" if sayi
+              else "  [bu firmada hiç kullanılmamış]") if kullanim else ""
+        satirlar_.append(f"{k} — {a}{ek}")
+    hesaplar = "\n".join(satirlar_)
     govde = {
         "model": aktif_model(), "stream": False, "format": sema,
         "options": {"temperature": 0, "num_ctx": 8192},

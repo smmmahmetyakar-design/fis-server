@@ -719,7 +719,8 @@ def isle(kod: str, tip: str, body: IsleBody):
     gider_ogrenme, gider_onerici = None, None
     if tip == "fatura":
         gider_ogrenme = _read_json(d / "fatura_gider_ogrenme.json", {})
-        gider_onerici = gider_yz.onerici(d, km.hesaplar, isleyici.alt_hesap_kodlari(km.hesaplar), body.yon)
+        gider_onerici = gider_yz.onerici(d, km.hesaplar, isleyici.alt_hesap_kodlari(km.hesaplar), body.yon,
+                                         gider_yz.kullanim_ozeti(km.gecmis.get("satirlar", []), body.yon))
     fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon, pdf_faturalar=pdf_faturalar,
                                      gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici)
     if yz_bekleyen:
