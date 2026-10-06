@@ -1873,9 +1873,13 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         cift = []
         for f in faturalar:
             no = _fno_anahtar(f.get("fatura_no"))
-            if no in kayitli:
-                f["kayitli_fis"] = kayitli[no]
-                cift.append(f"{f['fatura_no']} (fiş {kayitli[no]})" if kayitli[no] else f["fatura_no"])
+            if no not in kayitli:
+                continue
+            fisno = km.fatura_kayitli_mi(no, f.get("cari_ad", "")) if hasattr(km, "fatura_kayitli_mi") \
+                else kayitli[no]
+            if fisno is not None:
+                f["kayitli_fis"] = fisno
+                cift.append(f"{f['fatura_no']} (fiş {fisno})" if fisno else f["fatura_no"])
         if cift:
             uyarilar.insert(0, f"{len(cift)} fatura geçmiş kayıtlarda zaten var — çift kayıt olmasın, "
                                f"aktarmadan önce çıkar: {_kisa_liste(cift)}")

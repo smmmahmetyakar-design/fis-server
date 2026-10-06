@@ -728,6 +728,10 @@ def isle(kod: str, tip: str, body: IsleBody):
     if not km.hesaplar:
         uyarilar.insert(0, "Bu firmada mizan yüklü değil ya da okunamadı — hesaplar eşleştirilemedi. "
                            "Önce 1. bölümden mizanı yükle; bu önizlemeyi aktarma.")
+    if km.hesaplar and fisler and not km.gecmis.get("satirlar"):
+        uyarilar.insert(0, "Bu firmada geçmiş kayıt (Excel fiş listesi / muavin defter) yüklü değil — "
+                           "hesap kodları tahmin, fiş no 1'den başladı ve çift kayıt denetimi yapılamadı. "
+                           "1. bölümden firmanın muavin defterini yükleyip tekrar İşle'ye bas.")
     if tip == "fatura":
         # Karşı taraf firmanın kendisiyse fatura büyük ihtimalle yanlış sekmede
         # (alış faturası satışa ya da tersi): satışta cari = alıcı = biz olurdu.

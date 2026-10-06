@@ -37,6 +37,11 @@ STOP = {"ANONIM", "SIRKETI", "LIMITED", "LTD", "STI", "SAN", "TIC", "VE", "A", "
         "AS", "TICARET", "SANAYI", "MItedh", "HIZM", "HIZMETLERI", "MALI", "STI."}
 
 
+# fiş açıklamalarında firma adı dışında sık geçen kelimeler
+_FIS_KELIMELERI = {"MAHSUP", "FATURA", "FATURASI", "FAT", "ALIS", "SATIS", "NOLU", "KDV", "TUTARI",
+                   "BEDELI", "ODEME", "TAHSILAT", "IADE", "ARSIV", "FATURALAR", "KAYDI", "AIT", "ILE"}
+
+
 def kelimeler(s: str) -> set:
     return {w for w in norm(s).split() if w not in STOP and len(w) > 2}
 
@@ -782,13 +787,40 @@ class KuralMotoru:
         """Geçmiş kayıtların açıklamalarında geçen e-fatura numaraları -> fiş no.
         (e-Fatura/e-Arşiv no: 3 harf/rakam + yıl + 9 hane, ör. GIB2026000000448.)
         Yeni yüklenen bir fatura burada varsa daha önce muhasebeleşmiştir."""
+        return {no: kayitlar[0][0] for no, kayitlar in self._kayitli_metinler().items()}
+
+    def _kayitli_metinler(self) -> dict:
+        """fatura no -> [(fiş no, açıklama metni), ...] (aynı no farklı firmalarda olabilir)."""
         if getattr(self, "_kayitli", None) is None:
             self._kayitli = {}
             for r in self.gecmis.get("satirlar", []):
                 metin = str(r.get("detay", "")).upper() + " " + str(r.get("fis_aciklama", "")).upper()
                 for no in self._FATURA_NO_RE.findall(metin):
-                    self._kayitli.setdefault(no, str(r.get("fisno", "")))
+                    lst = self._kayitli.setdefault(no, [])
+                    fisno = str(r.get("fisno", ""))
+                    if not any(f == fisno for f, _ in lst):
+                        lst.append((fisno, metin))
         return self._kayitli
+
+    def fatura_kayitli_mi(self, fatura_no: str, cari_ad: str = "") -> str | None:
+        """Fatura geçmişte kayıtlıysa fiş numarasını ('' olabilir), değilse None döner.
+        e-Arşiv numaraları (GIB2026000000010 gibi) her düzenleyicide baştan başlar;
+        aynı numara başka firmanın faturası olabilir. Bu yüzden açıklamada firma adı
+        da geçiyorsa karşı tarafın adıyla karşılaştırılır; ad tutmazsa kayıtlı sayılmaz."""
+        kayitlar = self._kayitli_metinler().get(fatura_no)
+        if not kayitlar:
+            return None
+        hedef = {w for w in kelimeler(cari_ad) if not w.isdigit()} if cari_ad else set()
+        if not hedef:
+            return kayitlar[0][0]
+        ad_var = False
+        for fisno, metin in kayitlar:
+            kw = {w for w in kelimeler(metin) if w.isalpha()} - _FIS_KELIMELERI
+            if hedef & kw:
+                return fisno
+            ad_var = ad_var or len(kw) >= 2
+        # açıklamada firma adı hiç yoksa (yalnızca numara yazılmışsa) numaraya güven
+        return None if ad_var else kayitlar[0][0]
 
     def son_fis_no(self):
         """Geçmiş fişlerdeki en yüksek fiş numarası."""
@@ -813,6 +845,7 @@ class KuralMotoru:
         # Cari adının tamamı veya anlamlı kelimeleriyle geçmiş satırları bul.
         # SADECE TAM EŞLEŞMELERİ kabul et — bulanık eşleşme yanlış cariye yol açıyor.
         qwords = kelimeler(cari_ad)
+        ilk = next((w for w in q.split() if w in qwords and not w.isdigit()), "")
         aday = []
         for idx, r in enumerate(self.gecmis.get("satirlar", [])):
             metin = norm(f"{r.get('detay','')} {r.get('fis_aciklama','')}")
@@ -826,6 +859,23 @@ class KuralMotoru:
             # en az 2 anlamlı kelimenin HEPSİ satırda tam kelime olarak geçmeli.
             elif len(qwords) >= 2 and qwords <= set(metin.split()):
                 aday.append((50 + len(qwords), idx, r))
+
+        if not aday and ilk and len(qwords) >= 4:
+            # Unvanın bir kısmı değişmiş olabilir ("NOYAN DEMİR METAL ELEKTRİK İNŞAAT" ->
+            # geçmişte "NOYAN DEMİR METAL KİMYEVİ MADDELER İNŞAAT"). Adın İLK kelimesi
+            # (ayırt edici marka) ile birlikte en az 3 kelime ve kelimelerin %60'ı tutmalı.
+            for idx, r in enumerate(self.gecmis.get("satirlar", [])):
+                mk = set(norm(f"{r.get('detay','')} {r.get('fis_aciklama','')}").split())
+                if ilk in mk:
+                    ortak = len(qwords & mk)
+                    if ortak >= 3 and ortak / len(qwords) >= 0.6:
+                        aday.append((20 + ortak, idx, r))
+            # zayıf eşleşme birden çok cariye çıkıyorsa belirsizdir — kullanma
+            cari_on = ("320", "329", "331", "335", "336") if yon == "alis" else ("120", "121")
+            cariler = {str(r.get("hesap", "")).strip() for _, _, r in aday
+                       if str(r.get("hesap", "")).startswith(cari_on)}
+            if len(cariler) > 1:
+                aday = []
 
         if not aday:
             return sonuc
