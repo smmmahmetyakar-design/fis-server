@@ -895,7 +895,13 @@ function edit(i,alan,deger){
   // hesap elle değişince öğret
   if(alan==='hesap' && deger && deger!==eski && satirlar[i].detay){
     fetch(`/api/firma/${firmaKod}/ogret/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:satirlar[i].detay,kod:deger,rol:satirlar[i].rol||'',yon:aktifYon()})}).catch(()=>{});
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:satirlar[i].detay,kod:deger,rol:satirlar[i].rol||'',yon:aktifYon(),oran:satirlar[i].oran||0})}).catch(()=>{});
+    // KDV hesabı orana bağlı: aynı oranlı, hesabı boş ya da eskisiyle aynı olan tüm KDV satırlarını da güncelle
+    if(satirlar[i].rol==='kdv' && satirlar[i].oran){
+      let n=0;
+      satirlar.forEach((x,j)=>{ if(j!==i && x.rol==='kdv' && x.oran===satirlar[i].oran && (!x.hesap || x.hesap===eski)){ x.hesap=deger; n++; } });
+      if(n) toast(`%${satirlar[i].oran} KDV: ${n} satır daha ${deger} hesabına geçti`,true);
+    }
     if(satirlar[i].rol==='gider'){ satirlar[i].kaynak='ogrenme'; delete satirlar[i].not; }
   }
   if(duzenleMod){

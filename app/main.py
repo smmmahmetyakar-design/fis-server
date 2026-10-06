@@ -805,6 +805,7 @@ class OgretBody(BaseModel):
     aciklama: str
     kod: str
     rol: str = ""          # fatura satırının rolü: gider | cari | kdv | diger
+    oran: int = 0          # KDV satırı için oran (KDV hesabı orana göre öğrenilir)
     yon: str = "alis"      # fatura için alis | satis
 
 
@@ -818,10 +819,17 @@ def ogret(kod: str, tip: str, body: OgretBody):
         # düzeltme "cari adı -> kod" diye genel öğrenmeye yazılırsa cari
         # eşleştirmesini bozar ve gider hiç hatırlanmaz. Gider kendi dosyasına,
         # cari + yön anahtarıyla öğrenilir; KDV/diğer satırlar öğrenilmez.
-        if body.rol != "gider":
-            return {"ok": True, "ogrenilen": 0, "not": "bu satır türü öğrenilmez"}
         p = d / "fatura_gider_ogrenme.json"
         og = _read_json(p, {})
+        if body.rol == "kdv":
+            # KDV hesabı cariye değil ORANA bağlıdır: firma genelinde bu oranın hesabı
+            if not body.oran:
+                return {"ok": True, "ogrenilen": 0, "not": "oran bilinmiyor"}
+            og[f"kdv|{body.yon}|{body.oran}"] = body.kod
+            _write_json(p, og)
+            return {"ok": True, "ogrenilen": len(og), "tur": "kdv"}
+        if body.rol != "gider":
+            return {"ok": True, "ogrenilen": 0, "not": "bu satır türü öğrenilmez"}
         og[f"{body.yon}|{norm(body.aciklama)}"] = body.kod
         _write_json(p, og)
         return {"ok": True, "ogrenilen": len(og), "tur": "gider"}
