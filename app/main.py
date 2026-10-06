@@ -29,6 +29,7 @@ from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar
 from app.belge_oku import belge_oku
 from app import isleyici
 from app import sunucu_klasor as sk
+from app import fatura_pdf, yapay_zeka
 
 DATA_DIR = Path(os.environ.get("FIS_DATA", "/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -588,6 +589,72 @@ def belge_sil(kod: str, tip: str, fname: str):
     return {"ok": True}
 
 
+# ----------------------------------------------------------------- fatura PDF'leri (alış/satış)
+def _yon_kontrol(yon: str):
+    if yon not in fatura_pdf.YONLER:
+        raise HTTPException(400, "yon alis veya satis olmalı")
+
+
+def _guvenli_ad(fname: str) -> str:
+    if not fname or ".." in fname or "/" in fname or "\\" in fname or fname.startswith("_"):
+        raise HTTPException(400, "Geçersiz dosya adı")
+    return fname
+
+
+@app.post("/api/firma/{kod}/fatura-pdf/{yon}")
+async def fatura_pdf_yukle(kod: str, yon: str, file: UploadFile = File(...)):
+    """Tek bir fatura PDF'i yükler, hemen metinden okur; eksik alan kalırsa
+    yapay zekâ kuyruğuna atar (arka planda)."""
+    _yon_kontrol(yon)
+    d = firma_dir(kod)
+    data = await file.read()
+    if data[:5] != b"%PDF-":
+        raise HTTPException(400, f"{file.filename}: PDF değil")
+    k = fatura_pdf.klasor(d, yon)
+    fname = re.sub(r"[^\w.\- ]", "_", file.filename or "fatura.pdf").lstrip("_") or "fatura.pdf"
+    if not fname.lower().endswith(".pdf"):
+        fname += ".pdf"
+    (k / fname).write_bytes(data)
+    kayit = fatura_pdf.oku(k, k / fname, yon)
+    return {"ok": True, "dosya": fname, "durum": fatura_pdf._durum_hesapla(kayit),
+            "fatura_sayisi": len(kayit.get("faturalar") or [])}
+
+
+@app.get("/api/firma/{kod}/fatura-pdf/{yon}")
+def fatura_pdf_liste(kod: str, yon: str):
+    _yon_kontrol(yon)
+    d = firma_dir(kod)
+    return {"dosyalar": fatura_pdf.liste(fatura_pdf.klasor(d, yon), yon),
+            "yapay_zeka": yapay_zeka.durum(), "kuyruk": fatura_pdf.kuyruk_bilgisi()}
+
+
+@app.delete("/api/firma/{kod}/fatura-pdf/{yon}/{fname}")
+def fatura_pdf_sil(kod: str, yon: str, fname: str):
+    _yon_kontrol(yon)
+    d = firma_dir(kod)
+    fatura_pdf.sil(fatura_pdf.klasor(d, yon), _guvenli_ad(fname))
+    return {"ok": True}
+
+
+@app.post("/api/firma/{kod}/fatura-pdf/{yon}/{fname}/yapay-zeka")
+def fatura_pdf_yz(kod: str, yon: str, fname: str):
+    """Eksik kalan bir PDF'i yapay zekâya (yeniden) gönderir."""
+    _yon_kontrol(yon)
+    d = firma_dir(kod)
+    k = fatura_pdf.klasor(d, yon)
+    fname = _guvenli_ad(fname)
+    if not (k / fname).exists():
+        raise HTTPException(404, "Dosya yok")
+    if not fatura_pdf.yz_kuyruga_al(k, fname, yon, zorla=True):
+        raise HTTPException(503, "Yapay zekâ kullanılamıyor: " + yapay_zeka.durum(tazele=True)["hata"])
+    return {"ok": True}
+
+
+@app.get("/api/yapay-zeka")
+def yapay_zeka_durum():
+    return {**yapay_zeka.durum(tazele=True), "kuyruk": fatura_pdf.kuyruk_bilgisi()}
+
+
 # ----------------------------------------------------------------- işleme
 @app.get("/api/firma/{kod}/onerilen-fisno/{tip}")
 def onerilen_fisno(kod: str, tip: str):
@@ -634,7 +701,25 @@ def isle(kod: str, tip: str, body: IsleBody):
         fis_bas = km.son_fis_no() + 1
 
     # tip'e göre işleyiciye ver
-    fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon)
+    pdf_faturalar, yz_bekleyen = [], 0
+    if tip == "fatura" and body.yon in fatura_pdf.YONLER:
+        pdf_faturalar, yz_bekleyen = fatura_pdf.faturalar(d, body.yon)
+    fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon, pdf_faturalar=pdf_faturalar)
+    if yz_bekleyen:
+        uyarilar.insert(0, f"{yz_bekleyen} PDF hâlâ yapay zekâ ile okunuyor — bitince tekrar İşle'ye basın")
+    if tip == "fatura":
+        # Karşı taraf firmanın kendisiyse fatura büyük ihtimalle yanlış sekmede
+        # (alış faturası satışa ya da tersi): satışta cari = alıcı = biz olurdu.
+        from app.kurallar import kelimeler
+        firma_k = kelimeler(_read_json(d / "meta.json", {}).get("ad", ""))
+        if firma_k:
+            kendisi = sorted({s["evrak_no"] for s in fisler
+                              if len(firma_k & kelimeler(s.get("detay", ""))) / len(firma_k) >= 0.6})
+            if kendisi:
+                diger = "alış" if body.yon == "satis" else "satış"
+                uyarilar.insert(0, f"Şu faturalarda karşı taraf firmanın kendisi görünüyor — "
+                                   f"{diger} sekmesine ait olabilir: {', '.join(kendisi[:6])}"
+                                   + (f" ve {len(kendisi) - 6} fatura daha" if len(kendisi) > 6 else ""))
 
     # geçmiş fişleri çıktıya kat (istenirse)
     gecmis_satir = []

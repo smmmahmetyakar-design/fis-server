@@ -101,6 +101,27 @@
   .modal .dosya-item .rozet{font-size:10px;padding:1px 7px;border-radius:9px;margin-left:6px;font-weight:600;vertical-align:1px;white-space:nowrap;display:inline-block}
   .rozet.yanlis{background:#fde8c8;color:#8a5a12}
   .rozet.kullaniliyor{background:#dcedc8;color:#33691e}
+  /* fatura PDF alanı */
+  .fatura-pdf-alani{margin-top:18px;padding-top:14px;border-top:1px solid #efe9dc}
+  .fatura-pdf-alani h3{margin:0 0 4px;font-size:14px;color:var(--ana)}
+  .yz-durum{font-size:12px;margin-top:10px;padding:6px 10px;border-radius:6px;background:#f4f4f4;color:#555}
+  .yz-durum.acik{background:#eef3fb;color:#24456b}
+  .pdf-tablo{width:100%;border-collapse:collapse;font-size:12.5px}
+  .pdf-tablo th,.pdf-tablo td{border:none;border-bottom:1px solid #efe9dc;padding:6px 6px;text-align:left;vertical-align:top}
+  .pdf-tablo th{background:none;color:var(--muted);font-weight:600;font-size:11.5px}
+  .pdf-tablo td.sayi{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .pdf-tablo .dosya-adi{color:var(--muted);font-size:11px;word-break:break-all}
+  .durum{display:inline-block;font-size:11px;padding:1px 8px;border-radius:9px;white-space:nowrap;font-weight:600}
+  .durum.tam{background:#dcedc8;color:#33691e}
+  .durum.eksik,.durum.yz_eksik{background:#fde8c8;color:#8a5a12}
+  .durum.yz_sirada,.durum.yz_okunuyor{background:#e3ecf7;color:#24456b}
+  .durum.yz_tamamladi{background:#e7defa;color:#4b2f86}
+  .durum.okunamadi{background:#f6d5d1;color:#8a2c22}
+  .uyari-liste{margin:8px 0 0;padding-left:18px;line-height:1.5}
+  .yz-not{font-size:11px;color:var(--muted);margin-top:3px}
+  .yz-not summary{cursor:pointer}
+  .kaynak.belge-pdf{background:#e0ecf7;color:#24456b}
+  .kaynak.belge-yz{background:#e7defa;color:#4b2f86}
   .grp-a td{background:#fff}
   .grp-b td{background:#faf8f3}
 </style>
@@ -177,6 +198,19 @@
       <div class="hint" style="margin-top:6px">Birden çok dosya seçebilirsiniz. PDF/resim OCR ile okunur (Türkçe).</div>
     </div>
     <div id="belgeListe" style="margin-top:12px"></div>
+
+    <!-- yalnızca alış / satış fatura sekmelerinde -->
+    <div id="faturaPdfAlani" class="fatura-pdf-alani" style="display:none">
+      <h3>Fatura PDF'leri (<span id="faturaPdfYon">alış</span>)</h3>
+      <div class="hint" style="margin-bottom:8px">Fatura listesinde eksik kalan cari, tarih ve KDV dağılımı, fatura numarası eşleşen PDF'ten tamamlanır. Listede hiç olmayan faturalar da PDF'ten eklenir. Liste yoksa yalnızca PDF'lerle de çalışır.</div>
+      <div class="yukle-kutu" id="faturaPdfKutu">
+        <input type="file" id="faturaPdfFile" accept=".pdf" multiple>
+        <button class="btn btn-ana" onclick="faturaPdfYukle()">PDF yükle</button>
+        <div class="hint" style="margin-top:6px">Birden çok PDF seçebilir ya da buraya sürükleyebilirsin. Birden çok fatura içeren tek PDF de olur.</div>
+      </div>
+      <div id="yzDurum" class="yz-durum"></div>
+      <div id="faturaPdfListe" style="margin-top:8px"></div>
+    </div>
   </div>
 
   <div class="card" id="isleKarti">
@@ -294,6 +328,11 @@ function sekmeSec(tip){
   $('belgeKarti').style.display = fisMod ? 'none' : '';
   $('isleKarti').style.display = fisMod ? 'none' : '';
   $('fisKarti').style.display = fisMod ? '' : 'none';
+  const faturaMod = tip.startsWith('fatura');
+  $('faturaPdfAlani').style.display = faturaMod ? '' : 'none';
+  $('faturaPdfYon').textContent = tip==='fatura_satis' ? 'satış' : 'alış';
+  $('faturaPdfListe').innerHTML=''; $('yzDurum').innerHTML='';
+  clearTimeout(pdfIzleZamanlayici);
   satirlar=[]; duzenleMod=false; $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
   if(firmaKod) firmaDurum();
   if(fisMod && firmaKod) fisSekmeHazirla();
@@ -499,6 +538,7 @@ async function firmaDurum(){
   if(t.belgeler&&t.belgeler.length){
     bl.innerHTML=t.belgeler.map(f=>`<div class="dosya-satir"><span style="flex:1">📎 ${f}</span><button class="btn btn-x" onclick="belgeSil('${f.replace(/'/g,"")}')">🗑</button></div>`).join('');
   }else bl.innerHTML='<div class="hint">Henüz belge yok.</div>';
+  if(aktifTip.startsWith('fatura')) faturaPdfListele();
   loadCiktilar();
   // fiş no önerisi
   try{
@@ -541,6 +581,102 @@ function fisListesiBekle(){
   const firma=firmaKod;
   setTimeout(async()=>{ if(firma===firmaKod) await firmaDurum(); }, 1500);
 }
+
+// ---- Fatura PDF'leri (alış / satış) ----
+let pdfIzleZamanlayici=null;
+const PDF_DURUM={
+  tam:'Tam', eksik:'Eksik', yz_sirada:'Yapay zekâ sırada', yz_okunuyor:'Yapay zekâ okuyor…',
+  yz_tamamladi:'Yapay zekâ ile tamamlandı', yz_eksik:'Yapay zekâ sonrası eksik', okunamadi:'Okunamadı'
+};
+const EKSIK_AD={cari:'cari', tarih:'tarih', fatura_no:'fatura no', tutar:'tutar', kdv:'KDV'};
+
+async function faturaPdfYukle(dosyalar){
+  if(!firmaKod){alert('Önce firma seç');return;}
+  const files=dosyalar||$('faturaPdfFile').files; if(!files.length){alert('PDF seç');return;}
+  const yon=aktifYon(); let ok=0, hata=[];
+  for(let i=0;i<files.length;i++){
+    showLoading(`PDF okunuyor (${i+1}/${files.length}): ${files[i].name}`);
+    const fd=new FormData(); fd.append('file',files[i]);
+    try{
+      const r=await fetch(`/api/firma/${firmaKod}/fatura-pdf/${yon}`,{method:'POST',body:fd});
+      if(r.ok) ok++; else hata.push(files[i].name+': '+(await r.json().catch(()=>({}))).detail);
+    }catch(e){ hata.push(files[i].name+': '+e.message); }
+  }
+  hideLoading(); $('faturaPdfFile').value='';
+  if(ok) toast(`${ok} PDF okundu`,true);
+  if(hata.length) toast(hata.join(' · '),false);
+  faturaPdfListele();
+}
+
+async function faturaPdfListele(){
+  clearTimeout(pdfIzleZamanlayici);
+  if(!firmaKod || !aktifTip.startsWith('fatura')) return;
+  const yon=aktifYon(), firma=firmaKod;
+  let v; try{ v=await (await fetch(`/api/firma/${firma}/fatura-pdf/${yon}`)).json(); }catch(e){ return; }
+  if(firma!==firmaKod || aktifYon()!==yon || !aktifTip.startsWith('fatura')) return;   // bu arada sekme/firma değişti
+  const yz=v.yapay_zeka||{};
+  $('yzDurum').className='yz-durum'+(yz.etkin?' acik':'');
+  $('yzDurum').innerHTML = yz.etkin
+    ? `Yapay zekâ hazır: <b>${esc(yz.model)}</b>. Yalnızca PDF metninden okunamayan alanlar için, arka planda kullanılır. Verdiği rakamlar fatura metniyle ve matrah + KDV = toplam kontrolüyle doğrulanmadan fişe girmez.`
+    : `Yapay zekâ kapalı (${esc(yz.hata||'ayarlı değil')}). PDF'ler yine metinden okunur; okunamayan alanları önizlemede elle düzeltebilirsin.`;
+  const d=v.dosyalar||[];
+  if(!d.length){ $('faturaPdfListe').innerHTML='<div class="hint">Henüz PDF yok.</div>'; return; }
+  let h='<table class="pdf-tablo"><thead><tr><th>Fatura no</th><th>Tarih</th><th>Cari</th><th style="text-align:right">Toplam</th><th>Durum</th><th></th></tr></thead><tbody>';
+  for(const f of d){
+    const fl=f.faturalar.length?f.faturalar:[{fatura_no:'',tarih:'',cari_ad:'',toplam:0,eksik:[],yz:[]}];
+    fl.forEach((x,i)=>{
+      const ilk=i===0, son=i===fl.length-1;
+      const eksik=x.eksik&&x.eksik.length?': '+x.eksik.map(e=>EKSIK_AD[e]||e).join(', '):'';
+      const yzNot=x.yz&&x.yz.length?`<div class="yz-not">yapay zekâ: ${x.yz.map(e=>EKSIK_AD[e]||e).join(', ')}</div>`:'';
+      const durum=f.faturalar.length>1&&!x.eksik.length&&f.durum!=='okunamadi'?(x.yz.length?'yz_tamamladi':'tam'):f.durum;
+      h+=`<tr>
+        <td>${esc(x.fatura_no)||'<i>?</i>'}${ilk?`<div class="dosya-adi">${esc(f.dosya)}${fl.length>1?` · ${fl.length} fatura`:''}</div>`:''}</td>
+        <td>${x.tarih?esc(x.tarih.split('-').reverse().join('.')):'<i>?</i>'}</td>
+        <td>${esc(x.cari_ad)||'<i>?</i>'}${yzNot}</td>
+        <td class="sayi">${x.toplam?nf(x.toplam):''}</td>
+        <td><span class="durum ${durum}">${PDF_DURUM[durum]||durum}${(durum==='eksik'||durum==='yz_eksik')?eksik:''}</span>
+          ${son&&f.hata?`<div class="yz-not">${esc(f.hata)}</div>`:''}
+          ${son&&f.yz_notlar&&f.yz_notlar.length?`<details class="yz-not"><summary>ayrıntı</summary>${f.yz_notlar.map(esc).join('<br>')}</details>`:''}</td>
+        <td style="white-space:nowrap">
+          ${(f.durum==='eksik'||f.durum==='yz_eksik')&&yz.etkin&&x.eksik&&x.eksik.length&&i===fl.findIndex(y=>y.eksik&&y.eksik.length)?
+            `<button class="btn btn-kucuk" data-yz="${esc(f.dosya)}" title="Bu PDF'teki eksik alanları yapay zekâ ile oku">Yapay zekâ ile oku</button>`:''}
+          ${ilk?`<button class="btn btn-x" data-sil="${esc(f.dosya)}" title="PDF'i sil">🗑</button>`:''}</td>
+      </tr>`;
+    });
+  }
+  h+='</tbody></table>';
+  $('faturaPdfListe').innerHTML='<div style="overflow-x:auto">'+h+'</div>';
+  $('faturaPdfListe').querySelectorAll('[data-sil]').forEach(b=>b.onclick=()=>faturaPdfSil(b.dataset.sil));
+  $('faturaPdfListe').querySelectorAll('[data-yz]').forEach(b=>b.onclick=()=>faturaPdfYz(b.dataset.yz));
+  // yapay zekâ işi sürüyorsa birkaç saniyede bir yenile
+  if(d.some(f=>f.durum==='yz_sirada'||f.durum==='yz_okunuyor'))
+    pdfIzleZamanlayici=setTimeout(faturaPdfListele, 4000);
+}
+
+async function faturaPdfSil(dosya){
+  if(!confirm('Bu PDF silinsin mi?\n'+dosya)) return;
+  await fetch(`/api/firma/${firmaKod}/fatura-pdf/${aktifYon()}/${encodeURIComponent(dosya)}`,{method:'DELETE'});
+  faturaPdfListele();
+}
+
+async function faturaPdfYz(dosya){
+  const r=await fetch(`/api/firma/${firmaKod}/fatura-pdf/${aktifYon()}/${encodeURIComponent(dosya)}/yapay-zeka`,{method:'POST'});
+  if(!r.ok){ toast((await r.json().catch(()=>({}))).detail||'Yapay zekâ kullanılamıyor',false); return; }
+  toast('Yapay zekâ kuyruğuna alındı',true);
+  faturaPdfListele();
+}
+
+// PDF kutusuna sürükle-bırak
+(()=>{
+  const kutu=$('faturaPdfKutu');
+  kutu.addEventListener('dragover',e=>{e.preventDefault();kutu.classList.add('dragover');});
+  kutu.addEventListener('dragleave',()=>kutu.classList.remove('dragover'));
+  kutu.addEventListener('drop',e=>{
+    e.preventDefault(); kutu.classList.remove('dragover');
+    const pdfler=[...e.dataTransfer.files].filter(f=>f.name.toLowerCase().endsWith('.pdf'));
+    if(pdfler.length) faturaPdfYukle(pdfler);
+  });
+})();
 
 // ---- Sunucu klasöründen belirli bir dosya seç ----
 async function klasordenSec(tur){
@@ -654,7 +790,9 @@ function totals(){
   const al=satirlar.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0);
   return {b,al,dengeli:Math.abs(b-al)<0.01};
 }
+let sonIsleSonuc=null;   // süzgeç/düzenleme sonrası yeniden çizimde uyarılar kaybolmasın
 function render(r){
+  if(r) sonIsleSonuc=r; else r=sonIsleSonuc;
   if(!satirlar.length){$('onizle').innerHTML='<div class="hint">Sonuç yok. Belge yükleyip işleyin.</div>';return;}
   const t=totals(); const dz=duzenleMod;
   let h='';
@@ -737,10 +875,10 @@ function render(r){
         </td>
       </tr>`;
     }
-    return `<tr class="${s.hesap?'':'warn'}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}</td><td style="font-size:11px;max-width:180px;word-break:break-all">${s.evrak_no||''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
+    return `<tr class="${s.hesap?'':'warn'}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'} ${s.kaynak?`<span class="kaynak ${s.kaynak}">${s.kaynak}</span>`:''}${s.belge?` <span class="kaynak belge-${s.belge}" title="${s.belge==='yz'?'Bu faturanın bir kısmı yapay zekâ ile okundu — kontrol et':'Bu faturanın bilgisi PDF\'ten geldi ya da tamamlandı'}">${s.belge==='yz'?'yapay zekâ':'PDF'}</span>`:''}</td><td style="font-size:11px;max-width:180px;word-break:break-all">${s.evrak_no||''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
   }).join('');
   h+=`</tbody><tfoot style="position:sticky;bottom:0;z-index:1"><tr class="tot"><td colspan="5" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
-  if(r&&r.uyarilar&&r.uyarilar.length) h+='<div class="uyari">⚠ '+r.uyarilar.slice(0,8).join(' · ')+(r.uyarilar.length>8?' …':'')+'</div>';
+  if(r&&r.uyarilar&&r.uyarilar.length) h+='<ul class="uyari uyari-liste">'+r.uyarilar.slice(0,12).map(u=>`<li>${esc(u)}</li>`).join('')+(r.uyarilar.length>12?`<li>… ${r.uyarilar.length-12} uyarı daha</li>`:'')+'</ul>';
   if(dz) h+='<div style="margin-top:6px;display:flex;gap:8px;align-items:center"><button class="btn" onclick="satirEkle()" style="background:#2f5d6e;color:#fff;padding:5px 14px;font-size:13px">➕ Kalem Ekle</button><button class="btn" onclick="seciliSil()" style="background:#c0392b;color:#fff;padding:5px 14px;font-size:13px">🗑 Seçilileri Sil</button><span class="hint">Satır seçip toplu silebilirsiniz</span></div>';
   if(dz) h+='<div class="hint" style="margin-top:6px">Hesabı yanlış eşleşenleri düzeltin; "Bitir"e basınca eşleştirmeler öğrenilir. Sonra Excel/XML alın.</div>';
   $('onizle').innerHTML=h;

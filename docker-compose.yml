@@ -12,4 +12,8 @@ services:
     environment:
       - FIS_DATA=/data
       - FIS_FIRMALAR=/firmalar
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:14b}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     mem_limit: 1g

@@ -20,12 +20,18 @@ def _tarih_iso(s):
     if isinstance(s, datetime):
         return f"{s.year:04d}-{s.month:02d}-{s.day:02d}"
     s = str(s).strip()
-    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%y", "%d/%m/%y"):
-        try:
-            d = datetime.strptime(s, fmt)
-            return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
-        except Exception:
-            pass
+    # "02.09.2026 14:33:12" / "2026-09-02T00:00:00" gibi saatli değerlerde saati at
+    adaylar = [s]
+    parca = re.split(r"[ T]", s, maxsplit=1)[0]
+    if parca != s:
+        adaylar.append(parca)
+    for aday in adaylar:
+        for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d.%m.%y", "%d/%m/%y"):
+            try:
+                d = datetime.strptime(aday, fmt)
+                return f"{d.year:04d}-{d.month:02d}-{d.day:02d}"
+            except Exception:
+                pass
     return ""
 
 
@@ -579,6 +585,7 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                         # AÇIKLAMA sütunu sadece başka cari adı sütunu yoksa fallback olarak kullanılır.
                         # GİB formatında bu sütun yazıyla tutarı içerir (örn. "Yalnız …TL")
                         sut["cari_ad"] = j
+                        sut["_cari_aciklamadan"] = True
                     elif c == "SENARYO":
                         sut["senaryo"] = j
                     elif c in ("TUR", "FATURA TURU"):
@@ -618,6 +625,36 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                         sut["ek_vergi"] = j
                     elif "OZEL" in c and "MATRAH" in c:
                         sut["ozel_matrah"] = j
+                # Genişletilmiş tanıma — GİB portalı ve farklı entegratör listeleri
+                # başlıkları farklı yazıyor ("Düzenlenme Tarihi", "Alıcı Unvanı/Adı Soyadı").
+                if "fatura_no" in sut and "tarih" not in sut:
+                    for j, c in enumerate(nrow):
+                        if "TARIH" in c and not any(x in c for x in (
+                                "VADE", "ODEME", "ALINMA", "KAYIT", "GONDERIM", "ONAY", "IPTAL", "YANIT", "SEVK", "IRSALIYE")):
+                            sut["tarih"] = j
+                            break
+                if "fatura_no" in sut and "toplam" not in sut:
+                    j = next((j for j, c in enumerate(nrow) if "ODENECEK" in c or "VERGILER DAHIL" in c
+                              or ("TOPLAM" in c and "TUTAR" in c and "KDV" not in c and "MATRAH" not in c)), None)
+                    if j is not None:
+                        sut["toplam"] = j
+                if "fatura_no" in sut and "kdv_top" not in sut:
+                    j = next((j for j, c in enumerate(nrow) if c in ("TOPLAM KDV", "HESAPLANAN KDV", "KDV TUTARI", "KDV")
+                              or ("KDV" in c and "TOPLAM" in c and "MATRAH" not in c)), None)
+                    if j is not None and j not in {v for k, v in sut.items() if k.startswith(("kdv_", "mat_"))}:
+                        sut["kdv_top"] = j
+                if "fatura_no" in sut and ("cari_ad" not in sut or sut.get("_cari_aciklamadan")):
+                    # alışta karşı taraf faturayı gönderen, satışta alan
+                    tercih = (("GONDERICI", "GONDEREN", "SATICI", "TEDARIKCI", "DUZENLEYEN")
+                              if yon == "alis" else ("ALICI", "MUSTERI"))
+                    secilen = next((j for j, c in enumerate(nrow)
+                                    if any(t in c for t in tercih) and ("UNVAN" in c or "ADI" in c or "AD SOYAD" in c)
+                                    and "VKN" not in c and "TCKN" not in c), None)
+                    if secilen is None and "cari_ad" not in sut:
+                        secilen = next((j for j, c in enumerate(nrow) if "UNVAN" in c and "VKN" not in c), None)
+                    if secilen is not None:
+                        sut["cari_ad"] = secilen
+                        sut.pop("_cari_aciklamadan", None)
                 # GİB formatında fatura_no+tarih+cari_ad yeterli; eLogo'da fatura_no+tarih+cari_ad
                 if ("fatura_no" in sut or "tarih" in sut) and ("cari_ad" in sut or "toplam" in sut):
                     bas_idx = i; break
@@ -628,10 +665,17 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                 j = sut.get(key)
                 return row[j] if j is not None and j < len(row) else None
 
+            # Listede hiç KDV bilgisi (oran/matrah/KDV toplamı sütunu) yoksa KDV
+            # dağılımı bilinmiyor demektir — PDF'ten tamamlanması gerekir.
+            kdv_sutun_var = any(k in sut for k in (
+                "kdv_1", "kdv_8", "kdv_10", "kdv_18", "kdv_20",
+                "mat_1", "mat_8", "mat_10", "mat_18", "mat_20", "kdv_top"))
+
             for row in tablo[bas_idx + 1:]:
                 fno = g(row, "fatura_no")
                 if not fno or not str(fno).strip():
                     continue
+                eksik = []
                 cari = str(g(row, "cari_ad") or "").strip()
                 # "Yalnız ... TL" gibi yazıyla tutar içeren açıklama cari ad değil
                 if cari and re.match(r"(?i)yaln[ıi]z\s", cari):
@@ -639,6 +683,7 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                 if not cari:
                     # cari adı boşsa fatura_no kullan (en azından bir referans olsun)
                     cari = str(fno).strip()
+                    eksik.append("cari")
                 # kalemler: sıfır olmayan her KDV oranı = bir kalem
                 kalemler = []
                 for oran, mat_k, kdv_k in [
@@ -667,13 +712,29 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                 if toplam == 0 and ek_vergi > 0:
                     toplam = ek_vergi
 
+                # Oran sütunu yok ama "KDV Toplamı" var: oranı aritmetikle türet
+                # (KDV dahil toplam ve KDV tutarı tek bir oranı işaret ediyorsa)
+                kdv_top = _sayi(g(row, "kdv_top")) or 0
+                if not kalemler and kdv_top > 0 and toplam > 0:
+                    t = _yk_oran_turet(round(toplam - ek_vergi, 2), kdv_top)
+                    if t:
+                        kalemler.append({"oran": t[0], "matrah": t[1], "kdv": t[2]})
+                    else:
+                        eksik.append("kdv")     # çok oranlı ya da tevkifatlı — PDF gerekir
+
                 # eğer hiç kalem yoksa ama toplam varsa (faktoring/BSMV): tek kalem KDV=0
                 if not kalemler and toplam > 0:
                     kalemler.append({"oran": 0, "matrah": round(toplam - ek_vergi, 2), "kdv": 0})
+                    if not kdv_sutun_var and "kdv" not in eksik:
+                        eksik.append("kdv")
+
+                tarih = _tarih_iso(g(row, "tarih"))
+                if not tarih:
+                    eksik.append("tarih")
 
                 faturalar.append({
                     "fatura_no": str(fno).strip(),
-                    "tarih": _tarih_iso(g(row, "tarih")),
+                    "tarih": tarih,
                     "cari_ad": cari,
                     "tur": tur, "senaryo": senaryo,
                     "toplam": round(toplam, 2),
@@ -682,6 +743,7 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                     "tevkifat_kod": tevkifat_kod,
                     "ek_vergi": round(ek_vergi, 2),
                     "yon": yon, "dosya": h.get("dosya", ""),
+                    "eksik": eksik, "kaynak": "liste",
                 })
     return faturalar
 
@@ -1549,7 +1611,101 @@ def _pdf_gercek_faturalar(hamlar, yon="alis"):
     return out
 
 
-def isle_fatura(hamlar, km, fis0, yon="alis"):
+# ------------------------------------------------------- fatura listesi + fatura PDF'leri
+_EKSIK_AD = {"cari": "cari", "tarih": "tarih", "kdv": "KDV dağılımı", "tutar": "tutar", "fatura_no": "fatura no"}
+
+
+def _fno_anahtar(s) -> str:
+    """Fatura no karşılaştırma anahtarı: büyük harf, yalnızca harf/rakam."""
+    return re.sub(r"[^A-Z0-9]", "", norm(str(s or "")).replace(" ", ""))
+
+
+def _kisa_liste(nolar, n=6):
+    nolar = [x for x in nolar if x]
+    return ", ".join(nolar[:n]) + (f" ve {len(nolar) - n} fatura daha" if len(nolar) > n else "")
+
+
+def _liste_pdf_birlestir(liste, pdfler):
+    """Fatura listesini (Excel) fatura PDF'leriyle fatura no üzerinden birleştirir.
+    * Listede eksik olan cari / tarih / KDV dağılımı eşleşen PDF'ten tamamlanır.
+      KDV dağılımı yalnızca PDF'in ödenecek toplamı listedekiyle aynıysa alınır.
+    * Listede olmayan PDF faturaları eklenir.
+    * Liste tam ama PDF'le tutar uyuşmuyorsa uyarı verilir (liste esas alınır).
+    Döner: (faturalar, uyarilar)"""
+    uyarilar = []
+    pdf_idx = {}
+    for p in pdfler:
+        a = _fno_anahtar(p.get("fatura_no"))
+        if a and a not in pdf_idx:
+            pdf_idx[a] = p
+    kullanilan, tamamlanan, tutar_farki = set(), [], []
+    for f in liste:
+        a = _fno_anahtar(f["fatura_no"])
+        p = pdf_idx.get(a)
+        if not p:
+            continue
+        kullanilan.add(a)
+        f["pdf"] = p.get("dosya", "")
+        eksik = list(f.get("eksik", []))
+        dolan = []
+        if "cari" in eksik and p.get("cari_ad"):
+            f["cari_ad"] = p["cari_ad"]; dolan.append("cari")
+        if "tarih" in eksik and p.get("tarih"):
+            f["tarih"] = p["tarih"]; dolan.append("tarih")
+        pdf_tutar_tam = bool(p.get("kalemler")) and not ({"tutar", "kdv"} & set(p.get("eksik", [])))
+        ayni_toplam = pdf_tutar_tam and abs((p.get("toplam") or 0) - (f.get("toplam") or 0)) <= 0.05
+        if "kdv" in eksik:
+            if ayni_toplam:
+                f["kalemler"] = p["kalemler"]
+                f["ek_vergi"] = p.get("ek_vergi", 0)
+                if p.get("senaryo"):
+                    f["senaryo"] = p["senaryo"]
+                dolan.append("kdv")
+            elif pdf_tutar_tam:
+                tutar_farki.append(f"{f['fatura_no']} (liste {f['toplam']:,.2f} / PDF {p['toplam']:,.2f})")
+        elif pdf_tutar_tam and f.get("toplam") and not ayni_toplam:
+            tutar_farki.append(f"{f['fatura_no']} (liste {f['toplam']:,.2f} / PDF {p['toplam']:,.2f})")
+        if p.get("yz"):
+            # PDF'teki bu alanı yapay zekâ okuduysa listeye de öyle işaretle
+            f["yz"] = [x for x in dolan if x in p["yz"] or (x == "kdv" and "tutar" in p["yz"])]
+        f["eksik"] = [e for e in eksik if e not in dolan]
+        if dolan:
+            tamamlanan.append(f["fatura_no"])
+
+    # listede olmayan PDF faturaları
+    eklenen, eklenemeyen = [], []
+    gorulen = set()
+    for p in pdfler:
+        a = _fno_anahtar(p.get("fatura_no"))
+        if a and (a in kullanilan or a in gorulen):
+            continue
+        gorulen.add(a)
+        if "tutar" in p.get("eksik", []) or not p.get("toplam"):
+            eklenemeyen.append(p.get("fatura_no") or p.get("dosya", ""))
+            continue
+        if not p.get("cari_ad"):
+            p["cari_ad"] = p.get("fatura_no") or p.get("dosya", "")
+        liste.append(p)
+        eklenen.append(p.get("fatura_no") or p.get("dosya", ""))
+
+    if tamamlanan:
+        uyarilar.append(f"{len(tamamlanan)} faturanın listede eksik bilgisi PDF'ten tamamlandı")
+    if eklenen:
+        uyarilar.append(f"Listede olmayan {len(eklenen)} fatura PDF'ten eklendi: {_kisa_liste(eklenen)}")
+    if eklenemeyen:
+        uyarilar.append(f"Tutarı okunamadığı için eklenemeyen PDF: {_kisa_liste(eklenemeyen)}")
+    if tutar_farki:
+        uyarilar.append(f"Liste ile PDF toplamı farklı (liste esas alındı): {_kisa_liste(tutar_farki, 4)}")
+    # hâlâ eksik kalanlar — tür bazında grupla
+    for tur, ad in _EKSIK_AD.items():
+        nolar = [f["fatura_no"] for f in liste if tur in f.get("eksik", [])]
+        if nolar:
+            ek = " (KDV satırı yazılmadı, tutarın tamamı gidere gitti)" if tur == "kdv" else ""
+            uyarilar.append(f"{ad} eksik, PDF'i yok ya da okunamadı{ek}: {_kisa_liste(nolar)}")
+    return liste, uyarilar
+
+
+def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None):
     """
     Fatura listesi -> muhasebe fişi.
     ALIŞ: gider(7xx) + 191(indirilecek KDV) borç / 320(satıcı) alacak
@@ -1566,10 +1722,28 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
             seen.add(h["kod"]); hes_uniq.append(h)
     hes_list = hes_uniq
 
+    pdf_faturalar = pdf_faturalar or []
     faturalar = _elogo_fatura_satirlari(hamlar, yon)
+    if faturalar:
+        # Liste esas; "Fatura PDF'leri" alanındaki PDF'ler eksikleri tamamlar.
+        # Belge alanına listeyle birlikte atılmış PDF'ler de aynı işe yarasın.
+        ek_pdf = [f for f in _pdf_gercek_faturalar(hamlar, yon)
+                  if _fno_anahtar(f["fatura_no"]) not in {_fno_anahtar(p.get("fatura_no")) for p in pdf_faturalar}]
+        faturalar, birlesme_uyari = _liste_pdf_birlestir(faturalar, pdf_faturalar + ek_pdf)
+        uyarilar.extend(birlesme_uyari)
     if not faturalar:
         # eLogo listesi yok — gerçek e-Fatura/e-Arşiv PDF'i olabilir (tek tek fatura)
         faturalar = _pdf_gercek_faturalar(hamlar, yon)
+        anahtarlar = {_fno_anahtar(f["fatura_no"]) for f in faturalar}
+        for p in pdf_faturalar:
+            if _fno_anahtar(p.get("fatura_no")) in anahtarlar or not p.get("toplam"):
+                continue
+            if not p.get("cari_ad"):
+                p["cari_ad"] = p.get("fatura_no") or p.get("dosya", "")
+            faturalar.append(p)
+        eksikli = [f.get("fatura_no") or f.get("dosya", "") for f in faturalar if f.get("eksik")]
+        if eksikli:
+            uyarilar.append(f"PDF'te eksik alan kalan fatura: {_kisa_liste(eksikli)}")
     if not faturalar:
         # PDF de değilse — OCR ham metninden perakende fiş fotoğrafı olabilir
         faturalar = _ham_metin_faturalar(hamlar, yon)
@@ -1635,10 +1809,17 @@ def isle_fatura(hamlar, km, fis0, yon="alis"):
             if not gider_kod or gider_kod == cari_kod or gider_kod.startswith(("120", "320")):
                 gider_kod = vars_gider  # 600 gelir
 
+        # Belge kaynağı rozeti: yapay zekâ ile tamamlanan > PDF'ten gelen/tamamlanan
+        belge_rozet = ("yz" if f.get("yz") else
+                       "pdf" if (f.get("pdf") or f.get("kaynak") == "pdf") else "")
+
         def sat(hesap, borc, alacak, detay_ek=""):
             # Açıklama alanları SADECE firma adı (KDV oranı, "(faktoring)" gibi ekler yok).
-            return _sat(fisno, tarih, cari_ad, hesap, borc, alacak,
-                        evrak_no=fatura_no, detay=cari_ad, kaynak=cari_kaynak or "fatura")
+            s = _sat(fisno, tarih, cari_ad, hesap, borc, alacak,
+                     evrak_no=fatura_no, detay=cari_ad, kaynak=cari_kaynak or "fatura")
+            if belge_rozet:
+                s["belge"] = belge_rozet
+            return s
 
         def gecmis_kdv_sec(oran, yon):
             # Geçmişte aynı cari için kullanılan KDV hesabını öncele.
@@ -2021,11 +2202,11 @@ def isle_fis(kalemler, km, fis0=1, karsi_hesap="198.01.001"):
     return fisler, uyarilar
 
 
-def isle(tip, hamlar, km, fis0, yon="alis"):
+def isle(tip, hamlar, km, fis0, yon="alis", pdf_faturalar=None):
     if tip == "banka":
         return isle_banka(hamlar, km, fis0)
     if tip == "fatura":
-        return isle_fatura(hamlar, km, fis0, yon=yon)
+        return isle_fatura(hamlar, km, fis0, yon=yon, pdf_faturalar=pdf_faturalar)
     if tip == "cek":
         return isle_cek(hamlar, km, fis0)
     if tip == "fis":
