@@ -39,7 +39,9 @@ def _ad_mizan_mi(ad: str) -> bool:
 
 
 def _ad_fis_listesi_mi(ad: str) -> bool:
-    return bool(re.search(r"FIS\s*_?\s*LISTESI", norm(ad).replace("_", " ")))
+    """Fiş listesi ya da muavin defter (ikisi de geçmiş kayıt kaynağı)."""
+    n = norm(ad).replace("_", " ")
+    return bool(re.search(r"FIS\s*LISTESI|MUAVIN|YEVMIYE", n))
 
 
 def klasor_var_mi() -> bool:

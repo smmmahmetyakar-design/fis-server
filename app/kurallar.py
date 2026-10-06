@@ -10,6 +10,7 @@ Belge işleme sırasında bir açıklama/satır için hesap kodu ararken:
            geçmişte kayıt yoksa mizan varsayılanları kullanılır.
 """
 import json, re, unicodedata
+from datetime import datetime
 from pathlib import Path
 import openpyxl
 
@@ -484,6 +485,80 @@ def _mikro_fis_listesi_oku(wb):
     return sonuc
 
 
+def _muavin_oku(wb):
+    """Muavin defter (Logo/Luca/Mikro tarzı) okuyucu.
+    Yapı: her hesap için bir başlık satırı ("102.01.001 AKBANK ÇEŞME ..."), ardından
+    TARİH / TİP / FİŞ NO / AÇIKLAMA / BORÇ / ALACAK başlıkları, "Nakli Yekün" devir
+    satırı, hareketler ve ara toplamlar. Hesap kodu satırlarda değil bölüm
+    başlığında yazar; her hareket satırına o bölümün hesabı verilir.
+    Çıktı diğer okuyucularla aynı: satirlar / son_fis_no / eslesmeler."""
+    tarih_re = re.compile(r"^\s*(\d{1,2})[./-](\d{1,2})[./-](\d{4})")
+    hesap_re = re.compile(r"^\s*(\d{3}(?:\.\d+)*)(?:\s+(\S.*))?$")
+    for ws in wb.worksheets:
+        sut, hesap, satirlar, baslik_goruldu = None, None, [], 0
+        for row in ws.iter_rows(values_only=True):
+            hucreler = list(row)
+            if not hucreler:
+                continue
+            a = hucreler[0]
+            nrow = [norm(str(c or "")) for c in hucreler]
+            # sütun başlık satırı (her hesap bölümünde tekrar eder)
+            if "BORC" in nrow and "ALACAK" in nrow and any("ACIKLAMA" in c for c in nrow) \
+                    and any(c.startswith("TARIH") for c in nrow):
+                sut = {"tarih": next(j for j, c in enumerate(nrow) if c.startswith("TARIH")),
+                       "borc": nrow.index("BORC"), "alacak": nrow.index("ALACAK"),
+                       "aciklama": next(j for j, c in enumerate(nrow) if "ACIKLAMA" in c)}
+                for j, c in enumerate(nrow):
+                    if c in ("FIS NO", "FIS NUMARASI", "YEVMIYE NO", "FISNO", "EVRAK NO") and "fisno" not in sut:
+                        sut["fisno"] = j
+                    elif c in ("TIP", "FIS TIPI", "FIS TURU", "TURU"):
+                        sut["tip"] = j
+                baslik_goruldu += 1
+                continue
+            # hesap bölüm başlığı: "770.10.001 BANKA GİDERLERİ" (tek hücre) ya da kod + ad ayrı hücrede
+            if isinstance(a, str) and not tarih_re.match(a):
+                m = hesap_re.match(a)
+                if m and (m.group(2) or (len(hucreler) > 1 and isinstance(hucreler[1], str))):
+                    hesap = m.group(1)
+                    continue
+            if sut is None or hesap is None:
+                continue
+            t = hucreler[sut["tarih"]] if sut["tarih"] < len(hucreler) else None
+            if isinstance(t, datetime):
+                tarih = f"{t.year:04d}-{t.month:02d}-{t.day:02d}"
+            elif isinstance(t, str) and tarih_re.match(t):
+                g_, a_, y_ = tarih_re.match(t).groups()
+                tarih = f"{y_}-{int(a_):02d}-{int(g_):02d}"
+            else:
+                continue          # devir, ara toplam, boş satır
+            def _n(j):
+                v = hucreler[j] if j is not None and j < len(hucreler) else None
+                if isinstance(v, (int, float)):
+                    return float(v)
+                return (_tr_num(v) or 0.0) if v not in (None, "") else 0.0
+            borc, alacak = _n(sut["borc"]), _n(sut["alacak"])
+            if not borc and not alacak:
+                continue
+            def _h(anahtar):
+                j = sut.get(anahtar)
+                v = hucreler[j] if j is not None and j < len(hucreler) else None
+                return str(v if v is not None else "").strip()
+            satirlar.append({"fisno": _h("fisno"), "fis_tip": _h("tip"), "hesap": hesap, "tarih": tarih,
+                             "detay": _h("aciklama"), "fis_aciklama": _h("aciklama"),
+                             "borc": borc, "alacak": alacak})
+        if satirlar and baslik_goruldu >= 1:
+            # Son fiş no: mahsup fişlerinden (araç mahsup fişi üretir); yoksa hepsinden
+            def _no(r):
+                m = re.match(r"0*(\d+)", r["fisno"])
+                return int(m.group(1)) if m else 0
+            mahsup = [r for r in satirlar if "MAHSUP" in norm(r["fis_tip"])]
+            son = max((_no(r) for r in (mahsup or satirlar)), default=0)
+            eslesmeler = {norm(r["detay"]): r["hesap"] for r in satirlar
+                          if r["detay"] and not r["hesap"].startswith(("102", "100"))}
+            return {"satirlar": satirlar, "son_fis_no": son, "eslesmeler": eslesmeler, "tur": "muavin"}
+    return None
+
+
 def gecmis_fisler_oku(kaynak_path: Path):
     """Geçmiş fiş listesini okur. Üç format desteklenir:
     1) Mikro/Zirve tipi ('fis_listesi' sayfası)
@@ -546,6 +621,10 @@ def gecmis_fisler_oku(kaynak_path: Path):
             if mikro and mikro.get("satirlar"):
                 _cache_yaz(mikro); return mikro
             break
+    # Muavin defter (hesap bölümlü) — Mikro fiş listesi değilse ve şablon sayfası yoksa
+    muavin = _muavin_oku(wb)
+    if muavin:
+        _cache_yaz(muavin); return muavin
     # Öncelik 2: Fiş Aktarım Şablonu
     for sn in wb.sheetnames:
         if "aktarim" in norm(sn).lower() or ("fis" in norm(sn).lower() and "listesi" not in norm(sn).lower()):
@@ -697,6 +776,20 @@ class KuralMotoru:
         for h in self.kural["hesaplar"]:
             self.kod_ad.setdefault(h["kod"], h["ad"])
 
+    _FATURA_NO_RE = re.compile(r"(?<![A-Z0-9])([A-Z0-9]{3}20\d{2}\d{9})(?![A-Z0-9])")
+
+    def kayitli_faturalar(self) -> dict:
+        """Geçmiş kayıtların açıklamalarında geçen e-fatura numaraları -> fiş no.
+        (e-Fatura/e-Arşiv no: 3 harf/rakam + yıl + 9 hane, ör. GIB2026000000448.)
+        Yeni yüklenen bir fatura burada varsa daha önce muhasebeleşmiştir."""
+        if getattr(self, "_kayitli", None) is None:
+            self._kayitli = {}
+            for r in self.gecmis.get("satirlar", []):
+                metin = str(r.get("detay", "")).upper() + " " + str(r.get("fis_aciklama", "")).upper()
+                for no in self._FATURA_NO_RE.findall(metin):
+                    self._kayitli.setdefault(no, str(r.get("fisno", "")))
+        return self._kayitli
+
     def son_fis_no(self):
         """Geçmiş fişlerdeki en yüksek fiş numarası."""
         return self.gecmis.get("son_fis_no", 0)
@@ -709,7 +802,7 @@ class KuralMotoru:
         Fatura için geçmişte gerçekten kesilmiş/kaydedilmiş fişlerden hesap seçer.
         Bulunan hesap kodları mizanda kontrol edilir — mizanda yoksa kullanılmaz.
         """
-        sonuc = {"cari": "", "ana": "", "kdv": [], "tevkifat": [], "kaynak": ""}
+        sonuc = {"cari": "", "ana": "", "ek": "", "kdv": [], "tevkifat": [], "kaynak": ""}
         q = norm(cari_ad)
         if not q:
             return sonuc
@@ -729,6 +822,10 @@ class KuralMotoru:
             if q in metin:
                 sc = 100 + len(qwords)
                 aday.append((sc, idx, r))
+            # Unvan farklı yazılmış olabilir ("A.Ş." / "ANONİM ŞİRKETİ"): ekler hariç
+            # en az 2 anlamlı kelimenin HEPSİ satırda tam kelime olarak geçmeli.
+            elif len(qwords) >= 2 and qwords <= set(metin.split()):
+                aday.append((50 + len(qwords), idx, r))
 
         if not aday:
             return sonuc
@@ -756,12 +853,30 @@ class KuralMotoru:
                 return ""
             return max(say, key=lambda k: (say[k], son[k]))
 
+        def tutar_sirasi(rows, kod_filtresi, borc_mu=True):
+            """Hesapları o carideki TOPLAM tutara göre sıralar (büyükten küçüğe).
+            Satır sayısıyla seçmek, Turkcell'deki gibi aynı fişte iki gider hesabı
+            (iletişim + ÖİV) olduğunda ana gideri şansa bırakıyordu."""
+            top = {}
+            for r in rows:
+                kod = str(r.get("hesap", "")).strip()
+                if not kod or not kod_filtresi(kod) or kod not in mizan_kodlari:
+                    continue
+                v = float((r.get("borc") if borc_mu else r.get("alacak")) or 0)
+                if v > 0:
+                    top[kod] = top.get(kod, 0) + v
+            return sorted(top, key=lambda k: top[k], reverse=True)
+
         if yon == "alis":
-            sonuc["cari"] = say_sec(satirlar, lambda k: k.startswith(("320", "329", "331", "335")), borc_mu=False)
+            sonuc["cari"] = say_sec(satirlar, lambda k: k.startswith(("320", "329", "331", "335", "336")), borc_mu=False)
             def ana(k):
-                return (not k.startswith(("100", "101", "102", "120", "121", "191", "192", "193", "194", "195",
-                                          "300", "320", "329", "331", "335", "360", "361", "370", "380", "391")))
-            sonuc["ana"] = say_sec(satirlar, ana, borc_mu=True)
+                return (not k.startswith(("100", "101", "102", "103", "108", "120", "121", "191", "192", "193",
+                                          "194", "195", "300", "320", "329", "331", "335", "336", "360", "361",
+                                          "370", "380", "391")))
+            sira = tutar_sirasi(satirlar, ana)
+            sonuc["ana"] = sira[0] if sira else ""
+            # ikinci gider hesabı (ör. Turkcell'de 689 ÖİV) — faturadaki ek vergi buraya
+            sonuc["ek"] = sira[1] if len(sira) > 1 else ""
             sonuc["kdv"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)
                                                if k.startswith("191") and k in mizan_kodlari))
             sonuc["tevkifat"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)

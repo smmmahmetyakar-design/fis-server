@@ -1862,6 +1862,23 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         if f.get("uyari"):
             uyarilar.append(f["uyari"])
 
+    # Çift kayıt: geçmiş fişlerde (fiş listesi / muavin) açıklamasında bu fatura
+    # numarası geçiyorsa fatura daha önce muhasebeleşmiştir.
+    try:
+        kayitli = km.kayitli_faturalar()
+    except Exception:
+        kayitli = {}
+    if kayitli:
+        cift = []
+        for f in faturalar:
+            no = _fno_anahtar(f.get("fatura_no"))
+            if no in kayitli:
+                f["kayitli_fis"] = kayitli[no]
+                cift.append(f"{f['fatura_no']} (fiş {kayitli[no]})" if kayitli[no] else f["fatura_no"])
+        if cift:
+            uyarilar.insert(0, f"{len(cift)} fatura geçmiş kayıtlarda zaten var — çift kayıt olmasın, "
+                               f"aktarmadan önce çıkar: {_kisa_liste(cift)}")
+
     alt_kodlar = alt_hesap_kodlari(km.hesaplar)
     vars_gider = next((k for onek in (("740", "770", "760", "730", "150", "153") if yon == "alis"
                                       else ("600", "601", "602"))
@@ -1896,7 +1913,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         # Geçmiş fişlerde bu cari hiç geçmemişse (yeni tedarikçi/müşteri veya
         # cari adı ilk kez okunuyor) mizan hesap adlarıyla da dene — bugünkü
         # eslestir() düzeltmesiyle aynı mekanizma (kurallar.py).
-        cari_onek = ("320", "329", "331", "335") if yon == "alis" else ("120", "121")
+        cari_onek = ("320", "329", "331", "335", "336") if yon == "alis" else ("120", "121")
         if not cari_kod:
             ek_kod, ek_kaynak = km.eslestir(cari_ad, onekler=cari_onek)
             if ek_kod:
@@ -1914,7 +1931,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         #   3) yapay zekâ önerisi (fatura kalemleri + satıcı adı, yalnız mizandaki alt hesaplar)
         #   4) varsayılan ALT hesap (ana hesap "740" değil — ona kayıt atılamaz)
         gider_kaynak, gider_not = "", ""
-        yasak_onek = ("320", "329", "120", "121", "100", "102", "191", "391")
+        yasak_onek = ("320", "329", "331", "335", "336", "120", "121", "100", "102", "191", "391")
         ogr = (gider_ogrenme or {}).get(f"{yon}|{norm(cari_ad)}")
         if ogr and ogr in alt_kodlar:
             gider_kod, gider_kaynak = ogr, "ogrenme"
@@ -2061,7 +2078,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
 
         # ek vergi (BSMV %5) — TTNET, faktoring karışık faturaları için
         if f["ek_vergi"] > 0:
-            bsmv_kod = _bsmv_hesabi(hes_list)
+            # geçmişte bu carinin ikinci gider hesabı (ör. ÖİV 689) varsa o; yoksa BSMV
+            ek_k = gecmis_es.get("ek", "")
+            bsmv_kod = ek_k if ek_k and ek_k in alt_kodlar else _bsmv_hesabi(hes_list)
             if yon == "alis":
                 fisler.append(sat(bsmv_kod, f["ek_vergi"], 0))
             else:

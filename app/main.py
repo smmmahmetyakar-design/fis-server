@@ -72,6 +72,18 @@ def gecmis_fis_pdf_yolu(d: Path) -> Path:
     return d / "gecmis_fisler.pdf"
 
 
+def _gecmis_kaynak(d: Path, tip: str) -> Path:
+    """Hesap öğrenmesi için geçmiş kayıt kaynağı.
+    Geçmiş Fiş PDF'i varsa o (mevcut öncelik). Yoksa fatura sekmesinde
+    Excel fiş listesi / muavin defter — eskiden fatura sekmesine None
+    geçildiği için Excel listesi hesap öğrenmesinde hiç kullanılmıyordu.
+    Banka/çek için davranış aynı: KuralMotoru PDF yoksa kural dosyasına düşer."""
+    pdf = gecmis_fis_pdf_yolu(d)
+    if pdf.exists() or tip != "fatura":
+        return pdf
+    return fis_listesi_yolu(d, tip)
+
+
 # ----------------------------------------------------------------- yardımcı
 def slugify(s: str) -> str:
     s = norm(s).lower().replace(" ", "_")
@@ -683,7 +695,7 @@ def isle(kod: str, tip: str, body: IsleBody):
     if tip not in TIPLER:
         raise HTTPException(400, "Geçersiz tip")
     d = firma_dir(kod)
-    km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", gecmis_fis_pdf_yolu(d))
+    km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", _gecmis_kaynak(d, tip))
 
     dosyalar = body.dosyalar or [f.name for f in (d / tip).iterdir()
                                    if f.is_file() and not f.name.startswith("_")]
@@ -833,7 +845,7 @@ def ogret(kod: str, tip: str, body: OgretBody):
         og[f"{body.yon}|{norm(body.aciklama)}"] = body.kod
         _write_json(p, og)
         return {"ok": True, "ogrenilen": len(og), "tur": "gider"}
-    km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", gecmis_fis_pdf_yolu(d))
+    km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", _gecmis_kaynak(d, tip))
     km.ogret(body.aciklama, body.kod)
     return {"ok": True, "ogrenilen": len(km.ogrenme)}
 
