@@ -1997,6 +1997,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 kontrol.append("gider")
             if s["rol"] == "kdv" and not hesap:
                 kontrol.append("kdv")
+            # Listede/PDF'te KDV dağılımı yoksa tutarın tamamı (KDV dahil) gidere yazılır — kontrol şart
+            if s["rol"] == "gider" and (not f.get("kalemler") or {"kdv", "tutar"} & set(f.get("eksik") or [])):
+                kontrol.append("kdv_yok")
             if s["rol"] == "cari":
                 if hesap == vars_cari:
                     kontrol.append("cari")
@@ -2130,6 +2133,8 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             fark_yazilan.append(f"{fatura_no} ({fark:,.2f} → {fark_kod or 'boş'})")
         elif fark < -0.01:
             fark_dengesiz.append(f"{fatura_no} ({-fark:,.2f})")
+            for x in fisler[fatura_bas:]:
+                x["kontrol"] = list(dict.fromkeys((x.get("kontrol") or []) + ["dengesiz"]))
 
         # karşı taraf (tek satır)
         if yon == "alis":
@@ -2145,7 +2150,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
 
     kontrollu = sorted({s["evrak_no"] or s["fisno"] for s in fisler if s.get("kontrol")})
     if kontrollu:
-        uyarilar.append(f"{len(kontrollu)} faturada doğrulanmamış hesap var (yapay zekâ/tahmin/benzer ad) — "
+        uyarilar.append(f"{len(kontrollu)} faturada doğrulanmamış hesap ya da tutar var (yapay zekâ/tahmin, benzer ad, KDV ayrılamadı, dengesiz) — "
                         f"sarı KONTROL işaretli satırları düzelt ya da ✓ ile onayla; onaylanmayanların "
                         f"Excel'de açıklamasına KONTROL yazılır: {_kisa_liste(kontrollu, 4)}")
     if fark_yazilan:

@@ -843,7 +843,8 @@ function totals(){
 }
 const KAYNAK_AD={yz:'yapay zekâ', tahmin:'varsayılan', ogrenme:'öğrenilen', gecmis:'geçmiş fiş'};
 const KONTROL_AD={gider:'gider hesabı yapay zekâ/varsayılan', cari:'cari bulunamadı (198)', kdv:'KDV hesabı yok',
-  belge:'fatura bilgisi yapay zekâ ile okundu', benzer_ad:'geçmişte unvanın yalnız bir kısmı tuttu'};
+  belge:'fatura bilgisi yapay zekâ ile okundu', benzer_ad:'geçmişte unvanın yalnız bir kısmı tuttu',
+  kdv_yok:'KDV ayrılamadı — tutarın tamamı (KDV dahil) gidere yazıldı', dengesiz:'fiş dengesiz'};
 function kontrolHTML(s){
   if(!s.kontrol||!s.kontrol.length) return '';
   const neden=s.kontrol.map(k=>KONTROL_AD[k]||k).join(', ');
@@ -978,8 +979,8 @@ function edit(i,alan,deger){
       if(n) toast(`%${satirlar[i].oran} KDV: ${n} satır daha ${deger} hesabına geçti`,true);
     }
     if(satirlar[i].rol==='gider'){ satirlar[i].kaynak='ogrenme'; delete satirlar[i].not; }
-    // elle düzeltilen hesap doğrulanmış sayılır (yapay zekâ ile okunan fatura bilgisi işareti kalır)
-    if(satirlar[i].kontrol){ satirlar[i].kontrol=satirlar[i].kontrol.filter(k=>k==='belge'); if(!satirlar[i].kontrol.length) delete satirlar[i].kontrol; }
+    // elle düzeltilen hesap doğrulanmış sayılır (tutar/KDV/belge işaretleri kalır — hesap değişince düzelmezler)
+    if(satirlar[i].kontrol){ satirlar[i].kontrol=satirlar[i].kontrol.filter(k=>['belge','kdv_yok','dengesiz'].includes(k)); if(!satirlar[i].kontrol.length) delete satirlar[i].kontrol; }
   }
   if(duzenleMod){
     const container = $('onizle').querySelector('div[style*="overflow-y"]');
