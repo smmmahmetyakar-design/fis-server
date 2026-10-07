@@ -594,6 +594,14 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                         sut["toplam"] = j
                     elif c == "KDV TOPLAMI":
                         sut["kdv_top"] = j
+                    # İnteraktif Vergi Dairesi e-Arşiv listesi: her satırda tek oran —
+                    # "KDV Oranı" + "Matrah Tutar" + "KDV Tutar" (ÖİV ayrı sütunlarda)
+                    elif c in ("KDV ORANI", "KDV ORAN", "KDV YUZDESI"):
+                        sut["kdv_orani"] = j
+                    elif c in ("MATRAH TUTAR", "MATRAH TUTARI", "KDV MATRAH TUTARI"):
+                        sut["matrah_tutar"] = j
+                    elif c in ("KDV TUTAR", "KDV TUTARI") and "kdv_tutar" not in sut:
+                        sut["kdv_tutar"] = j
                     elif "VKN" in c or "TCKN" in c:
                         sut["vkn"] = j
                     # KDV sütunları: hem "KDV 20" hem "%20'lik KDV" formatı
@@ -621,7 +629,8 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                         sut["tevkifat"] = j
                     elif c == "ILK TEVKIFAT KODU":
                         sut["tevkifat_kod"] = j
-                    elif c in ("EK VERGILER", "EK VERGI", "DIGER VERGILER", "OIV", "OIV TUTARI", "OTV", "OTV TUTARI") \
+                    elif c in ("EK VERGILER", "EK VERGI", "DIGER VERGILER", "OIV", "OIV TUTARI", "OIV TUTAR",
+                               "OTV", "OTV TUTARI", "OTV TUTAR") \
                             or "OZEL ILETISIM" in c or "OZEL TUKETIM" in c:
                         sut["ek_vergi"] = j
                     elif "OZEL" in c and "MATRAH" in c:
@@ -658,7 +667,7 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                         sut.pop("toplam", None)
                     if mat_j is not None:
                         sut["mat_toplam"] = mat_j
-                if "fatura_no" in sut and "kdv_top" not in sut:
+                if "fatura_no" in sut and "kdv_top" not in sut and "kdv_orani" not in sut:
                     j = next((j for j, c in enumerate(nrow) if c in ("TOPLAM KDV", "HESAPLANAN KDV", "KDV TUTARI", "KDV")
                               or ("KDV" in c and "TOPLAM" in c and "MATRAH" not in c)), None)
                     if j is None:
@@ -718,7 +727,7 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
             # dağılımı bilinmiyor demektir — PDF'ten tamamlanması gerekir.
             kdv_sutun_var = any(k in sut for k in (
                 "kdv_1", "kdv_8", "kdv_10", "kdv_18", "kdv_20",
-                "mat_1", "mat_8", "mat_10", "mat_18", "mat_20", "kdv_top")) \
+                "mat_1", "mat_8", "mat_10", "mat_18", "mat_20", "kdv_top", "kdv_orani")) \
                 or ("mat_toplam" in sut and "toplam" in sut)
 
             for row in tablo[bas_idx + 1:]:
@@ -751,6 +760,16 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                     kdv = _sayi(g(row, kdv_k)) or 0
                     if matrah > 0 or kdv > 0:
                         kalemler.append({"oran": oran, "matrah": round(matrah, 2), "kdv": round(kdv, 2)})
+                # Oran sütunlu liste (satır başına tek oran): KDV Oranı + Matrah + KDV Tutar
+                if not kalemler and "kdv_orani" in sut:
+                    oran_ = _sayi(g(row, "kdv_orani"))
+                    mat_ = _sayi(g(row, "matrah_tutar")) or 0
+                    kdv_ = _sayi(g(row, "kdv_tutar")) or 0
+                    if oran_ is not None and (mat_ > 0 or kdv_ > 0):
+                        oran_ = int(round(oran_ * 100)) if 0 < oran_ < 1 else int(round(oran_))   # 0,20 -> 20
+                        if not mat_ and kdv_ and oran_:
+                            mat_ = round(kdv_ * 100 / oran_, 2)
+                        kalemler.append({"oran": oran_, "matrah": round(mat_, 2), "kdv": round(kdv_, 2)})
 
                 toplam = _sayi(g(row, "toplam")) or 0
                 tevkifat = _sayi(g(row, "tevkifat")) or 0

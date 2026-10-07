@@ -755,7 +755,7 @@ def karsilastir(kod: str, yon: str, body: KarsilastirBody):
     sonuc["yz_bekleyen"] = bekleyen
     # neden boş kaldığını anlatmak için: listede hangi sütunlar tanındı, PDF'ler nereden aranıyor
     kdv_anahtar = ("kdv_1", "kdv_8", "kdv_10", "kdv_18", "kdv_20", "mat_1", "mat_8", "mat_10",
-                   "mat_18", "mat_20", "kdv_top", "mat_toplam")
+                   "mat_18", "mat_20", "kdv_top", "mat_toplam", "kdv_orani")
     for t in teshis.get("tablolar", []):
         t["kdv_sutunu_var"] = any(k in t["taninan"] for k in kdv_anahtar)
     kp = _firma_klasoru(d)
@@ -770,6 +770,7 @@ def karsilastir(kod: str, yon: str, body: KarsilastirBody):
         "klasor_eslesen": (sunucu.get("dizin") or {}).get("eslesen_numara", 0),
         "sunucu_mesaj": sunucu.get("mesaj") or sunucu.get("hata", ""),
         "alan_pdf_sayisi": len(pdfler),
+        "klasor_ozeti": sk.fatura_klasor_ozeti(kp) if kp else [],
     }
     return sonuc
 

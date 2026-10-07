@@ -335,3 +335,36 @@ def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path) -> tuple:
         threading.Thread(target=_ocr_arka_plan, args=(ocr_isleri, onbellek_yolu), daemon=True,
                          name="pdf-ocr-dizin").start()
     return dizin, bilgi
+
+
+def fatura_klasor_ozeti(klasor_path: Path) -> list:
+    """Teşhis: firma klasöründe adında FATURA/ARŞİV geçen klasörlerdeki dosya türleri
+    ve okunamayan (izin) klasörler. PDF bulunamadığında nedenini göstermek için."""
+    out = {}
+    hatalar = []
+
+    def _hata(e):
+        hatalar.append(f"{getattr(e, 'filename', '')}: {e.strerror or e}")
+
+    for kok, dizinler, dosyalar in os.walk(klasor_path, onerror=_hata):
+        rel = Path(kok).relative_to(klasor_path)
+        if "cikan" in rel.parts:
+            dizinler[:] = []
+            continue
+        if not any(("FATUR" in norm(x).replace(" ", "") or "ARSIV" in norm(x).replace(" ", "")) for x in rel.parts):
+            continue
+        uz = {}
+        for f in dosyalar:
+            if f.startswith((".", "~$")):
+                continue
+            e = (Path(f).suffix.lower() or "(uzantısız)")
+            uz[e] = uz.get(e, 0) + 1
+        out[rel.as_posix()] = uz
+    sonuc = [{"yol": k, "uzantilar": v, "dosya": sum(v.values())} for k, v in sorted(out.items())]
+    for h in hatalar[:10]:
+        try:
+            yol = Path(h.split(":")[0]).relative_to(klasor_path).as_posix()
+        except Exception:
+            yol = h.split(":")[0]
+        sonuc.append({"yol": yol, "uzantilar": {}, "dosya": 0, "hata": h.split(":", 1)[-1].strip()})
+    return sonuc
