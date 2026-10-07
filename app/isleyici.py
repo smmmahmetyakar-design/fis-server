@@ -2150,6 +2150,11 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                      evrak_no=fatura_no, detay=cari_ad, kaynak=cari_kaynak or "fatura")
             if belge_rozet:
                 s["belge"] = belge_rozet
+            # önizlemede gösterilecek fatura içeriği: kalem açıklamaları ve KDV hariç tutar
+            s["fatura_kalemleri"] = [str(a)[:120] for a in (f.get("kalem_aciklamalari") or [])[:8]]
+            s["kdv_haric"] = round(sum(float(k.get("matrah") or 0) for k in f.get("kalemler") or []), 2)
+            s["kdv_dagilim"] = [{"oran": k.get("oran"), "matrah": round(float(k.get("matrah") or 0), 2),
+                                 "kdv": round(float(k.get("kdv") or 0), 2)} for k in f.get("kalemler") or []]
             # faturanın PDF'i (arayüzde açıp bakmak için)
             pdf_ad = f.get("pdf") or (f.get("dosya", "") if (f.get("kaynak") == "pdf" or f.get("pdf_yer")) else "")
             if pdf_ad:
