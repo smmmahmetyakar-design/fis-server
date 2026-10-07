@@ -1570,24 +1570,35 @@ def _pdf_tekil_fatura_ayikla(ham, yon="alis"):
     for tablo in ham.get("tablolar", []):
         for row in tablo:
             hucreler = [c for c in row if c not in (None, "")]
-            if len(hucreler) < 2:
+            # Özet satırı "etiket | tutar"dır; çok hücreli satırlar fatura KALEMİDİR
+            # (kalemin "Diğer Vergiler" hücresindeki "KDVGUT..." KDV özeti sanılmasın).
+            if len(hucreler) < 2 or len(hucreler) > 3:
                 continue
-            son = " ".join(str(hucreler[-1]).split()).lstrip(":").strip()
-            if not _PDF_TUTAR_HUCRE_RE.match(son):
-                continue
-            deger = _sayi(son)
-            if deger is None:
-                continue
-            etiket = " ".join(str(hucreler[-2]).split())
-            ozet[etiket] = deger
+            # Birleşik hücre: "Hesaplanan KDV(%10)\nHesaplanan KDV(%20)" | "2.124,80TL\n10.199,04TL"
+            et_s = [x.strip() for x in str(hucreler[-2]).split("\n") if x.strip()]
+            de_s = [x.strip() for x in str(hucreler[-1]).split("\n") if x.strip()]
+            ciftler = list(zip(et_s, de_s)) if len(et_s) > 1 and len(et_s) == len(de_s) else \
+                [(" ".join(str(hucreler[-2]).split()), " ".join(str(hucreler[-1]).split()))]
+            for etiket, son in ciftler:
+                son = son.lstrip(":").strip()
+                if not _PDF_TUTAR_HUCRE_RE.match(son):
+                    continue
+                deger = _sayi(son)
+                if deger is None:
+                    continue
+                ozet[etiket] = deger
 
     matrah = None
     kdv_kalemleri = []
     ek_vergi = 0.0
     toplam = None
+    tevkifat = 0.0
+    vergiler_dahil = None
     for etiket, deger in ozet.items():
         e = norm(etiket).replace(" ", "")
-        if e.startswith("MALHIZMETTOPLAMTUTARI") or e.startswith("VERGIHARICTUTAR"):
+        if e.startswith("TEVKIFAT") or e.startswith("KDVTEVKIFAT") or e.startswith("HESAPLANANKDVTEVKIFAT"):
+            tevkifat += deger          # KDV tevkifatı: KDV değil, ödenecekten düşülen kısım
+        elif e.startswith("MALHIZMETTOPLAMTUTARI") or e.startswith("VERGIHARICTUTAR"):
             matrah = deger
         elif e == "TOPLAM" and matrah is None:
             matrah = deger
@@ -1605,6 +1616,11 @@ def _pdf_tekil_fatura_ayikla(ham, yon="alis"):
         elif (e.startswith("VERGILERDAHILTOPLAMTUTAR") or e.startswith("ODENECEKTUTAR")
               or e.startswith("GENELTOPLAM") or e.startswith("FATURATUTARI")):
             toplam = deger
+            if e.startswith("VERGILERDAHIL"):
+                vergiler_dahil = deger
+    # Tevkifatlı faturada denge KDV dahil toplamla kurulur (ödenecek = KDV dahil − tevkifat)
+    if tevkifat and vergiler_dahil is not None:
+        toplam = vergiler_dahil
 
     if matrah is None:
         m = _PDF_MAL_HIZMET_RE.search(metin)
@@ -1648,7 +1664,17 @@ def _pdf_tekil_fatura_ayikla(ham, yon="alis"):
     if not (fatura_no or gonderici) or (matrah is None and toplam is None):
         return None
 
-    if kdv_kalemleri:
+    if kdv_kalemleri and len({o for o, _ in kdv_kalemleri}) > 1:
+        # Çok oranlı: her oranın matrahı KDV'den türetilir (KDV / oran), yuvarlama farkı
+        # en büyük orana yazılır — toplam matrah özetteki "Mal/Hizmet Toplam" ile tutar.
+        tur_ = [(o, round(t * 100 / o, 2) if o else 0.0, t) for o, t in kdv_kalemleri]
+        if matrah is not None and tur_:
+            fark_ = round(matrah - sum(m for _, m, _ in tur_), 2)
+            en = max(range(len(tur_)), key=lambda i: tur_[i][0])
+            o_, m_, t_ = tur_[en]
+            tur_[en] = (o_, round(m_ + fark_, 2), t_)
+        kalemler = tur_
+    elif kdv_kalemleri:
         kalemler = [(oran, matrah if i == 0 else 0, tutar) for i, (oran, tutar) in enumerate(kdv_kalemleri)]
     elif matrah:
         kalemler = [(0, matrah, 0)]
@@ -1657,7 +1683,7 @@ def _pdf_tekil_fatura_ayikla(ham, yon="alis"):
     return {
         "tarih": tarih, "gonderici": gonderici, "kalemler": kalemler,
         "ek_vergiler": ek_vergi, "fatura_no": fatura_no, "iade": iade,
-        "dosya": ham.get("dosya", ""),
+        "dosya": ham.get("dosya", ""), "tevkifat": round(tevkifat, 2),
     }
 
 
@@ -2420,7 +2446,14 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 # Ödenecek Tutar = toplam - tevkifat, bu kadar 120 borç
                 if tevk_kod:
                     fisler.append(sat(tevk_kod, f["tevkifat"], 0, " (tevkifat/iade KDV)"))
-                odenecek = round(toplam - f["tevkifat"], 2)
+                # Ödenecek = KDV dahil toplam − tevkifat. KDV dahil toplam kalemlerden hesaplanır:
+                # listelerin "Toplam" sütunu kimi zaman zaten ödenecek tutardır (eLogo), ondan
+                # bir daha tevkifat düşülürse fiş tevkifat kadar dengesiz çıkıyordu.
+                kdv_dahil = round(sum(k["matrah"] + k["kdv"] for k in f["kalemler"]), 2)
+                odenecek = round(kdv_dahil - f["tevkifat"], 2)
+                if toplam and abs(toplam - odenecek) > 0.05 and abs(toplam - kdv_dahil) > 0.05:
+                    uyarilar.append(f"{fatura_no}: tevkifatlı faturada liste toplamı ({toplam:,.2f}) ne KDV dahil "
+                                    f"toplamı ({kdv_dahil:,.2f}) ne ödenecek tutarı ({odenecek:,.2f}) tutuyor — kontrol edin")
                 fisler.append(sat(cari_kod or "198.01.001", odenecek, 0, " (ödenecek)"))
             fis += 1
             continue

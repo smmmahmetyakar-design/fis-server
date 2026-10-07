@@ -19,7 +19,7 @@ from pathlib import Path
 from app import yapay_zeka
 from app.kurallar import norm
 
-OKUYUCU_SURUM = 5   # 2: fatura kalem açıklamaları (gider seçimi için) · 3: toplu PDF'i faturalara bölme · 4: kalem tutarları · 5: kalem KDV oranı
+OKUYUCU_SURUM = 6   # 2: fatura kalem açıklamaları (gider seçimi için) · 3: toplu PDF'i faturalara bölme · 4: kalem tutarları · 5: kalem KDV oranı · 6: tevkifat / çok oranlı özet
 YONLER = ("alis", "satis")
 
 _kilit = threading.RLock()
@@ -238,11 +238,12 @@ def _sayfa_oku(sayfa: dict, dosya: str, yon: str) -> dict | None:
         "fatura_no": (k.get("fatura_no") or "").strip(),
         "tarih": k.get("tarih", ""),
         "cari_ad": (k.get("gonderici") or "").strip(),
-        "tur": "IADE" if k.get("iade") else "SATIS",
+        "tur": "IADE" if k.get("iade") else ("TEVKIFAT" if (k.get("tevkifat") or 0) > 0 else "SATIS"),
         "senaryo": "TEMELFATURA" if (not kalemler and ek > 0) else "",
         "kalemler": kalemler,
-        "toplam": round(sum(x["matrah"] + x["kdv"] for x in kalemler) + ek, 2),
-        "tevkifat": 0.0, "tevkifat_kod": "",
+        # toplam = ÖDENECEK (tevkifatlıda KDV dahil − tevkifat; entegratör listeleriyle aynı anlam)
+        "toplam": round(sum(x["matrah"] + x["kdv"] for x in kalemler) + ek - (k.get("tevkifat") or 0), 2),
+        "tevkifat": round(k.get("tevkifat") or 0, 2), "tevkifat_kod": "",
         "ek_vergi": ek,
         "yon": yon, "dosya": dosya, "kaynak": "pdf", "yz": [],
         "kalem_aciklamalari": _kalem_aciklamalari(sayfa.get("tablolar")),
