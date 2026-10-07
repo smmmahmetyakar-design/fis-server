@@ -829,10 +829,10 @@ function karsTeshis(v){
   if(!(t.tablolar||[]).length) parca.push('<div>Bu sayfada fatura listesi yüklenmedi (2. bölüm).</div>');
   const pdfYok=v.sayilar.pdf_yok||0;
   if(pdfYok) parca.push(`<div>${pdfYok} faturanın PDF'i yok. "Fatura PDF'leri" alanında ${t.alan_pdf_sayisi||0} fatura var. `+
-    (t.klasor?(t.klasor_fatura_var?`Sunucu klasöründe (${esc(t.klasor)}/fatura) ${t.klasor_pdf_sayisi} PDF tarandı, ${t.klasor_numarali_pdf}'inde fatura numarası okundu; listedeki numaralardan ${t.klasor_eslesen} tanesi orada bulundu.`+
+    (t.klasor?(t.klasor_fatura_var?`Sunucu klasörünün (${esc(t.klasor)}) fatura klasörlerinde ${t.klasor_pdf_sayisi} PDF tarandı, ${t.klasor_numarali_pdf}'inde fatura numarası okundu; listedeki numaralardan ${t.klasor_eslesen} tanesi orada bulundu.`+
         (t.klasor_ocr_bekleyen?` <b>${t.klasor_ocr_bekleyen} taranmış (resim) PDF arka planda OCR ile okunuyor — birkaç dakika sonra pencereyi yeniden açın.</b>`:'')+
         ((t.klasor_numarasiz||[]).length?`<details><summary>numarası okunamayan PDF'ler (${t.klasor_numarasiz.length})</summary>${t.klasor_numarasiz.map(esc).join('<br>')}</details>`:'')
-        :`Sunucu klasöründe (${esc(t.klasor)}) <b>fatura</b> alt klasörü yok.`)
+        :`Sunucu klasöründe (${esc(t.klasor)}) adında "fatura" ya da "arşiv" geçen bir klasör yok — fatura PDF'leri oraya konursa kendiliğinden bulunur.`)
       :'Firma bir sunucu klasörüne bağlı değil; PDF\'leri "Fatura PDF\'leri" alanına yükleyin.')+'</div>');
   if(!parca.length || (!listeKdvYok && !pdfYok && (t.tablolar||[]).every(x=>x.kdv_sutunu_var))) return '';
   return `<div class="uyari" style="font-size:12.5px;margin-bottom:10px;line-height:1.45">${parca.join('')}</div>`;

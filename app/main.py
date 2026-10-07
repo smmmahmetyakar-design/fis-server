@@ -762,7 +762,7 @@ def karsilastir(kod: str, yon: str, body: KarsilastirBody):
     sonuc["teshis"] = {
         "tablolar": teshis.get("tablolar", []),
         "klasor": kp.name if kp else "",
-        "klasor_fatura_var": bool(kp and (kp / "fatura").is_dir()),
+        "klasor_fatura_var": bool(kp and ((kp / "fatura").is_dir() or (sunucu.get("dizin") or {}).get("taranan"))),
         "klasor_pdf_sayisi": (sunucu.get("dizin") or {}).get("taranan", 0),
         "klasor_numarali_pdf": (sunucu.get("dizin") or {}).get("numarali", 0),
         "klasor_ocr_bekleyen": (sunucu.get("dizin") or {}).get("ocr_bekleyen", 0),

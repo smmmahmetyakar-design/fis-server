@@ -661,6 +661,12 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                 if "fatura_no" in sut and "kdv_top" not in sut:
                     j = next((j for j, c in enumerate(nrow) if c in ("TOPLAM KDV", "HESAPLANAN KDV", "KDV TUTARI", "KDV")
                               or ("KDV" in c and "TOPLAM" in c and "MATRAH" not in c)), None)
+                    if j is None:
+                        # GİB portal / entegratör listelerinde KDV "Vergiler Toplamı" adıyla gelebilir
+                        # (ÖİV gibi ek vergi de içerebilir: oran türetilemezse fatura PDF ister)
+                        j = next((j for j, c in enumerate(nrow) if c in (
+                            "VERGILER TOPLAMI", "VERGI TOPLAMI", "TOPLAM VERGI", "TOPLAM VERGILER",
+                            "HESAPLANAN VERGI", "HESAPLANAN VERGILER", "VERGI TUTARI", "VERGILER")), None)
                     if j is not None and j not in {v for k, v in sut.items() if k.startswith(("kdv_", "mat_"))}:
                         sut["kdv_top"] = j
                 if "fatura_no" in sut and ("cari_ad" not in sut or sut.get("_cari_aciklamadan")):

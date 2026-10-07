@@ -268,16 +268,24 @@ def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path) -> tuple:
         except Exception:
             onb = {}
     dizin, bilgi = {}, {"taranan": 0, "numarali": 0, "ocr_bekleyen": 0, "numarasiz": [], "klasor": ""}
-    kok = klasor_path / "fatura"
-    if not kok.is_dir():
-        bilgi["klasor"] = "yok"
-        return {}, bilgi
+    # Fatura PDF'leri: "fatura/" altı ve firma klasöründe adı FATURA / ARŞİV geçen her klasör
+    # ("Alış Faturaları", "e-Arsiv" gibi). Banka/dekont klasörleri taranmaz: ekstre
+    # açıklamalarında fatura numarası geçebilir, faturanın kendisi değildir.
+    def _fatura_yolu_mu(parcalar):
+        return any(("FATUR" in norm(x).replace(" ", "") or "ARSIV" in norm(x).replace(" ", ""))
+                   for x in parcalar)
     yeni_onb, ocr_isleri = {}, []
-    for p in sorted(kok.rglob("*")):
-        if not p.is_file() or p.suffix.lower() != ".pdf" or p.name.startswith((".", "~$")):
+    adaylar_ = []
+    for p in sorted(klasor_path.rglob("*.[pP][dD][fF]")):
+        if not p.is_file() or p.name.startswith((".", "~$")):
             continue
-        if "cikan" in p.relative_to(kok).parts:
+        parcalar = p.relative_to(klasor_path).parts[:-1]
+        if "cikan" in parcalar or not _fatura_yolu_mu(parcalar):
             continue
+        adaylar_.append(p)
+    if not adaylar_ and not (klasor_path / "fatura").is_dir():
+        bilgi["klasor"] = "yok"
+    for p in adaylar_:
         rel = p.relative_to(klasor_path).as_posix()
         mt = p.stat().st_mtime
         bilgi["taranan"] += 1
