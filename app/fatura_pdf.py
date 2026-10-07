@@ -19,7 +19,7 @@ from pathlib import Path
 from app import yapay_zeka
 from app.kurallar import norm
 
-OKUYUCU_SURUM = 3   # 2: fatura kalem açıklamaları (gider seçimi için) · 3: toplu PDF'i faturalara bölme
+OKUYUCU_SURUM = 4   # 2: fatura kalem açıklamaları (gider seçimi için) · 3: toplu PDF'i faturalara bölme · 4: kalem tutarları
 YONLER = ("alis", "satis")
 
 _kilit = threading.RLock()
@@ -187,6 +187,37 @@ def _kalem_aciklamalari(tablolar: list) -> list:
     return tekil[:15]
 
 
+def _kalem_detaylari(tablolar: list) -> list:
+    """Kalem tablosundan açıklama + KDV hariç satır tutarı: [{'a': açıklama, 't': tutar}].
+    Tutar sütunu: "Mal Hizmet Tutarı" (iskonto sonrası, KDV hariç); yoksa KDV/fiyat/iskonto
+    olmayan son "tutar" sütunu."""
+    from app.isleyici import _sayi
+    out = []
+    for tb in tablolar or []:
+        for ri, row in enumerate(tb[:3]):
+            nrow = [norm(str(c or "")).replace("/", " ") for c in row]
+            j = next((j for j, c in enumerate(nrow)
+                      if any(b.replace("/", " ") in c for b in _KALEM_BASLIK)
+                      and not any(x in c for x in ("TOPLAM", "TUTAR", "KDV", "FIYAT", "ORAN", "MIKTAR"))), None)
+            if j is None:
+                continue
+            t = next((k for k, c in enumerate(nrow) if "MAL HIZMET TUTAR" in c), None)
+            if t is None:
+                adaylar = [k for k, c in enumerate(nrow) if ("TUTAR" in c or c in ("TUTAR", "BEDEL"))
+                           and not any(x in c for x in ("KDV", "ISKONTO", "FIYAT", "VERGI", "TOPLAM"))]
+                t = adaylar[-1] if adaylar else None
+            for r in tb[ri + 1:]:
+                if j >= len(r):
+                    continue
+                v = re.sub(r"\s+", " ", str(r[j] or "")).strip()
+                if len(v) <= 2 or re.fullmatch(r"[\d.,%\s]+(TL)?", v):
+                    continue
+                tutar = _sayi(r[t]) if t is not None and t < len(r) else None
+                out.append({"a": v[:120], "t": round(tutar, 2) if tutar is not None else None})
+            break
+    return out[:30]
+
+
 def _sayfa_oku(sayfa: dict, dosya: str, yon: str) -> dict | None:
     from app.isleyici import _pdf_tekil_fatura_ayikla
     k = _pdf_tekil_fatura_ayikla({**sayfa, "dosya": dosya}, yon=yon)
@@ -210,6 +241,7 @@ def _sayfa_oku(sayfa: dict, dosya: str, yon: str) -> dict | None:
         "ek_vergi": ek,
         "yon": yon, "dosya": dosya, "kaynak": "pdf", "yz": [],
         "kalem_aciklamalari": _kalem_aciklamalari(sayfa.get("tablolar")),
+        "kalem_detay": _kalem_detaylari(sayfa.get("tablolar")),
     }
     f["eksik"] = _eksikler(f, metin)
     return f

@@ -1097,7 +1097,9 @@ function render(r){
   const fatHucre=(s,ilk)=>{
     if(!fatSut) return '';
     if(!ilk) return '<td class="l fat-ic"></td>';
-    const kal=(s.fatura_kalemleri||[]);
+    const kal=(s.fatura_kalem_detay&&s.fatura_kalem_detay.length)
+      ? s.fatura_kalem_detay.map(k=>k.a+(k.t!=null?` (${nf(k.t)})`:''))
+      : (s.fatura_kalemleri||[]);
     const dag=(s.kdv_dagilim||[]).filter(k=>k.matrah||k.kdv);
     const kalHTML=kal.length?`<div class="fat-kalem" title="${esc(kal.join('\n'))}">${kal.slice(0,4).map(x=>`<div>• ${esc(x)}</div>`).join('')}${kal.length>4?`<div class="hint">+${kal.length-4} kalem</div>`:''}</div>`:`<div class="hint">${s.pdf?'PDF\'te kalem açıklaması okunamadı':'kalem açıklaması için PDF yok'}</div>`;
     const tutar=s.kdv_haric?`<div class="fat-tutar">KDV hariç: <b>${nf(s.kdv_haric)}</b>${dag.length>1||(dag[0]&&dag[0].oran)?` <span class="hint">(${dag.map(k=>'%'+k.oran+': '+nf(k.matrah)).join(' · ')})</span>`:''}</div>`:'';

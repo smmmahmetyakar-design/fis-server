@@ -1773,6 +1773,8 @@ def _liste_pdf_birlestir(liste, pdfler):
         # fatura kalemlerinin açıklamaları (gider hesabı seçimi için) yalnız PDF'te var
         if p.get("kalem_aciklamalari") and not f.get("kalem_aciklamalari"):
             f["kalem_aciklamalari"] = p["kalem_aciklamalari"]
+        if p.get("kalem_detay") and not f.get("kalem_detay"):
+            f["kalem_detay"] = p["kalem_detay"]
         eksik = list(f.get("eksik", []))
         dolan = []
         if "cari" in eksik and p.get("cari_ad"):
@@ -2152,6 +2154,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 s["belge"] = belge_rozet
             # önizlemede gösterilecek fatura içeriği: kalem açıklamaları ve KDV hariç tutar
             s["fatura_kalemleri"] = [str(a)[:120] for a in (f.get("kalem_aciklamalari") or [])[:8]]
+            s["fatura_kalem_detay"] = (f.get("kalem_detay") or [])[:12]
             s["kdv_haric"] = round(sum(float(k.get("matrah") or 0) for k in f.get("kalemler") or []), 2)
             s["kdv_dagilim"] = [{"oran": k.get("oran"), "matrah": round(float(k.get("matrah") or 0), 2),
                                  "kdv": round(float(k.get("kdv") or 0), 2)} for k in f.get("kalemler") or []]
