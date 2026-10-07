@@ -17,6 +17,7 @@ Klasör yapısı:
   Eski kurulumlarla uyum: kural.xlsx yoksa kural_<tip>.xlsx'e düşer.
 """
 import io, json, os, re, shutil, unicodedata
+from urllib.parse import quote
 from datetime import datetime
 from pathlib import Path
 
@@ -524,6 +525,19 @@ async def belge_yukle(kod: str, tip: str, file: UploadFile = File(...)):
     return {"ok": True, "dosya": fname}
 
 
+@app.get("/api/firma/{kod}/belge/{tip}/{fname}")
+def belge_ac(kod: str, tip: str, fname: str):
+    """2. bölüme yüklenmiş belgeyi tarayıcıda açar (önizlemedeki 📄 bağlantısı)."""
+    if tip not in TIPLER:
+        raise HTTPException(400, "Geçersiz")
+    p = firma_dir(kod) / tip / _guvenli_ad(fname)
+    if not p.is_file():
+        raise HTTPException(404, "Yok")
+    tur = "application/pdf" if p.suffix.lower() == ".pdf" else None
+    return FileResponse(p, media_type=tur,
+                        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(p.name)}"})
+
+
 @app.delete("/api/firma/{kod}/belge/{tip}/{fname}")
 def belge_sil(kod: str, tip: str, fname: str):
     if tip not in TIPLER or ".." in fname or "/" in fname or "\\" in fname:
@@ -562,6 +576,9 @@ async def fatura_pdf_yukle(kod: str, yon: str, file: UploadFile = File(...)):
     if not fname.lower().endswith(".pdf"):
         fname += ".pdf"
     (k / fname).write_bytes(data)
+    sunucudan = _read_json(k / "_sunucudan.json", [])
+    if fname in sunucudan:          # elle yüklendi: artık normal fatura PDF'i
+        _write_json(k / "_sunucudan.json", [x for x in sunucudan if x != fname])
     kayit = fatura_pdf.oku(k, k / fname, yon)
     return {"ok": True, "dosya": fname, "durum": fatura_pdf._durum_hesapla(kayit),
             "fatura_sayisi": len(kayit.get("faturalar") or [])}
@@ -574,6 +591,18 @@ def fatura_pdf_liste(kod: str, yon: str):
     return {"dosyalar": fatura_pdf.liste(fatura_pdf.klasor(d, yon), yon),
             "yapay_zeka": yapay_zeka.durum(), "kuyruk": fatura_pdf.kuyruk_bilgisi(),
             "pdf_otomatik": fatura_pdf.YZ_OTOMATIK}
+
+
+@app.get("/api/firma/{kod}/fatura-pdf/{yon}/{fname}")
+def fatura_pdf_ac(kod: str, yon: str, fname: str):
+    """Fatura PDF'ini tarayıcıda açar (önizlemedeki 📄 bağlantısı)."""
+    _yon_kontrol(yon)
+    d = firma_dir(kod)
+    p = fatura_pdf.klasor(d, yon) / _guvenli_ad(fname)
+    if not p.is_file():
+        raise HTTPException(404, "PDF yok")
+    return FileResponse(p, media_type="application/pdf",
+                        headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(p.name)}"})
 
 
 @app.delete("/api/firma/{kod}/fatura-pdf/{yon}/{fname}")
@@ -642,6 +671,82 @@ def onerilen_fisno(kod: str, tip: str):
     return {"son_fis_no": son, "onerilen": son + 1, "gecmis_satir": len(g.get("satirlar", []))}
 
 
+def _sunucu_fatura_pdf_al(d: Path, tum_ham: list, yon: str) -> str:
+    """Listedeki fatura numaralarıyla eşleşen PDF'leri firmanın sunucu klasöründen
+    (fatura/ altı) bulup fatura PDF'leri alanına kopyalar. Böylece listede olmayan
+    KDV dağılımı PDF'ten tamamlanır ve önizlemede fatura açılabilir.
+    Yalnızca listedeki numaralar alınır (klasördeki her PDF fişe eklenmesin)."""
+    kp = _firma_klasoru(d)
+    if not kp:
+        return ""
+    metin = json.dumps(tum_ham, ensure_ascii=False, default=str).upper()
+    nolar = set(sk.FATURA_NO_RE.findall(metin))
+    if not nolar:
+        return ""
+    k = fatura_pdf.klasor(d, yon)
+    zaten = {f.get("fatura_no") for f in fatura_pdf.faturalar(d, yon)[0]}
+    eksik = nolar - zaten
+    if not eksik:
+        return ""
+    dizin = sk.fatura_pdf_dizini(kp, d / "fatura" / "_sunucu_pdf_dizini.json")
+    sunucudan = set(_read_json(k / "_sunucudan.json", []))
+    alinan = []
+    for no in sorted(eksik):
+        rel = dizin.get(no)
+        if not rel:
+            continue
+        src = sk.guvenli_dosya(kp, rel)
+        hedef = k / src.name
+        if hedef.exists() and hedef.stat().st_size != src.stat().st_size:
+            hedef = k / f"{no}_{src.name}"
+        if not hedef.exists():
+            shutil.copy2(src, hedef)
+        alinan.append(no)
+        sunucudan.add(hedef.name)
+    _write_json(k / "_sunucudan.json", sorted(sunucudan))
+    if not alinan:
+        return ""
+    return f"Sunucu klasöründen {len(alinan)} fatura PDF'i eşleşip alındı (KDV dağılımı ve fatura görüntüsü için)"
+
+
+class KarsilastirBody(BaseModel):
+    dosyalar: list[str] | None = None     # None: klasördeki tüm belgeler
+
+
+@app.post("/api/firma/{kod}/karsilastir/{yon}")
+def karsilastir(kod: str, yon: str, body: KarsilastirBody):
+    """Fatura listesi (Excel) ile fatura PDF'lerinin matrah/KDV tutarlarını
+    %1 / %10 / %20 bazında karşılaştırır (önizleme/fiş üretmeden)."""
+    import copy
+    _yon_kontrol(yon)
+    d = firma_dir(kod)
+    klasor = d / "fatura"
+    dosyalar = body.dosyalar if body.dosyalar is not None else \
+        [f.name for f in klasor.iterdir() if f.is_file() and not f.name.startswith("_")] if klasor.exists() else []
+    tum_ham = []
+    for fn in dosyalar:
+        p = klasor / fn
+        if p.exists():
+            tum_ham.append({"dosya": fn, **belge_oku(p, fn)})
+    try:
+        _sunucu_fatura_pdf_al(d, tum_ham, yon)
+    except Exception:
+        pass
+    pdfler, bekleyen = fatura_pdf.faturalar(d, yon)
+    sunucudan = set(_read_json(fatura_pdf.klasor(d, yon) / "_sunucudan.json", []))
+    for pf in pdfler:
+        pf["pdf_yer"] = "alan"
+        if pf.get("dosya") in sunucudan:
+            pf["sunucudan"] = True
+    liste = isleyici._elogo_fatura_satirlari(copy.deepcopy(tum_ham), yon)
+    ek_pdf = isleyici._pdf_gercek_faturalar(copy.deepcopy(tum_ham), yon) if liste else []
+    sonuc = isleyici.liste_pdf_karsilastir(liste, pdfler + ek_pdf)
+    sonuc["liste_var"] = bool(liste)
+    sonuc["pdf_sayisi"] = len(pdfler) + len(ek_pdf)
+    sonuc["yz_bekleyen"] = bekleyen
+    return sonuc
+
+
 class IsleBody(BaseModel):
     firma_kod: str
     tip: str
@@ -678,8 +783,20 @@ def isle(kod: str, tip: str, body: IsleBody):
 
     # tip'e göre işleyiciye ver
     pdf_faturalar, yz_bekleyen = [], 0
+    sunucu_pdf_not = ""
+    if tip == "fatura" and body.yon in fatura_pdf.YONLER and tum_ham:
+        try:
+            sunucu_pdf_not = _sunucu_fatura_pdf_al(d, tum_ham, body.yon)
+        except Exception as e:
+            sunucu_pdf_not = f"Sunucu klasöründe fatura PDF'leri aranamadı: {e}"
     if tip == "fatura" and body.yon in fatura_pdf.YONLER:
         pdf_faturalar, yz_bekleyen = fatura_pdf.faturalar(d, body.yon)
+        # sunucu klasöründen otomatik alınan PDF'ler yalnızca listedeki faturayı tamamlar;
+        # listede yoksa (ör. geçen ayın listesinden kalan) fişe eklenmez
+        sunucudan = set(_read_json(fatura_pdf.klasor(d, body.yon) / "_sunucudan.json", []))
+        for pf in pdf_faturalar:
+            if pf.get("dosya") in sunucudan:
+                pf["sunucudan"] = True
     gider_ogrenme, gider_onerici = None, None
     if tip == "fatura":
         gider_ogrenme = _read_json(d / "fatura_gider_ogrenme.json", {})
@@ -689,6 +806,8 @@ def isle(kod: str, tip: str, body: IsleBody):
                                          gider_yz.gecmis_ornekler(gecmis_s, body.yon))
     fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon, pdf_faturalar=pdf_faturalar,
                                      gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici)
+    if sunucu_pdf_not:
+        uyarilar.append(sunucu_pdf_not)
     if yz_bekleyen:
         uyarilar.insert(0, f"{yz_bekleyen} PDF hâlâ yapay zekâ ile okunuyor — bitince tekrar İşle'ye basın")
     if not km.hesaplar:

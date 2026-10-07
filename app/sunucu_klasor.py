@@ -182,3 +182,57 @@ def excel_xlsx_bytes(data: bytes) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# ------------------------------------------------------------------ fatura PDF'leri
+FATURA_NO_RE = re.compile(r"[A-Z0-9]{3}20\d{2}\d{9}")
+
+
+def _pdf_fatura_nolari(p: Path) -> list:
+    """PDF'in ilk iki sayfasının METNİNDEKİ e-fatura numaraları (OCR yok — hızlı)."""
+    try:
+        import pdfplumber
+        with pdfplumber.open(p) as pdf:
+            metin = "\n".join((s.extract_text() or "") for s in pdf.pages[:2])
+    except Exception:
+        return []
+    return sorted(set(FATURA_NO_RE.findall(metin.upper())))
+
+
+def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path) -> dict:
+    """Firma klasöründeki fatura PDF'leri: fatura no -> göreli yol.
+    Önce dosya adındaki numara, yoksa PDF metnindeki numaralar. Metin okuma sonucu
+    (yol + değişiklik zamanı) önbelleğe yazılır; her İşle'de yeniden okunmaz.
+    'cikan' (araç çıktıları) taranmaz."""
+    import json
+    try:
+        onb = json.loads(onbellek_yolu.read_text(encoding="utf-8"))
+    except Exception:
+        onb = {}
+    yeni_onb, dizin = {}, {}
+    kok = klasor_path / "fatura"
+    if not kok.is_dir():
+        return {}
+    for p in sorted(kok.rglob("*")):
+        if not p.is_file() or p.suffix.lower() != ".pdf" or p.name.startswith((".", "~$")):
+            continue
+        rel = p.relative_to(klasor_path).as_posix()
+        if "cikan" in p.relative_to(kok).parts:
+            continue
+        mt = p.stat().st_mtime
+        adda = FATURA_NO_RE.findall(norm(p.stem).replace(" ", ""))
+        if adda:
+            nolar = adda
+        elif rel in onb and onb[rel][0] == mt:
+            nolar = onb[rel][1]
+        else:
+            nolar = _pdf_fatura_nolari(p)
+        yeni_onb[rel] = [mt, nolar]
+        for n in nolar:
+            dizin.setdefault(n, rel)
+    try:
+        onbellek_yolu.parent.mkdir(parents=True, exist_ok=True)
+        onbellek_yolu.write_text(json.dumps(yeni_onb, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+    return dizin

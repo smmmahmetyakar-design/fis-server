@@ -774,7 +774,12 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                 # eğer hiç kalem yoksa ama toplam varsa (faktoring/BSMV): tek kalem KDV=0
                 if not kalemler and toplam > 0:
                     kalemler.append({"oran": 0, "matrah": round(toplam - ek_vergi, 2), "kdv": 0})
-                    if not kdv_sutun_var and "kdv" not in eksik:
+                    # KDV sütunları var ama bu satırda hepsi BOŞ: KDV "sıfır" değil, bilinmiyor
+                    kdv_hucreleri = [g(row, k) for k in ("kdv_1", "kdv_8", "kdv_10", "kdv_18", "kdv_20",
+                                                         "mat_1", "mat_8", "mat_10", "mat_18", "mat_20", "kdv_top")
+                                     if k in sut]
+                    bos = all(v is None or str(v).strip() in ("", "-") for v in kdv_hucreleri)
+                    if (not kdv_sutun_var or bos) and "kdv" not in eksik and senaryo != "TEMELFATURA":
                         eksik.append("kdv")
 
                 tarih = _tarih_iso(g(row, "tarih"))
@@ -1678,6 +1683,8 @@ def _pdf_gercek_faturalar(hamlar, yon="alis"):
             "tevkifat": 0.0, "tevkifat_kod": "",
             "ek_vergi": ek_vergi,
             "yon": yon, "dosya": k.get("dosya", ""),
+            # belge alanına (2. bölüm) yüklenmiş PDF — arayüzde açmak için yeri
+            "pdf_yer": "belge" if str(k.get("dosya", "")).lower().endswith(".pdf") else "",
         })
     return out
 
@@ -1728,6 +1735,8 @@ def _liste_pdf_birlestir(liste, pdfler):
             continue
         kullanilan.add(a)
         f["pdf"] = p.get("dosya", "")
+        f["pdf_sayfa"] = p.get("sayfa", 0)
+        f["pdf_yer"] = p.get("pdf_yer") or "alan"
         # fatura kalemlerinin açıklamaları (gider hesabı seçimi için) yalnız PDF'te var
         if p.get("kalem_aciklamalari") and not f.get("kalem_aciklamalari"):
             f["kalem_aciklamalari"] = p["kalem_aciklamalari"]
@@ -1755,6 +1764,15 @@ def _liste_pdf_birlestir(liste, pdfler):
             if "kdv" in eksik:
                 dolan.append("kdv")
             kdv_haric.append(f["fatura_no"])
+        elif "kdv" not in eksik and ayni_toplam and not any(k["kdv"] > 0 for k in f.get("kalemler", [])) \
+                and any(k["kdv"] > 0 for k in p.get("kalemler", [])):
+            # Listede KDV sıfır/boş görünüyor ama aynı toplamlı faturanın PDF'inde KDV var:
+            # liste KDV dağılımını vermemiş — dağılım PDF'ten alınır.
+            f["kalemler"] = p["kalemler"]
+            f["ek_vergi"] = p.get("ek_vergi", 0)
+            if p.get("senaryo"):
+                f["senaryo"] = p["senaryo"]
+            dolan.append("kdv")
         elif "kdv" in eksik:
             if ayni_toplam:
                 f["kalemler"] = p["kalemler"]
@@ -1781,6 +1799,8 @@ def _liste_pdf_birlestir(liste, pdfler):
         if a and (a in kullanilan or a in gorulen):
             continue
         gorulen.add(a)
+        if p.get("sunucudan"):
+            continue        # sunucudan yalnız listedeki faturayı tamamlamak için alındı
         if "tutar" in p.get("eksik", []) or not p.get("toplam"):
             eklenemeyen.append(p.get("fatura_no") or p.get("dosya", ""))
             continue
@@ -1807,6 +1827,99 @@ def _liste_pdf_birlestir(liste, pdfler):
             ek = " (KDV satırı yazılmadı, tutarın tamamı gidere gitti)" if tur == "kdv" else ""
             uyarilar.append(f"{ad} eksik, PDF'i yok ya da okunamadı{ek}: {_kisa_liste(nolar)}")
     return liste, uyarilar
+
+
+KARSILASTIRMA_ORANLARI = (1, 10, 20)
+
+
+def _oran_dagilim(f: dict) -> dict:
+    """Fatura kalemleri -> {'1': [matrah, kdv], '10': [...], '20': [...], 'diger': [...]}"""
+    out = {str(o): [0.0, 0.0] for o in KARSILASTIRMA_ORANLARI}
+    out["diger"] = [0.0, 0.0]
+    for k in f.get("kalemler") or []:
+        try:
+            oran = int(round(float(k.get("oran") or 0)))
+        except Exception:
+            oran = -1
+        anahtar = str(oran) if oran in KARSILASTIRMA_ORANLARI else "diger"
+        out[anahtar][0] += float(k.get("matrah") or 0)
+        out[anahtar][1] += float(k.get("kdv") or 0)
+    return {a: [round(m, 2), round(v, 2)] for a, (m, v) in out.items()}
+
+
+def liste_pdf_karsilastir(liste: list, pdfler: list, tolerans: float = 0.05) -> dict:
+    """Fatura listesindeki (Excel) matrah/KDV tutarlarını fatura PDF'lerindekiyle
+    %1 / %10 / %20 (ve diğer oranlar) bazında, fatura no üzerinden karşılaştırır.
+    durum: uyumlu | farkli | pdf_yok | pdf_eksik | liste_kdv_yok | listede_yok"""
+    pdf_idx = {}
+    for p in pdfler:
+        a = _fno_anahtar(p.get("fatura_no"))
+        if a and a not in pdf_idx:
+            pdf_idx[a] = p
+
+    def tam(f):
+        return bool(f.get("kalemler")) and not ({"tutar", "kdv"} & set(f.get("eksik") or []))
+
+    def pdf_bilgi(p):
+        return {"dosya": p.get("dosya", ""), "sayfa": p.get("sayfa", 0), "yer": p.get("pdf_yer") or "alan"}
+
+    satirlar, gorulen = [], set()
+    for f in liste:
+        a = _fno_anahtar(f.get("fatura_no"))
+        p = pdf_idx.get(a)
+        if a:
+            gorulen.add(a)
+        ld = _oran_dagilim(f) if tam(f) else None
+        pd = _oran_dagilim(p) if p and tam(p) else None
+        farklar = []
+        if not p:
+            durum = "pdf_yok"
+        elif pd is None:
+            durum = "pdf_eksik"
+        elif ld is None:
+            durum = "liste_kdv_yok"
+        else:
+            for o in ld:
+                if abs(ld[o][0] - pd[o][0]) > tolerans:
+                    farklar.append(f"%{o} matrah" if o != "diger" else "%0/diğer matrah")
+                if abs(ld[o][1] - pd[o][1]) > tolerans:
+                    farklar.append(f"%{o} KDV" if o != "diger" else "%0/diğer KDV")
+            if abs((f.get("toplam") or 0) - (p.get("toplam") or 0)) > tolerans:
+                farklar.append("toplam")
+            durum = "farkli" if farklar else "uyumlu"
+        satirlar.append({
+            "fatura_no": f.get("fatura_no", ""), "tarih": f.get("tarih", ""), "cari": f.get("cari_ad", ""),
+            "liste": ld, "pdf": pd, "liste_toplam": round(f.get("toplam") or 0, 2),
+            "pdf_toplam": round(p.get("toplam") or 0, 2) if p else None,
+            "pdf_dosya": pdf_bilgi(p) if p else None, "durum": durum, "farklar": farklar,
+        })
+    for a, p in pdf_idx.items():
+        if a in gorulen or p.get("sunucudan"):
+            continue
+        satirlar.append({
+            "fatura_no": p.get("fatura_no", ""), "tarih": p.get("tarih", ""), "cari": p.get("cari_ad", ""),
+            "liste": None, "pdf": _oran_dagilim(p) if tam(p) else None, "liste_toplam": None,
+            "pdf_toplam": round(p.get("toplam") or 0, 2), "pdf_dosya": pdf_bilgi(p),
+            "durum": "listede_yok", "farklar": [],
+        })
+
+    # oran bazında toplamlar: yalnız iki tarafı da okunabilen faturalar (karşılaştırılabilir küme)
+    toplam = {o: {"liste": [0.0, 0.0], "pdf": [0.0, 0.0]} for o in [str(x) for x in KARSILASTIRMA_ORANLARI] + ["diger"]}
+    for r in satirlar:
+        if r["liste"] and r["pdf"]:
+            for o in toplam:
+                for i in (0, 1):
+                    toplam[o]["liste"][i] += r["liste"][o][i]
+                    toplam[o]["pdf"][i] += r["pdf"][o][i]
+    for o in toplam:
+        for t in ("liste", "pdf"):
+            toplam[o][t] = [round(x, 2) for x in toplam[o][t]]
+    sayilar = {}
+    for r in satirlar:
+        sayilar[r["durum"]] = sayilar.get(r["durum"], 0) + 1
+    sira = {"farkli": 0, "liste_kdv_yok": 1, "pdf_eksik": 2, "pdf_yok": 3, "listede_yok": 4, "uyumlu": 5}
+    satirlar.sort(key=lambda r: (sira.get(r["durum"], 9), r["tarih"] or "", r["fatura_no"]))
+    return {"satirlar": satirlar, "toplam": toplam, "sayilar": sayilar}
 
 
 def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
@@ -1975,6 +2088,13 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                      evrak_no=fatura_no, detay=cari_ad, kaynak=cari_kaynak or "fatura")
             if belge_rozet:
                 s["belge"] = belge_rozet
+            # faturanın PDF'i (arayüzde açıp bakmak için)
+            pdf_ad = f.get("pdf") or (f.get("dosya", "") if (f.get("kaynak") == "pdf" or f.get("pdf_yer")) else "")
+            if pdf_ad:
+                s["pdf"] = pdf_ad
+                s["pdf_yer"] = f.get("pdf_yer") or "alan"     # alan: Fatura PDF'leri · belge: 2. bölüm
+                if f.get("pdf_sayfa") or f.get("sayfa"):
+                    s["pdf_sayfa"] = f.get("pdf_sayfa") or f.get("sayfa")
             # rol: arayüzde düzeltme hangi öğrenmeye gidecek (gider düzeltmesi cariye öğrenilmesin)
             if "KDV)" in detay_ek or hesap.startswith(("191", "391")):
                 s["rol"] = "kdv"
