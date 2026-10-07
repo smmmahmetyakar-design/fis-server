@@ -120,6 +120,8 @@
   .fatura-pdf-alani h3{margin:0 0 4px;font-size:14px;color:var(--ana)}
   .donem-satir{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding:8px 12px;border-radius:8px;background:#eef6ef;border:1px solid #cfe3d2;font-size:13px}
   .donem-satir select{width:auto;padding:4px 8px}
+  .pdf-liste-detay>summary{cursor:pointer;padding:7px 10px;border:1px solid var(--kenar);border-radius:6px;background:#fafbfc;font-size:13px;list-style-position:inside}
+  .pdf-liste-detay[open]>summary{border-bottom-left-radius:0;border-bottom-right-radius:0}
   .yz-durum{font-size:12px;margin-top:10px;padding:6px 10px;border-radius:6px;background:#f4f4f4;color:#555}
   .yz-durum.acik{background:#eef3fb;color:#24456b}
   .yz-sinav{font-size:12px;margin-top:8px}
@@ -647,6 +649,7 @@ async function faturaPdfYukle(dosyalar){
   faturaPdfListele();
 }
 
+let pdfListeAcik=false;
 async function faturaPdfListele(){
   clearTimeout(pdfIzleZamanlayici);
   if(!firmaKod || !aktifTip.startsWith('fatura')) return;
@@ -688,7 +691,13 @@ async function faturaPdfListele(){
     });
   }
   h+='</tbody></table>';
-  $('faturaPdfListe').innerHTML='<div style="overflow-x:auto">'+h+'</div>';
+  // açılır-kapanır: varsayılan kapalı; açık/kapalı durumu yenilemelerde korunur
+  const tumF=d.reduce((n,f)=>n+Math.max(1,f.faturalar.length),0);
+  const eksikF=d.reduce((n,f)=>n+(f.faturalar.length?f.faturalar.filter(x=>x.eksik&&x.eksik.length).length:1),0);
+  const okunuyor=d.filter(f=>f.durum==='yz_sirada'||f.durum==='yz_okunuyor').length;
+  $('faturaPdfListe').innerHTML=`<details class="pdf-liste-detay" ${pdfListeAcik?'open':''} ontoggle="pdfListeAcik=this.open">
+    <summary><b>${d.length} PDF dosyası · ${tumF} fatura</b>${eksikF?` · <span style="color:#8a6d1a">${eksikF} faturada eksik alan</span>`:' · tümü okundu'}${okunuyor?` · ${okunuyor} okunuyor`:''} <span class="hint">(aç / kapat)</span></summary>
+    <div style="overflow-x:auto;margin-top:6px">${h}</div></details>`;
   $('faturaPdfListe').querySelectorAll('[data-sil]').forEach(b=>b.onclick=()=>faturaPdfSil(b.dataset.sil));
   $('faturaPdfListe').querySelectorAll('[data-yz]').forEach(b=>b.onclick=()=>faturaPdfYz(b.dataset.yz));
   // yapay zekâ işi sürüyorsa birkaç saniyede bir yenile
