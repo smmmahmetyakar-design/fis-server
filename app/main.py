@@ -1127,4 +1127,14 @@ def cikti_sil(kod: str, fname: str):
 
 
 # ----------------------------------------------------------------- statik
+@app.middleware("http")
+async def _sayfa_onbellek_yok(request, call_next):
+    """Arayüz sayfası tarayıcıda önbelleğe alınmasın: güncellemeden sonra eski sayfa
+    (eski düğmeler/özellikler) görünmesin diye her açılışta sunucuya sorulur."""
+    yanit = await call_next(request)
+    if request.url.path == "/" or request.url.path.endswith(".html"):
+        yanit.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return yanit
+
+
 app.mount("/", StaticFiles(directory=str(Path(__file__).parent / "static"), html=True), name="static")
