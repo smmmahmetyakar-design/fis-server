@@ -2570,6 +2570,15 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 fisler.append(sat(gider_kod or vars_gider, toplam, 0, rol="gider"))
             else:
                 fisler.append(sat(gider_kod or vars_gider, 0, toplam, rol="gider"))
+        # Tevkifatlı SATIŞ: tevkifat, ait olduğu oranın KDV'sinden düşülür; kalan KDV tek satırda
+        # tevkifat hesabına (391.04.02 gibi) ALACAK yazılır — ayrı borç satırı yok.
+        satis_net_oran = None
+        if yon == "satis" and tevk > 0:
+            kdvli = [k for k in f["kalemler"] if k["oran"] and k["kdv"] > 0]
+            eslesen = [k for k in kdvli if any(abs(k["kdv"] * r - tevk) <= 0.05 + 0.0005 * k["kdv"] for r in TEVKIFAT_ORANLARI)]
+            aday = (eslesen or sorted(kdvli, key=lambda k: -k["kdv"]))[:1]
+            if aday and aday[0]["kdv"] + 0.01 >= tevk:
+                satis_net_oran = aday[0]["oran"]
         for k in f["kalemler"]:
             oran = k["oran"]
             matrah = k["matrah"]; kdv = k["kdv"]
@@ -2588,7 +2597,18 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 if not kdv_kod:
                     kdv_eksik.setdefault(f"%{oran} için 391", set()).add(fatura_no)
                 gider_yaz(oran, matrah, f" (%{oran})")
-                fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
+                if oran == satis_net_oran:
+                    satis_net_oran = ("yazildi", oran)
+                    t_kod = tevkifat_hesap_sec("satis")
+                    if not t_kod:
+                        t_kod = kdv_kod          # ayrı tevkifat hesabı yok: net KDV normal 391'e
+                        if kdv_kod:
+                            tevkifat_kdvden.add(fatura_no)
+                        else:
+                            tevkifat_hesapsiz.add(fatura_no)
+                    fisler.append(sat(t_kod, 0, round(kdv - tevk, 2), f" (%{oran} KDV − tevkifat)", rol="tevkifat"))
+                else:
+                    fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
 
         # ek vergi (BSMV %5) — TTNET, faktoring karışık faturaları için
         if f["ek_vergi"] > 0:
@@ -2604,6 +2624,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         # sütunu listede yok) fark kaybolup fiş dengesiz çıkıyordu. Fark carinin geçmişteki
         # ek vergi hesabına (yoksa gider hesabına) yazılır ve uyarılır.
         yazilan = round(sum((x["borc"] if yon == "alis" else x["alacak"]) for x in fisler[fatura_bas:]), 2)
+        satis_net = isinstance(satis_net_oran, tuple)
+        if satis_net:
+            yazilan = round(yazilan + tevk, 2)     # KDV dahil karşılığı (tevkifat KDV satırından düşüldü)
         # Tevkifatlı faturada liste toplamı ya KDV dahil toplam ya da ödenecek tutardır
         # (entegratör listeleri/PDF: ödenecek). Denge KDV dahil toplamla kurulur.
         toplam_dahil = toplam
@@ -2623,8 +2646,8 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         # KDV tevkifatı:
         #  alış : KDV'nin tamamı 191'de (borç); tevkif edilen kısmı alıcı 2 No.lu beyanla
         #         öder -> 360 sorumlu KDV ALACAK; satıcıya (320) yalnız ödenecek tutar.
-        #  satış: KDV'nin tamamı 391'de (alacak); tevkif edilen kısmı alıcı öder ->
-        #         391 tevkifat hesabı BORÇ (hesaplanan KDV azalır); 120'ye ödenecek tutar.
+        #  satış: tevkifat KDV'den düşülür, kalan KDV 391 tevkifat hesabına (391.04.02) alacak
+        #         (yukarıda KDV satırında); 120'ye ödenecek tutar.
         cari_tutar = toplam_dahil
         if tevk > 0:
             tevk_kod = tevkifat_hesap_sec(yon)
@@ -2632,6 +2655,8 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 if not tevk_kod:
                     tevkifat_hesapsiz.add(fatura_no)
                 fisler.append(sat(tevk_kod, 0, tevk, " (KDV tevkifatı)", rol="tevkifat"))
+            elif satis_net:
+                pass        # tevkifat KDV satırından düşüldü, kalan KDV tevkifat hesabında
             else:
                 if not tevk_kod:
                     # ayrı tevkifat hesabı yok: en büyük KDV'li oranın 391 hesabı borçlanır (net hesaplanan KDV)
@@ -2674,8 +2699,8 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             uyarilar.append(f"{len(tevkifatli)} tevkifatlı fatura: KDV'nin tamamı 191'e borç, tevkif edilen kısım "
                             f"360 sorumlu KDV'ye alacak, satıcıya ödenecek tutar yazıldı: {_kisa_liste(tevkifatli, 4)}")
         else:
-            uyarilar.append(f"{len(tevkifatli)} tevkifatlı fatura: KDV'nin tamamı 391'e alacak, tevkif edilen kısım "
-                            f"tevkifat hesabına borç, müşteriye ödenecek tutar yazıldı: {_kisa_liste(tevkifatli, 4)}")
+            uyarilar.append(f"{len(tevkifatli)} tevkifatlı fatura: tevkifat KDV'den düşüldü, kalan KDV 391 tevkifat "
+                            f"hesabına alacak, müşteriye ödenecek tutar yazıldı: {_kisa_liste(tevkifatli, 4)}")
     if tevkifat_tahminli:
         uyarilar.append(f"{len(tevkifat_tahminli)} faturada tevkifat listede yok; liste toplamı KDV dahil tutardan "
                         f"tevkifat payı kadar az olduğu için fark tevkifat sayıldı — PDF'ten kontrol et: "
@@ -2689,8 +2714,8 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                         f"hesapla bırakıldı; bir satırı doğru hesaba çekersen diğerleri de öğrenilir: "
                         f"{_kisa_liste(sorted(tevkifat_hesapsiz), 4)}")
     if tevkifat_kdvden:
-        uyarilar.append(f"Mizanda ayrı 391 tevkifat hesabı yok: {len(tevkifat_kdvden)} faturada tevkifat, aynı 391 "
-                        f"KDV hesabının borcuna yazıldı (net hesaplanan KDV): {_kisa_liste(sorted(tevkifat_kdvden), 4)}")
+        uyarilar.append(f"Mizanda ayrı 391 tevkifat hesabı yok: {len(tevkifat_kdvden)} faturada tevkifat düşülmüş KDV "
+                        f"normal 391 KDV hesabına yazıldı: {_kisa_liste(sorted(tevkifat_kdvden), 4)}")
     if fark_yazilan:
         uyarilar.append(f"{len(fark_yazilan)} faturada liste toplamı kalemlerden fazlaydı (ÖİV/ÖTV gibi ek vergi "
                         f"sütunu olmayabilir); fark ayrı satıra yazıldı, kontrol et: {_kisa_liste(fark_yazilan, 4)}")
