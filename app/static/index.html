@@ -12,7 +12,7 @@
   header h1{margin:0;font-size:18px;white-space:nowrap}
   .firma-sel{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   select,input{padding:7px 9px;border:1px solid var(--kenar);border-radius:6px;font-size:14px;font-family:inherit}
-  .wrap{max-width:1100px;margin:16px auto;padding:0 16px}
+  .wrap{max-width:1440px;margin:16px auto;padding:0 16px}
   .card{background:#fff;border:1px solid #e7e1d5;border-radius:10px;padding:16px 18px;margin-bottom:16px;transition:box-shadow .2s}
   .card:hover{box-shadow:0 2px 12px rgba(0,0,0,.06)}
   .card h2{margin:0 0 12px;font-size:15px;color:var(--ana)}
@@ -1089,7 +1089,7 @@ function render(r){
   if(dz){
     h+='<datalist id="hesapDL">'+hesaplar.map(x=>`<option value="${x.kod}">${x.kod} — ${x.ad}</option>`).join('')+'</datalist>';
   }
-  h+=`<div style="max-height:60vh;overflow-y:auto;border:1px solid #d0d0d0;border-radius:4px"><table style="width:100%"><thead style="position:sticky;top:0;z-index:1"><tr>${dz?'<th><input type="checkbox" onchange="tumunuSec(this.checked)" title="Tümünü seç/kaldır"></th>':'<th style="width:24px"></th>'}<th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Evrak No</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
+  h+=`<div class="onizle-kutu" style="max-height:82vh;min-height:300px;resize:vertical;overflow-y:auto;border:1px solid #d0d0d0;border-radius:4px"><table style="width:100%"><thead style="position:sticky;top:0;z-index:1"><tr>${dz?'<th><input type="checkbox" onchange="tumunuSec(this.checked)" title="Tümünü seç/kaldır"></th>':'<th style="width:24px"></th>'}<th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Evrak No</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th>${dz?'<th></th>':''}</tr></thead><tbody>`;
   const ilkSatir=new Set(); { const g=new Set(); gosterilecek.forEach(x=>{ if(!g.has(x.fisno)){ g.add(x.fisno); ilkSatir.add(x._idx); } }); }
   h+=gosterilecek.map(s=>{
     const i=s._idx;
@@ -1120,7 +1120,7 @@ function render(r){
         </td>
       </tr>`;
     }
-    return `<tr class="${s.hesap?'':'warn'}${s.kontrol&&s.kontrol.length?' kontrol-satir':''}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'}${kontrolHTML(s)}${hesapAd(s.hesap)?`<div class="hesap-ad">${esc(hesapAd(s.hesap).slice(0,45))}</div>`:(s.hesap&&hesaplar.length?'<div class="hesap-ad yok">mizanda yok</div>':'')} ${s.kaynak?`<span class="kaynak ${s.kaynak}"${s.not?` title="${esc(s.not)}"`:''}>${KAYNAK_AD[s.kaynak]||s.kaynak}</span>`:''}${s.not?`<div class="gerekce">${esc(s.not)}</div>`:''}${s.belge?` <span class="kaynak belge-${s.belge}" title="${s.belge==='yz'?'Bu faturanın bir kısmı yapay zekâ ile okundu — kontrol et':'Bu faturanın bilgisi PDF\'ten geldi ya da tamamlandı'}">${s.belge==='yz'?'yapay zekâ':'PDF'}</span>`:''}</td><td style="font-size:11px;max-width:180px;word-break:break-all">${s.evrak_no||''}${ilkSatir.has(s._idx)?pdfLink(s):''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
+    return `<tr class="${s.hesap?'':'warn'}${s.kontrol&&s.kontrol.length?' kontrol-satir':''}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td style="white-space:nowrap">${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'}${kontrolHTML(s)}${hesapAd(s.hesap)?`<div class="hesap-ad">${esc(hesapAd(s.hesap).slice(0,45))}</div>`:(s.hesap&&hesaplar.length?'<div class="hesap-ad yok">mizanda yok</div>':'')} ${s.kaynak?`<span class="kaynak ${s.kaynak}"${s.not?` title="${esc(s.not)}"`:''}>${KAYNAK_AD[s.kaynak]||s.kaynak}</span>`:''}${s.not?`<div class="gerekce">${esc(s.not)}</div>`:''}${s.belge?` <span class="kaynak belge-${s.belge}" title="${s.belge==='yz'?'Bu faturanın bir kısmı yapay zekâ ile okundu — kontrol et':'Bu faturanın bilgisi PDF\'ten geldi ya da tamamlandı'}">${s.belge==='yz'?'yapay zekâ':'PDF'}</span>`:''}</td><td style="font-size:11.5px;white-space:nowrap">${s.evrak_no||''}${ilkSatir.has(s._idx)?pdfLink(s):''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
   }).join('');
   h+=`</tbody><tfoot style="position:sticky;bottom:0;z-index:1"><tr class="tot"><td colspan="5" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<ul class="uyari uyari-liste">'+r.uyarilar.slice(0,12).map(u=>`<li>${esc(u)}</li>`).join('')+(r.uyarilar.length>12?`<li>… ${r.uyarilar.length-12} uyarı daha</li>`:'')+'</ul>';
