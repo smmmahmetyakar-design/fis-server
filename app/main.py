@@ -671,29 +671,33 @@ def onerilen_fisno(kod: str, tip: str):
     return {"son_fis_no": son, "onerilen": son + 1, "gecmis_satir": len(g.get("satirlar", []))}
 
 
-def _sunucu_fatura_pdf_al(d: Path, tum_ham: list, yon: str) -> str:
+def _sunucu_fatura_pdf_al(d: Path, tum_ham: list, yon: str) -> dict:
     """Listedeki fatura numaralarıyla eşleşen PDF'leri firmanın sunucu klasöründen
     (fatura/ altı) bulup fatura PDF'leri alanına kopyalar. Böylece listede olmayan
     KDV dağılımı PDF'ten tamamlanır ve önizlemede fatura açılabilir.
     Yalnızca listedeki numaralar alınır (klasördeki her PDF fişe eklenmesin)."""
     kp = _firma_klasoru(d)
+    sonuc = {"bagli": bool(kp), "klasor": kp.name if kp else "", "mesaj": "", "alinan": 0,
+             "bulunamayan": [], "dizin": {}}
     if not kp:
-        return ""
+        return sonuc
     metin = json.dumps(tum_ham, ensure_ascii=False, default=str).upper()
     nolar = set(sk.FATURA_NO_RE.findall(metin))
     if not nolar:
-        return ""
+        return sonuc
     k = fatura_pdf.klasor(d, yon)
     zaten = {f.get("fatura_no") for f in fatura_pdf.faturalar(d, yon)[0]}
     eksik = nolar - zaten
+    dizin, sonuc["dizin"] = sk.fatura_pdf_dizini(kp, d / "fatura" / "_sunucu_pdf_dizini.json")
+    sonuc["dizin"]["eslesen_numara"] = len(nolar & set(dizin))
     if not eksik:
-        return ""
-    dizin = sk.fatura_pdf_dizini(kp, d / "fatura" / "_sunucu_pdf_dizini.json")
+        return sonuc
     sunucudan = set(_read_json(k / "_sunucudan.json", []))
     alinan = []
     for no in sorted(eksik):
         rel = dizin.get(no)
         if not rel:
+            sonuc["bulunamayan"].append(no)
             continue
         src = sk.guvenli_dosya(kp, rel)
         hedef = k / src.name
@@ -704,9 +708,13 @@ def _sunucu_fatura_pdf_al(d: Path, tum_ham: list, yon: str) -> str:
         alinan.append(no)
         sunucudan.add(hedef.name)
     _write_json(k / "_sunucudan.json", sorted(sunucudan))
-    if not alinan:
-        return ""
-    return f"Sunucu klasöründen {len(alinan)} fatura PDF'i eşleşip alındı (KDV dağılımı ve fatura görüntüsü için)"
+    sonuc["alinan"] = len(alinan)
+    if alinan:
+        sonuc["mesaj"] = f"Sunucu klasöründen {len(alinan)} fatura PDF'i eşleşip alındı (KDV dağılımı ve fatura görüntüsü için)"
+    if sonuc["dizin"].get("ocr_bekleyen"):
+        sonuc["mesaj"] = (sonuc["mesaj"] + " · " if sonuc["mesaj"] else "") + \
+            f"sunucu klasöründe {sonuc['dizin']['ocr_bekleyen']} taranmış PDF okunuyor (OCR) — birkaç dakika sonra tekrar deneyin"
+    return sonuc
 
 
 class KarsilastirBody(BaseModel):
@@ -729,21 +737,40 @@ def karsilastir(kod: str, yon: str, body: KarsilastirBody):
         if p.exists():
             tum_ham.append({"dosya": fn, **belge_oku(p, fn)})
     try:
-        _sunucu_fatura_pdf_al(d, tum_ham, yon)
-    except Exception:
-        pass
+        sunucu = _sunucu_fatura_pdf_al(d, tum_ham, yon)
+    except Exception as e:
+        sunucu = {"hata": str(e), "dizin": {}}
     pdfler, bekleyen = fatura_pdf.faturalar(d, yon)
     sunucudan = set(_read_json(fatura_pdf.klasor(d, yon) / "_sunucudan.json", []))
     for pf in pdfler:
         pf["pdf_yer"] = "alan"
         if pf.get("dosya") in sunucudan:
             pf["sunucudan"] = True
-    liste = isleyici._elogo_fatura_satirlari(copy.deepcopy(tum_ham), yon)
+    teshis = {}
+    liste = isleyici._elogo_fatura_satirlari(copy.deepcopy(tum_ham), yon, teshis=teshis)
     ek_pdf = isleyici._pdf_gercek_faturalar(copy.deepcopy(tum_ham), yon) if liste else []
     sonuc = isleyici.liste_pdf_karsilastir(liste, pdfler + ek_pdf)
     sonuc["liste_var"] = bool(liste)
     sonuc["pdf_sayisi"] = len(pdfler) + len(ek_pdf)
     sonuc["yz_bekleyen"] = bekleyen
+    # neden boş kaldığını anlatmak için: listede hangi sütunlar tanındı, PDF'ler nereden aranıyor
+    kdv_anahtar = ("kdv_1", "kdv_8", "kdv_10", "kdv_18", "kdv_20", "mat_1", "mat_8", "mat_10",
+                   "mat_18", "mat_20", "kdv_top", "mat_toplam")
+    for t in teshis.get("tablolar", []):
+        t["kdv_sutunu_var"] = any(k in t["taninan"] for k in kdv_anahtar)
+    kp = _firma_klasoru(d)
+    sonuc["teshis"] = {
+        "tablolar": teshis.get("tablolar", []),
+        "klasor": kp.name if kp else "",
+        "klasor_fatura_var": bool(kp and (kp / "fatura").is_dir()),
+        "klasor_pdf_sayisi": (sunucu.get("dizin") or {}).get("taranan", 0),
+        "klasor_numarali_pdf": (sunucu.get("dizin") or {}).get("numarali", 0),
+        "klasor_ocr_bekleyen": (sunucu.get("dizin") or {}).get("ocr_bekleyen", 0),
+        "klasor_numarasiz": (sunucu.get("dizin") or {}).get("numarasiz", [])[:20],
+        "klasor_eslesen": (sunucu.get("dizin") or {}).get("eslesen_numara", 0),
+        "sunucu_mesaj": sunucu.get("mesaj") or sunucu.get("hata", ""),
+        "alan_pdf_sayisi": len(pdfler),
+    }
     return sonuc
 
 
@@ -786,7 +813,7 @@ def isle(kod: str, tip: str, body: IsleBody):
     sunucu_pdf_not = ""
     if tip == "fatura" and body.yon in fatura_pdf.YONLER and tum_ham:
         try:
-            sunucu_pdf_not = _sunucu_fatura_pdf_al(d, tum_ham, body.yon)
+            sunucu_pdf_not = _sunucu_fatura_pdf_al(d, tum_ham, body.yon).get("mesaj", "")
         except Exception as e:
             sunucu_pdf_not = f"Sunucu klasöründe fatura PDF'leri aranamadı: {e}"
     if tip == "fatura" and body.yon in fatura_pdf.YONLER:

@@ -552,7 +552,7 @@ def isle_banka(hamlar, km, fis0):
 
 
 # ----------------------------------------------------------------- FATURA
-def _elogo_fatura_satirlari(hamlar, yon="alis"):
+def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
     """
     eLogo entegratör Excel formatındaki fatura listesini okur.
     Sütun anahtarları (Türkçe duyarsız):
@@ -695,6 +695,14 @@ def _elogo_fatura_satirlari(hamlar, yon="alis"):
                     bas_idx = i; break
             if bas_idx is None:
                 continue
+            if teshis is not None:
+                # karşılaştırma penceresi için: listenin başlıkları ve hangilerinin tanındığı
+                teshis.setdefault("tablolar", []).append({
+                    "dosya": h.get("dosya", ""),
+                    "basliklar": [str(c).replace("\n", " ").strip() for c in tablo[bas_idx] if c not in (None, "")],
+                    "taninan": {k: str(tablo[bas_idx][v]).replace("\n", " ").strip()
+                                for k, v in sut.items() if not k.startswith("_") and v < len(tablo[bas_idx])},
+                })
 
             def g(row, key):
                 j = sut.get(key)
@@ -1903,23 +1911,37 @@ def liste_pdf_karsilastir(liste: list, pdfler: list, tolerans: float = 0.05) -> 
             "durum": "listede_yok", "farklar": [],
         })
 
-    # oran bazında toplamlar: yalnız iki tarafı da okunabilen faturalar (karşılaştırılabilir küme)
-    toplam = {o: {"liste": [0.0, 0.0], "pdf": [0.0, 0.0]} for o in [str(x) for x in KARSILASTIRMA_ORANLARI] + ["diger"]}
+    # oran bazında toplamlar: "ortak" = iki tarafı da okunabilen faturalar (karşılaştırılabilir küme);
+    # "tum" = her taraf kendi okunabilen faturaları (biri eksikse fark anlamlı değildir)
+    anahtarlar = [str(x) for x in KARSILASTIRMA_ORANLARI] + ["diger"]
+    def _bos():
+        return {o: {"liste": [0.0, 0.0], "pdf": [0.0, 0.0]} for o in anahtarlar}
+    toplam, tum = _bos(), _bos()
+    ortak_sayi = liste_sayi = pdf_sayi = 0
     for r in satirlar:
+        liste_sayi += bool(r["liste"]); pdf_sayi += bool(r["pdf"])
+        for taraf in ("liste", "pdf"):
+            if r[taraf]:
+                for o in anahtarlar:
+                    for i in (0, 1):
+                        tum[o][taraf][i] += r[taraf][o][i]
         if r["liste"] and r["pdf"]:
-            for o in toplam:
+            ortak_sayi += 1
+            for o in anahtarlar:
                 for i in (0, 1):
                     toplam[o]["liste"][i] += r["liste"][o][i]
                     toplam[o]["pdf"][i] += r["pdf"][o][i]
-    for o in toplam:
-        for t in ("liste", "pdf"):
-            toplam[o][t] = [round(x, 2) for x in toplam[o][t]]
+    for t_ in (toplam, tum):
+        for o in t_:
+            for taraf in ("liste", "pdf"):
+                t_[o][taraf] = [round(x, 2) for x in t_[o][taraf]]
     sayilar = {}
     for r in satirlar:
         sayilar[r["durum"]] = sayilar.get(r["durum"], 0) + 1
     sira = {"farkli": 0, "liste_kdv_yok": 1, "pdf_eksik": 2, "pdf_yok": 3, "listede_yok": 4, "uyumlu": 5}
     satirlar.sort(key=lambda r: (sira.get(r["durum"], 9), r["tarih"] or "", r["fatura_no"]))
-    return {"satirlar": satirlar, "toplam": toplam, "sayilar": sayilar}
+    return {"satirlar": satirlar, "toplam": toplam, "toplam_tum": tum, "sayilar": sayilar,
+            "ortak_sayi": ortak_sayi, "liste_kdv_sayi": liste_sayi, "pdf_kdv_sayi": pdf_sayi}
 
 
 def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,

@@ -19,7 +19,7 @@ from pathlib import Path
 from app import yapay_zeka
 from app.kurallar import norm
 
-OKUYUCU_SURUM = 2   # 2: fatura kalem açıklamaları (gider seçimi için)
+OKUYUCU_SURUM = 3   # 2: fatura kalem açıklamaları (gider seçimi için) · 3: toplu PDF'i faturalara bölme
 YONLER = ("alis", "satis")
 
 _kilit = threading.RLock()
@@ -98,9 +98,18 @@ def _sayfalar(p: Path) -> list:
                         for tb in (s.extract_tables() or [])]
             out.append({"ham_metin": t, "tablolar": tablolar})
     if not any(s["ham_metin"].strip() for s in out):
-        from app.belge_oku import pdf_ocr
-        o = pdf_ocr(p)
-        return [{"ham_metin": o.get("ham_metin", ""), "tablolar": [], "ocr": True}]
+        # taranmış PDF: sayfa sayfa OCR (toplu taranmış PDF'te her sayfa ayrı fatura olabilir)
+        try:
+            import pytesseract
+            from app.belge_oku import _ocr_lang
+            with pdfplumber.open(p) as pdf:
+                return [{"ham_metin": pytesseract.image_to_string(s.to_image(resolution=300).original,
+                                                                 lang=_ocr_lang()),
+                         "tablolar": [], "ocr": True} for s in pdf.pages]
+        except Exception:
+            from app.belge_oku import pdf_ocr
+            o = pdf_ocr(p)
+            return [{"ham_metin": o.get("ham_metin", ""), "tablolar": [], "ocr": True}]
     return out
 
 
@@ -219,6 +228,35 @@ def _dosya_oku(p: Path, yon: str) -> tuple:
             for i, f in enumerate(tek_tek):
                 f["sayfa"] = i + 1
             return tek_tek, [s["ham_metin"] for s in sayfalar]
+        # Toplu PDF (ör. tarayıcıdan tek dosyada gelen faturalar), bazı faturalar birden
+        # çok sayfa: fatura numarası değişen sayfada yeni fatura başlar, numarasız sayfa
+        # önceki faturanın devamıdır.
+        from app.sunucu_klasor import fatura_nolari
+        gruplar = []
+        for i, s_ in enumerate(sayfalar):
+            f_ = tek_tek[i]
+            no = (f_ or {}).get("fatura_no") or next(iter(fatura_nolari(s_["ham_metin"], ocr=bool(s_.get("ocr")))), "")
+            if no and (not gruplar or gruplar[-1]["no"] != no):
+                gruplar.append({"no": no, "ilk": i, "sayfalar": [s_]})
+            elif gruplar:
+                gruplar[-1]["sayfalar"].append(s_)
+            else:
+                gruplar.append({"no": "", "ilk": i, "sayfalar": [s_]})
+        numarali = [g for g in gruplar if g["no"]]
+        if len(numarali) > 1 and len({g["no"] for g in numarali}) == len(numarali):
+            out = []
+            for g in gruplar:
+                birlesik = {"ham_metin": "\n".join(x["ham_metin"] for x in g["sayfalar"]),
+                            "tablolar": [t for x in g["sayfalar"] for t in x["tablolar"]]}
+                f = _sayfa_oku(birlesik, p.name, yon)
+                if f:
+                    if not f.get("fatura_no") and g["no"]:
+                        f["fatura_no"] = g["no"]
+                        f["eksik"] = [e for e in f.get("eksik", []) if e != "fatura_no"]
+                    f["sayfa"] = g["ilk"] + 1
+                    out.append(f)
+            if len(out) > 1:
+                return out, [s_["ham_metin"] for s_ in sayfalar]
     birlesik = {"ham_metin": "\n".join(s["ham_metin"] for s in sayfalar),
                 "tablolar": [t for s in sayfalar for t in s["tablolar"]]}
     f = _sayfa_oku(birlesik, p.name, yon)

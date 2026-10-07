@@ -818,6 +818,25 @@ async function karsilastirAc(){
     karsVeri=await r.json(); karsCiz();
   }catch(e){ $('karsIcerik').innerHTML=`<div class="uyari">Bağlantı hatası: ${esc(e.message)}</div>`; }
 }
+function karsTeshis(v){
+  const t=v.teshis||{}; let parca=[];
+  const listeKdvYok=(v.sayilar.liste_kdv_yok||0)+(v.sayilar.pdf_yok||0)>0 && v.liste_kdv_sayi===0;
+  (t.tablolar||[]).forEach(tb=>{
+    const tan=Object.entries(tb.taninan||{}).map(([k,b])=>`<b>${esc(b)}</b>`).join(', ');
+    parca.push(`<div><b>${esc(tb.dosya)}</b>: tanınan sütunlar ${tan||'—'}. ${tb.kdv_sutunu_var?'KDV sütunu var.':'<span style="color:#b0322a">KDV / matrah sütunu bulunamadı</span> — listede yalnız toplam var ya da başlık farklı yazılmış.'}
+      <details><summary>listedeki tüm başlıklar (${tb.basliklar.length})</summary>${tb.basliklar.map(esc).join(' · ')}</details></div>`);
+  });
+  if(!(t.tablolar||[]).length) parca.push('<div>Bu sayfada fatura listesi yüklenmedi (2. bölüm).</div>');
+  const pdfYok=v.sayilar.pdf_yok||0;
+  if(pdfYok) parca.push(`<div>${pdfYok} faturanın PDF'i yok. "Fatura PDF'leri" alanında ${t.alan_pdf_sayisi||0} fatura var. `+
+    (t.klasor?(t.klasor_fatura_var?`Sunucu klasöründe (${esc(t.klasor)}/fatura) ${t.klasor_pdf_sayisi} PDF tarandı, ${t.klasor_numarali_pdf}'inde fatura numarası okundu; listedeki numaralardan ${t.klasor_eslesen} tanesi orada bulundu.`+
+        (t.klasor_ocr_bekleyen?` <b>${t.klasor_ocr_bekleyen} taranmış (resim) PDF arka planda OCR ile okunuyor — birkaç dakika sonra pencereyi yeniden açın.</b>`:'')+
+        ((t.klasor_numarasiz||[]).length?`<details><summary>numarası okunamayan PDF'ler (${t.klasor_numarasiz.length})</summary>${t.klasor_numarasiz.map(esc).join('<br>')}</details>`:'')
+        :`Sunucu klasöründe (${esc(t.klasor)}) <b>fatura</b> alt klasörü yok.`)
+      :'Firma bir sunucu klasörüne bağlı değil; PDF\'leri "Fatura PDF\'leri" alanına yükleyin.')+'</div>');
+  if(!parca.length || (!listeKdvYok && !pdfYok && (t.tablolar||[]).every(x=>x.kdv_sutunu_var))) return '';
+  return `<div class="uyari" style="font-size:12.5px;margin-bottom:10px;line-height:1.45">${parca.join('')}</div>`;
+}
 function karsCiz(){
   const v=karsVeri; if(!v) return;
   if(!v.satirlar.length){ $('karsIcerik').innerHTML=`<div class="hint">${v.liste_var?'Listede fatura bulunamadı.':'Bu sayfada fatura listesi yüklenmedi'} ${v.pdf_sayisi?'':'ve fatura PDF\'i yok'}. 2. bölümden listeyi, "Fatura PDF'leri"ne PDF'leri yükleyin.</div>`; return; }
@@ -825,13 +844,15 @@ function karsCiz(){
   const oAd=o=>o==='diger'?'%0 / diğer':'%'+o;
   let h='<div class="kars-ozet">'+Object.entries(v.sayilar).map(([d,n])=>`<span class="d-${d}">${KARS_DURUM[d]||d}: ${n}</span>`).join('')+'</div>';
   if(v.yz_bekleyen) h+=`<div class="hint">${v.yz_bekleyen} PDF hâlâ okunuyor.</div>`;
-  // oran bazında toplam (iki tarafı da okunan faturalar)
-  h+='<table class="kars" style="margin-bottom:12px"><thead><tr><th class="l">Oran (iki tarafı da okunan faturalar)</th><th>Liste matrah</th><th>PDF matrah</th><th>Fark</th><th>Liste KDV</th><th>PDF KDV</th><th>Fark</th></tr></thead><tbody>';
+  h+=karsTeshis(v);
+  const ortak=v.ortak_sayi>0, T=ortak?v.toplam:v.toplam_tum;
+  h+=`<table class="kars" style="margin-bottom:12px"><thead><tr><th class="l">${ortak?`Oran — iki tarafı da okunan ${v.ortak_sayi} fatura`:`Oran — liste ${v.liste_kdv_sayi} fatura · PDF ${v.pdf_kdv_sayi} fatura (ortak yok, fark anlamsız)`}</th><th>Liste matrah</th><th>PDF matrah</th><th>Fark</th><th>Liste KDV</th><th>PDF KDV</th><th>Fark</th></tr></thead><tbody>`;
   let gt=[0,0,0,0];
-  oranlar.forEach(o=>{ const t=v.toplam[o]; const fm=t.liste[0]-t.pdf[0], fk=t.liste[1]-t.pdf[1];
+  oranlar.forEach(o=>{ const t=T[o]; const fm=t.liste[0]-t.pdf[0], fk=t.liste[1]-t.pdf[1];
     gt[0]+=t.liste[0]; gt[1]+=t.pdf[0]; gt[2]+=t.liste[1]; gt[3]+=t.pdf[1];
-    h+=`<tr><td class="l">${oAd(o)}</td><td>${nf(t.liste[0])}</td><td>${nf(t.pdf[0])}</td><td class="${Math.abs(fm)>0.05?'fark':''}">${nf(fm)}</td><td>${nf(t.liste[1])}</td><td>${nf(t.pdf[1])}</td><td class="${Math.abs(fk)>0.05?'fark':''}">${nf(fk)}</td></tr>`; });
-  h+=`<tr class="toplam"><td class="l">Toplam</td><td>${nf(gt[0])}</td><td>${nf(gt[1])}</td><td class="${Math.abs(gt[0]-gt[1])>0.05?'fark':''}">${nf(gt[0]-gt[1])}</td><td>${nf(gt[2])}</td><td>${nf(gt[3])}</td><td class="${Math.abs(gt[2]-gt[3])>0.05?'fark':''}">${nf(gt[2]-gt[3])}</td></tr></tbody></table>`;
+    const fc=x=>ortak&&Math.abs(x)>0.05?'fark':'';
+    h+=`<tr><td class="l">${oAd(o)}</td><td>${nf(t.liste[0])}</td><td>${nf(t.pdf[0])}</td><td class="${fc(fm)}">${ortak?nf(fm):'—'}</td><td>${nf(t.liste[1])}</td><td>${nf(t.pdf[1])}</td><td class="${fc(fk)}">${ortak?nf(fk):'—'}</td></tr>`; });
+  h+=`<tr class="toplam"><td class="l">Toplam</td><td>${nf(gt[0])}</td><td>${nf(gt[1])}</td><td class="${ortak&&Math.abs(gt[0]-gt[1])>0.05?'fark':''}">${ortak?nf(gt[0]-gt[1]):'—'}</td><td>${nf(gt[2])}</td><td>${nf(gt[3])}</td><td class="${ortak&&Math.abs(gt[2]-gt[3])>0.05?'fark':''}">${ortak?nf(gt[2]-gt[3]):'—'}</td></tr></tbody></table>`;
   const liste=$('karsSadeceFark').checked?v.satirlar.filter(r=>r.durum!=='uyumlu'):v.satirlar;
   if(!liste.length){ $('karsIcerik').innerHTML=h+'<div class="hint">Tüm faturalarda liste ve PDF tutarları uyumlu. ✓</div>'; return; }
   h+=`<div style="max-height:52vh;overflow:auto"><table class="kars"><thead><tr><th class="l">Fatura</th>${oranlar.map(o=>`<th>${oAd(o)}<div class="hint" style="font-weight:normal">matrah / KDV</div></th>`).join('')}<th>Toplam</th><th class="l">Durum</th></tr></thead><tbody>`;

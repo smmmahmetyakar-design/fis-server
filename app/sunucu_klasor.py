@@ -185,54 +185,145 @@ def excel_xlsx_bytes(data: bytes) -> bytes:
 
 
 # ------------------------------------------------------------------ fatura PDF'leri
+import threading
+
 FATURA_NO_RE = re.compile(r"[A-Z0-9]{3}20\d{2}\d{9}")
+_OCR_ADAY_RE = re.compile(r"[A-Z0-9]{3}[2Z][0O][0-9OILSB]{11}")
+_EN_FAZLA_SAYFA = 300
 
 
-def _pdf_fatura_nolari(p: Path) -> list:
-    """PDF'in ilk iki sayfasının METNİNDEKİ e-fatura numaraları (OCR yok — hızlı)."""
+def fatura_nolari(metin: str, ocr: bool = False) -> list:
+    """Metindeki e-fatura / e-arşiv numaraları (GIB2026000000100 gibi).
+    OCR metninde boşluklar ve O/0, I/1 karışıklıkları da düzeltilir."""
+    up = (metin or "").upper()
+    bulunan = set(FATURA_NO_RE.findall(up))
+    if ocr:
+        tablo = str.maketrans({"O": "0", "I": "1", "L": "1", "S": "5", "B": "8", "Z": "2"})
+        for satir in up.splitlines():
+            for aday in _OCR_ADAY_RE.findall(satir.replace(" ", "")):
+                duz = aday[:3] + aday[3:].translate(tablo)
+                if FATURA_NO_RE.fullmatch(duz):
+                    bulunan.add(duz)
+    return sorted(bulunan)
+
+
+def _pdf_metin_nolari(p: Path) -> tuple:
+    """PDF metnindeki (tüm sayfalar) fatura numaraları. Döner: (nolar, metin_var)."""
     try:
         import pdfplumber
         with pdfplumber.open(p) as pdf:
-            metin = "\n".join((s.extract_text() or "") for s in pdf.pages[:2])
+            metin = "\n".join((s.extract_text() or "") for s in pdf.pages[:_EN_FAZLA_SAYFA])
     except Exception:
-        return []
-    return sorted(set(FATURA_NO_RE.findall(metin.upper())))
+        return [], False
+    return fatura_nolari(metin), bool(metin.strip())
 
 
-def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path) -> dict:
-    """Firma klasöründeki fatura PDF'leri: fatura no -> göreli yol.
-    Önce dosya adındaki numara, yoksa PDF metnindeki numaralar. Metin okuma sonucu
-    (yol + değişiklik zamanı) önbelleğe yazılır; her İşle'de yeniden okunmaz.
-    'cikan' (araç çıktıları) taranmaz."""
+def _pdf_ocr_nolari(p: Path) -> list:
+    """Taranmış PDF: sayfaları OCR ile okuyup fatura numaralarını bulur (yavaş)."""
+    import pdfplumber, pytesseract
+    nolar = set()
+    with pdfplumber.open(p) as pdf:
+        for s in pdf.pages[:_EN_FAZLA_SAYFA]:
+            im = s.to_image(resolution=200).original
+            nolar.update(fatura_nolari(pytesseract.image_to_string(im), ocr=True))
+    return sorted(nolar)
+
+
+_ocr_kilit = threading.Lock()
+_ocr_sirada: set = set()
+
+
+def _ocr_arka_plan(isler: list, onbellek_yolu: Path):
+    """[(p, rel, mtime)] — sırayla OCR'lar, sonucu önbelleğe yazar."""
     import json
-    try:
-        onb = json.loads(onbellek_yolu.read_text(encoding="utf-8"))
-    except Exception:
-        onb = {}
-    yeni_onb, dizin = {}, {}
+    for p, rel, mt in isler:
+        try:
+            nolar = _pdf_ocr_nolari(p)
+        except Exception:
+            nolar = []
+        with _ocr_kilit:
+            try:
+                onb = json.loads(onbellek_yolu.read_text(encoding="utf-8"))
+            except Exception:
+                onb = {}
+            onb[rel] = [mt, nolar, "ocr"]
+            try:
+                onbellek_yolu.write_text(json.dumps(onb, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
+            _ocr_sirada.discard(str(p))
+
+
+def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path) -> tuple:
+    """Firma klasöründeki fatura PDF'leri: fatura no -> göreli yol.
+    Dosya adındaki ve PDF metnindeki (tüm sayfalar — taranmış toplu PDF'te her sayfa
+    ayrı fatura olabilir) numaralar. Metni olmayan (taranmış) PDF'ler arka planda OCR'lanır.
+    Sonuç (yol + değişiklik zamanı) önbelleğe yazılır; her seferinde yeniden okunmaz.
+    'cikan' (araç çıktıları) taranmaz.
+    Döner: (dizin, bilgi) — bilgi: taranan, numarali, ocr_bekleyen, numarasiz (dosya listesi)"""
+    import json
+    with _ocr_kilit:
+        try:
+            onb = json.loads(onbellek_yolu.read_text(encoding="utf-8"))
+        except Exception:
+            onb = {}
+    dizin, bilgi = {}, {"taranan": 0, "numarali": 0, "ocr_bekleyen": 0, "numarasiz": [], "klasor": ""}
     kok = klasor_path / "fatura"
     if not kok.is_dir():
-        return {}
+        bilgi["klasor"] = "yok"
+        return {}, bilgi
+    yeni_onb, ocr_isleri = {}, []
     for p in sorted(kok.rglob("*")):
         if not p.is_file() or p.suffix.lower() != ".pdf" or p.name.startswith((".", "~$")):
             continue
-        rel = p.relative_to(klasor_path).as_posix()
         if "cikan" in p.relative_to(kok).parts:
             continue
+        rel = p.relative_to(klasor_path).as_posix()
         mt = p.stat().st_mtime
+        bilgi["taranan"] += 1
         adda = FATURA_NO_RE.findall(norm(p.stem).replace(" ", ""))
-        if adda:
-            nolar = adda
-        elif rel in onb and onb[rel][0] == mt:
-            nolar = onb[rel][1]
+        kayit = onb.get(rel)
+        if kayit and kayit[0] == mt and kayit[1] is not None:
+            nolar = kayit[1]
+            yeni_onb[rel] = kayit
         else:
-            nolar = _pdf_fatura_nolari(p)
-        yeni_onb[rel] = [mt, nolar]
+            nolar, metin_var = _pdf_metin_nolari(p)
+            if not nolar and not metin_var:
+                # taranmış PDF — OCR arka planda; şimdilik yalnız dosya adındaki numara
+                yeni_onb[rel] = [mt, None]
+                if str(p) not in _ocr_sirada:
+                    _ocr_sirada.add(str(p))
+                    ocr_isleri.append((p, rel, mt))
+                bilgi["ocr_bekleyen"] += 1
+                nolar = []
+            else:
+                yeni_onb[rel] = [mt, nolar]
+        nolar = sorted(set(nolar) | set(adda))
+        if nolar:
+            bilgi["numarali"] += 1
+        elif str(p) not in _ocr_sirada:
+            bilgi["numarasiz"].append(rel)
         for n in nolar:
             dizin.setdefault(n, rel)
-    try:
-        onbellek_yolu.parent.mkdir(parents=True, exist_ok=True)
-        onbellek_yolu.write_text(json.dumps(yeni_onb, ensure_ascii=False), encoding="utf-8")
-    except Exception:
-        pass
-    return dizin
+    with _ocr_kilit:
+        # bu arada biten OCR sonuçları ezilmesin
+        try:
+            simdiki = json.loads(onbellek_yolu.read_text(encoding="utf-8"))
+        except Exception:
+            simdiki = {}
+        for rel, x in yeni_onb.items():
+            y = simdiki.get(rel)
+            if x[1] is None and y and y[0] == x[0] and y[1] is not None:
+                yeni_onb[rel] = y
+                for n in y[1]:
+                    dizin.setdefault(n, rel)
+        bilgi["ocr_bekleyen"] = sum(1 for x in yeni_onb.values() if x[1] is None)
+        try:
+            onbellek_yolu.parent.mkdir(parents=True, exist_ok=True)
+            onbellek_yolu.write_text(json.dumps(yeni_onb, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    if ocr_isleri:
+        threading.Thread(target=_ocr_arka_plan, args=(ocr_isleri, onbellek_yolu), daemon=True,
+                         name="pdf-ocr-dizin").start()
+    return dizin, bilgi
