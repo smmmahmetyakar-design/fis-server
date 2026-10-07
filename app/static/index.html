@@ -184,19 +184,6 @@
         <div class="hint" style="margin-top:4px">Tüm hesapların muavin defteri de olur (hesap kodları başlıktan okunur, aynı fatura ikinci kez gelirse uyarır). Sunucu klasöründen gelen liste tüm sekmelerde kullanılır. Bir sekmeye elle yüklediğin liste daha yeniyse o sekmede onun yerine geçer.</div>
       </div>
     </div>
-    <div class="flex" style="margin-top:12px">
-      <div>
-        <label>Geçmiş Fiş PDF — fatura eşleştirmesi için yevmiye defteri PDF'i</label>
-        <input type="file" id="gecmisFisPdfFile" accept=".pdf">
-        <button class="btn btn-ana" onclick="gecmisFisPdfYukle()">Yükle</button>
-        <button class="btn btn-klasor" onclick="klasordenSec('gecmis-fis-pdf')" title="Firmanın sunucu klasöründeki PDF'lerden seç">📁 Klasörden seç</button>
-        <button class="btn btn-sunucu" onclick="sunucudanSec('gecmis-fis-pdf')" title="Araçtaki başka bir firmanın PDF'ini kopyala">Başka firmadan</button>
-        <span id="gecmisFisPdfPill" class="pill off">PDF yok</span>
-        <button class="btn btn-x" id="gecmisFisPdfSilBtn" onclick="gecmisFisPdfSil()" style="display:none;font-size:11px;padding:2px 8px" title="PDF'i sil">🗑</button>
-        <div id="gecmisFisPdfKaynak" class="kaynak-satir"></div>
-        <div class="hint" style="margin-top:4px">Yevmiye defteri PDF formatında. Fatura hesap eşleştirmesi için ek referans kaynağı.</div>
-      </div>
-    </div>
     <div id="yanlisYer" class="yanlis-yer" style="display:none"></div>
   </div>
 
@@ -357,7 +344,7 @@ function trTarih(iso){
   const p=n=>String(n).padStart(2,'0');
   return `${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
-const TUR_ADI={'mizan':'mizan','fis-listesi':'fiş listesi','gecmis-fis-pdf':'geçmiş fiş PDF'};
+const TUR_ADI={'mizan':'mizan','fis-listesi':'fiş listesi'};
 
 // Sunucudaki firma klasörleri (/srv/veri/firmalar)
 let klasorBilgi={erisim:false,klasorler:[]};
@@ -507,7 +494,7 @@ async function firmaSil(){
     $('onizle').innerHTML=''; $('belgeListe').innerHTML=''; $('ciktilar').textContent='—';
     $('mizanPill').className='pill off'; $('mizanPill').textContent='mizan yok';
     $('fisListesiPill').className='pill off'; $('fisListesiPill').textContent='fiş listesi yok';
-    ['mizanKaynak','fisListesiKaynak','gecmisFisPdfKaynak','klasorSatir'].forEach(id=>$(id).innerHTML='');
+    ['mizanKaynak','fisListesiKaynak','klasorSatir'].forEach(id=>$(id).innerHTML='');
     $('klasorSatir').className=''; yanlisYer=[]; yanlisYerCiz();
   }catch(e){ toast('Silme hatası: '+e.message,false); }
 }
@@ -539,11 +526,6 @@ async function firmaDurum(){
     fk==='ortak' ? kaynakMetni(kaynak['fis-listesi'])+' <span class="hint">(tüm sekmeler)</span>' :
     fk==='sekme' ? kaynakMetni(kaynak['fis-listesi:'+apiTip()]||{tur:'elle',dosya:'',zaman:''})+' <span class="hint">(yalnızca bu sekme)</span>' :
     fk==='eski'  ? 'Eski kural dosyasından (kural.xlsx)' : '';
-  // geçmiş fiş PDF durumu
-  const gfp=$('gecmisFisPdfPill'), gfpBtn=$('gecmisFisPdfSilBtn');
-  if(d.gecmis_fis_pdf){ gfp.className='pill'; gfp.textContent='PDF yüklü'; gfpBtn.style.display='inline-block'; }
-  else{ gfp.className='pill off'; gfp.textContent='PDF yok'; gfpBtn.style.display='none'; }
-  $('gecmisFisPdfKaynak').innerHTML=d.gecmis_fis_pdf?kaynakMetni(kaynak['gecmis-fis-pdf']):'';
   // belge listesi
   const bl=$('belgeListe');
   if(t.belgeler&&t.belgeler.length){
@@ -776,25 +758,6 @@ async function klasordanAl(tur, yol){
     if(tur==='fis-listesi') fisListesiBekle(); else firmaDurum();
     loadHesaplar();
   }catch(e){ hideLoading(); toast('Bağlantı hatası: '+e.message,false); }
-}
-
-async function gecmisFisPdfYukle(){
-  if(!firmaKod){alert('Önce firma seç');return;}
-  const f=$('gecmisFisPdfFile').files[0]; if(!f){alert('PDF dosya seç');return;}
-  const fd=new FormData(); fd.append('file',f);
-  $('gecmisFisPdfPill').className='pill'; $('gecmisFisPdfPill').textContent='yükleniyor...';
-  try{
-    const r=await (await fetch(`/api/firma/${firmaKod}/gecmis-fis`,{method:'POST',body:fd})).json();
-    if(r.ok){ $('gecmisFisPdfPill').textContent=`${r.satir_sayisi} satır · ${r.fis_sayisi} fiş · son no ${r.son_fis_no}`; $('gecmisFisPdfSilBtn').style.display='inline-block'; }
-    else{ $('gecmisFisPdfPill').className='pill off'; $('gecmisFisPdfPill').textContent='hata'; }
-  }catch(e){ $('gecmisFisPdfPill').className='pill off'; $('gecmisFisPdfPill').textContent='hata: '+e.message; }
-  $('gecmisFisPdfFile').value='';
-}
-async function gecmisFisPdfSil(){
-  if(!confirm('Geçmiş fiş PDF silinsin mi?'))return;
-  await fetch(`/api/firma/${firmaKod}/gecmis-fis`,{method:'DELETE'});
-  $('gecmisFisPdfPill').className='pill off'; $('gecmisFisPdfPill').textContent='PDF yok';
-  $('gecmisFisPdfSilBtn').style.display='none';
 }
 
 async function belgeYukle(){
@@ -1271,7 +1234,7 @@ async function fisDisaAktar(format){
 // =================== SUNUCUDAN EKLE ===================
 async function sunucudanSec(tip){
   if(!firmaKod){alert('Önce firma seç');return;}
-  const basliklar={'mizan':'Sunucudan Mizan Seç','fis-listesi':'Sunucudan Fiş Listesi Seç','gecmis-fis-pdf':'Sunucudan Geçmiş Fiş PDF Seç'};
+  const basliklar={'mizan':'Sunucudan Mizan Seç','fis-listesi':'Sunucudan Fiş Listesi Seç'};
   $('sunucuModalBaslik').textContent=basliklar[tip]||'Sunucudan Seç';
   $('sunucuModalIcerik').innerHTML='<div class="hint">Yükleniyor...</div>';
   $('sunucuModal').classList.add('show');

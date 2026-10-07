@@ -769,13 +769,14 @@ class KuralMotoru:
     """
     Bir firma + belge tipi (banka/fatura/cek) için hesap eşleştirme yapar.
     """
-    def __init__(self, mizan_path: Path, kural_path: Path | None, ogrenme_path: Path, gecmis_pdf_path: Path | None = None):
+    def __init__(self, mizan_path: Path, kural_path: Path | None, ogrenme_path: Path, gecmis_path: Path | None = None):
         self.hesaplar = mizan_hesaplar(mizan_path)                 # [(kod, ad)]
         self.kural = kural_excel_oku(kural_path) if kural_path else {"hesaplar": [], "anahtar_kod": {}, "talimatlar": []}
         self.ogrenme = ogrenme_oku(ogrenme_path)                  # {anahtar: kod}
         self.ogrenme_path = ogrenme_path
         # geçmiş fişlerden öğrenilen eşleşmeler (kural excel'deki Fiş Aktarım sayfası)
-        self.gecmis = gecmis_fisler_oku(gecmis_pdf_path if gecmis_pdf_path and gecmis_pdf_path.exists() else kural_path)
+        # geçmiş kayıt: verilen Excel fiş listesi / muavin; yoksa kural dosyası
+        self.gecmis = gecmis_fisler_oku(gecmis_path if gecmis_path and gecmis_path.exists() else kural_path)
         # hızlı arama için kod->ad
         self.kod_ad = {k: a for k, a in self.hesaplar}
         for h in self.kural["hesaplar"]:

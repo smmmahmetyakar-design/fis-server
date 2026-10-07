@@ -4,7 +4,7 @@ Sunucu firma klasörleri (/srv/veri/firmalar -> container içinde /firmalar).
 Klasör düzeni (her firma için):
     NN_FIRMA_ADI/
         mizan/          <- mizan Excel'i (xlsx/xls)
-        fislistesi/     <- muhasebe programından alınan fiş listesi (xlsx/xls/pdf)
+        fislistesi/     <- muhasebe programından alınan fiş listesi / muavin (xlsx/xls)
         banka/ dekont/ fatura/ fis/   (gelen / cikan alt klasörleri)
 
 Bu modül klasörü yalnızca OKUR. Dosyalar araç veri klasörüne kopyalanarak
@@ -23,14 +23,13 @@ from app.kurallar import norm, kelimeler
 
 FIRMALAR_DIR = Path(os.environ.get("FIS_FIRMALAR", "/firmalar"))
 
-TURLER = ("mizan", "fis-listesi", "gecmis-fis-pdf")
+TURLER = ("mizan", "fis-listesi")
 _EXCEL = (".xlsx", ".xls")
 
 # tür -> (beklenen alt klasör, kabul edilen uzantılar)
 _BEKLENEN = {
     "mizan": ("mizan", _EXCEL),
     "fis-listesi": ("fislistesi", _EXCEL),
-    "gecmis-fis-pdf": ("fislistesi", (".pdf",)),
 }
 
 
@@ -128,7 +127,7 @@ def adaylar(klasor_path: Path, tur: str) -> list:
             continue
         if tur == "mizan" and _ad_mizan_mi(p.name):
             ekle(p, False)
-        elif tur in ("fis-listesi", "gecmis-fis-pdf") and _ad_fis_listesi_mi(p.name) \
+        elif tur == "fis-listesi" and _ad_fis_listesi_mi(p.name) \
                 and not _ad_mizan_mi(p.name):
             ekle(p, False)
 
