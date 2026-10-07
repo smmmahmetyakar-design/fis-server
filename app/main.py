@@ -754,7 +754,15 @@ def fatura_donem_al(kod: str, yon: str, body: dict):
         (hedef_k / ad_).write_bytes(sk.excel_xlsx_bytes(src.read_bytes()))
         alinan.append(ad_)
     _kaynak_yaz(d, f"donem:{yon}", "sunucu", f"{ad} ({len(alinan)} liste)")
-    return {"ok": True, "donem": ad, "dosyalar": alinan}
+    # listedeki numaralarla eşleşen PDF'leri hemen al: "Fatura PDF'leri" alanında görünsünler
+    pdf = {}
+    try:
+        tum_ham = [{"dosya": fn, **belge_oku(hedef_k / fn, fn)} for fn in alinan]
+        pdf = _sunucu_fatura_pdf_al(d, tum_ham, yon)
+    except Exception as e:
+        pdf = {"mesaj": f"PDF'ler alınamadı: {e}"}
+    return {"ok": True, "donem": ad, "dosyalar": alinan, "pdf_alinan": pdf.get("alinan", 0),
+            "pdf_bulunamayan": len(pdf.get("bulunamayan", [])), "pdf_mesaj": pdf.get("mesaj", "")}
 
 
 class KarsilastirBody(BaseModel):

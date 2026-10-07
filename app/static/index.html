@@ -941,7 +941,8 @@ async function donemAl(){
     hideLoading();
     if(!r.ok){ toast((await r.json().catch(()=>({}))).detail||'Alınamadı',false); return; }
     const j=await r.json(); const ob=oturumSet(); j.dosyalar.forEach(f=>ob.add(f));
-    toast(`${ad}: ${j.dosyalar.length} liste alındı — İşle'ye basabilirsiniz`,true);
+    toast(`${ad}: ${j.dosyalar.length} liste alındı`+(j.pdf_alinan?`, ${j.pdf_alinan} fatura PDF'i eşleşti`:'')+
+      (j.pdf_bulunamayan?` (${j.pdf_bulunamayan} faturanın PDF'i klasörde yok)`:'')+` — İşle'ye basabilirsiniz`,true);
     firmaDurum();
   }catch(e){ hideLoading(); toast('Bağlantı hatası: '+e.message,false); }
 }
