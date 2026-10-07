@@ -1989,6 +1989,21 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
 
     pdf_faturalar = pdf_faturalar or []
     faturalar = _elogo_fatura_satirlari(hamlar, yon)
+    # Aynı fatura birden çok listede olabilir (ör. ay klasöründe hem İVD hem entegratör listesi):
+    # bir kez işlenir; KDV dağılımı olan kayıt tercih edilir.
+    if faturalar:
+        tekil, cift_liste = {}, []
+        for f in faturalar:
+            a = _fno_anahtar(f["fatura_no"]) or id(f)
+            if a in tekil:
+                cift_liste.append(f["fatura_no"])
+                if "kdv" in (tekil[a].get("eksik") or []) and "kdv" not in (f.get("eksik") or []):
+                    tekil[a] = f
+            else:
+                tekil[a] = f
+        if cift_liste:
+            faturalar = list(tekil.values())
+            uyarilar.append(f"{len(cift_liste)} fatura birden çok listede var, bir kez işlendi: {_kisa_liste(cift_liste)}")
     if faturalar:
         # Liste esas; "Fatura PDF'leri" alanındaki PDF'ler eksikleri tamamlar.
         # Belge alanına listeyle birlikte atılmış PDF'ler de aynı işe yarasın.

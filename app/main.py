@@ -673,7 +673,7 @@ def onerilen_fisno(kod: str, tip: str):
 
 def _sunucu_fatura_pdf_al(d: Path, tum_ham: list, yon: str) -> dict:
     """Listedeki fatura numaralarıyla eşleşen PDF'leri firmanın sunucu klasöründen
-    (fatura/ altı) bulup fatura PDF'leri alanına kopyalar. Böylece listede olmayan
+    (alış: fatura/gelen, satış: fatura/giden — ay klasörleri dahil) bulup fatura PDF'leri alanına kopyalar. Böylece listede olmayan
     KDV dağılımı PDF'ten tamamlanır ve önizlemede fatura açılabilir.
     Yalnızca listedeki numaralar alınır (klasördeki her PDF fişe eklenmesin)."""
     kp = _firma_klasoru(d)
@@ -688,7 +688,7 @@ def _sunucu_fatura_pdf_al(d: Path, tum_ham: list, yon: str) -> dict:
     k = fatura_pdf.klasor(d, yon)
     zaten = {f.get("fatura_no") for f in fatura_pdf.faturalar(d, yon)[0]}
     eksik = nolar - zaten
-    dizin, sonuc["dizin"] = sk.fatura_pdf_dizini(kp, d / "fatura" / "_sunucu_pdf_dizini.json")
+    dizin, sonuc["dizin"] = sk.fatura_pdf_dizini(kp, d / "fatura" / f"_sunucu_pdf_dizini_{yon}.json", yon)
     sonuc["dizin"]["eslesen_numara"] = len(nolar & set(dizin))
     if not eksik:
         return sonuc
@@ -696,6 +696,8 @@ def _sunucu_fatura_pdf_al(d: Path, tum_ham: list, yon: str) -> dict:
     alinan = []
     for no in sorted(eksik):
         rel = dizin.get(no)
+        if isinstance(rel, list):          # aynı numara birden çok dosyada: ilki (ad sırası)
+            rel = rel[0] if rel else ""
         if not rel:
             sonuc["bulunamayan"].append(no)
             continue
@@ -715,6 +717,44 @@ def _sunucu_fatura_pdf_al(d: Path, tum_ham: list, yon: str) -> dict:
         sonuc["mesaj"] = (sonuc["mesaj"] + " · " if sonuc["mesaj"] else "") + \
             f"sunucu klasöründe {sonuc['dizin']['ocr_bekleyen']} taranmış PDF okunuyor (OCR) — birkaç dakika sonra tekrar deneyin"
     return sonuc
+
+
+@app.get("/api/firma/{kod}/donemler/{yon}")
+def fatura_donemleri(kod: str, yon: str):
+    """Sunucu klasöründeki ay klasörleri (fatura/gelen/09 ...): liste Excel'i ve PDF sayılarıyla."""
+    _yon_kontrol(yon)
+    d = firma_dir(kod)
+    kp = _firma_klasoru(d)
+    if not kp:
+        return {"klasor": "", "yon_klasoru": "", "donemler": []}
+    yk = sk.yon_klasoru(kp, yon)
+    return {"klasor": kp.name, "yon_klasoru": yk.relative_to(kp).as_posix() if yk else "",
+            "donemler": sk.donemler(kp, yon)}
+
+
+@app.post("/api/firma/{kod}/donem-al/{yon}")
+def fatura_donem_al(kod: str, yon: str, body: dict):
+    """Seçilen ayın fatura listesini (Excel) sunucu klasöründen 2. bölüme alır.
+    PDF'ler kopyalanmaz: İşle / KDV tablosu listedeki numaralarla eşleşenleri
+    klasörden kendisi alır."""
+    _yon_kontrol(yon)
+    d = firma_dir(kod)
+    kp = _firma_klasoru(d)
+    if not kp:
+        raise HTTPException(400, "Firma bir sunucu klasörüne bağlı değil")
+    ad = str(body.get("donem", ""))
+    excel = sk.donem_excelleri(kp, yon, ad)
+    if not excel:
+        raise HTTPException(404, f"'{ad}' klasöründe fatura listesi (Excel) yok")
+    hedef_k = d / "fatura"
+    hedef_k.mkdir(exist_ok=True)
+    alinan = []
+    for src in excel:
+        ad_ = re.sub(r"[^\w.\- ]", "_", f"{ad}_{src.stem}") + ".xlsx"
+        (hedef_k / ad_).write_bytes(sk.excel_xlsx_bytes(src.read_bytes()))
+        alinan.append(ad_)
+    _kaynak_yaz(d, f"donem:{yon}", "sunucu", f"{ad} ({len(alinan)} liste)")
+    return {"ok": True, "donem": ad, "dosyalar": alinan}
 
 
 class KarsilastirBody(BaseModel):
@@ -762,7 +802,7 @@ def karsilastir(kod: str, yon: str, body: KarsilastirBody):
     sonuc["teshis"] = {
         "tablolar": teshis.get("tablolar", []),
         "klasor": kp.name if kp else "",
-        "klasor_fatura_var": bool(kp and ((kp / "fatura").is_dir() or (sunucu.get("dizin") or {}).get("taranan"))),
+        "klasor_fatura_var": bool((sunucu.get("dizin") or {}).get("klasor_var")) if kp else False,
         "klasor_pdf_sayisi": (sunucu.get("dizin") or {}).get("taranan", 0),
         "klasor_numarali_pdf": (sunucu.get("dizin") or {}).get("numarali", 0),
         "klasor_ocr_bekleyen": (sunucu.get("dizin") or {}).get("ocr_bekleyen", 0),
@@ -770,7 +810,7 @@ def karsilastir(kod: str, yon: str, body: KarsilastirBody):
         "klasor_eslesen": (sunucu.get("dizin") or {}).get("eslesen_numara", 0),
         "sunucu_mesaj": sunucu.get("mesaj") or sunucu.get("hata", ""),
         "alan_pdf_sayisi": len(pdfler),
-        "klasor_ozeti": sk.fatura_klasor_ozeti(kp) if kp else [],
+        "klasor_ozeti": sk.fatura_klasor_ozeti(kp, yon) if kp else [],
     }
     return sonuc
 

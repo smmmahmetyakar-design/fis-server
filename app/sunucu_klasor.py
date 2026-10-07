@@ -254,8 +254,30 @@ def _ocr_arka_plan(isler: list, onbellek_yolu: Path):
             _ocr_sirada.discard(str(p))
 
 
-def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path) -> tuple:
-    """Firma klasöründeki fatura PDF'leri: fatura no -> göreli yol.
+# Faturaların tek yeri: alış -> fatura/gelen, satış -> fatura/giden; içinde ay klasörleri
+# (09, 10, 11 ya da 2026-09, Eylül ...). Fatura önce kendi ayının klasöründe aranır.
+FATURA_KLASORU = {"alis": ("fatura", "gelen"), "satis": ("fatura", "giden")}
+_AYLAR = {"OCAK": 1, "SUBAT": 2, "MART": 3, "NISAN": 4, "MAYIS": 5, "HAZIRAN": 6, "TEMMUZ": 7,
+          "AGUSTOS": 8, "EYLUL": 9, "EKIM": 10, "KASIM": 11, "ARALIK": 12}
+
+
+def fatura_klasoru(klasor_path: Path, yon: str = "alis") -> Path:
+    return klasor_path.joinpath(*FATURA_KLASORU.get(yon, FATURA_KLASORU["alis"]))
+
+
+def ay_klasoru(ad: str):
+    """'09' / '9' / '2026-09' / '09-2026' / '09_Eylul' / 'Eylül 2026' -> 9 ; tanınmazsa None"""
+    n = norm(ad)
+    for ay_ad, no in _AYLAR.items():
+        if ay_ad in n.replace(" ", ""):
+            return no
+    m = re.fullmatch(r"(?:20\d\d\D?)?(0?[1-9]|1[0-2])(?:\D?20\d\d)?(?:\D.*)?", ad.strip())
+    return int(m.group(1)) if m else None
+
+
+def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path, yon: str = "alis") -> tuple:
+    """Firmanın fatura klasöründeki (alış: fatura/gelen, satış: fatura/giden — ay alt
+    klasörleri dahil) PDF'ler: fatura no -> [göreli yol, ...] (aynı numara birden çok yerde olabilir).
     Dosya adındaki ve PDF metnindeki (tüm sayfalar — taranmış toplu PDF'te her sayfa
     ayrı fatura olabilir) numaralar. Metni olmayan (taranmış) PDF'ler arka planda OCR'lanır.
     Sonuç (yol + değişiklik zamanı) önbelleğe yazılır; her seferinde yeniden okunmaz.
@@ -267,24 +289,19 @@ def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path) -> tuple:
             onb = json.loads(onbellek_yolu.read_text(encoding="utf-8"))
         except Exception:
             onb = {}
-    dizin, bilgi = {}, {"taranan": 0, "numarali": 0, "ocr_bekleyen": 0, "numarasiz": [], "klasor": ""}
-    # Fatura PDF'leri: "fatura/" altı ve firma klasöründe adı FATURA / ARŞİV geçen her klasör
-    # ("Alış Faturaları", "e-Arsiv" gibi). Banka/dekont klasörleri taranmaz: ekstre
-    # açıklamalarında fatura numarası geçebilir, faturanın kendisi değildir.
-    def _fatura_yolu_mu(parcalar):
-        return any(("FATUR" in norm(x).replace(" ", "") or "ARSIV" in norm(x).replace(" ", ""))
-                   for x in parcalar)
+    kok = fatura_klasoru(klasor_path, yon)
+    dizin, bilgi = {}, {"taranan": 0, "numarali": 0, "ocr_bekleyen": 0, "numarasiz": [],
+                        "klasor": kok.relative_to(klasor_path).as_posix(), "klasor_var": kok.is_dir(), "aylar": []}
     yeni_onb, ocr_isleri = {}, []
     adaylar_ = []
-    for p in sorted(klasor_path.rglob("*.[pP][dD][fF]")):
-        if not p.is_file() or p.name.startswith((".", "~$")):
-            continue
-        parcalar = p.relative_to(klasor_path).parts[:-1]
-        if "cikan" in parcalar or not _fatura_yolu_mu(parcalar):
-            continue
-        adaylar_.append(p)
-    if not adaylar_ and not (klasor_path / "fatura").is_dir():
-        bilgi["klasor"] = "yok"
+    if kok.is_dir():
+        for p in sorted(kok.rglob("*.[pP][dD][fF]")):
+            if not p.is_file() or p.name.startswith((".", "~$")):
+                continue
+            if "cikan" in p.relative_to(kok).parts:
+                continue
+            adaylar_.append(p)
+        bilgi["aylar"] = sorted({a for a in (ay_klasoru(x.name) for x in kok.iterdir() if x.is_dir()) if a})
     for p in adaylar_:
         rel = p.relative_to(klasor_path).as_posix()
         mt = p.stat().st_mtime
@@ -312,7 +329,7 @@ def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path) -> tuple:
         elif str(p) not in _ocr_sirada:
             bilgi["numarasiz"].append(rel)
         for n in nolar:
-            dizin.setdefault(n, rel)
+            dizin.setdefault(n, []).append(rel)
     with _ocr_kilit:
         # bu arada biten OCR sonuçları ezilmesin
         try:
@@ -324,7 +341,8 @@ def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path) -> tuple:
             if x[1] is None and y and y[0] == x[0] and y[1] is not None:
                 yeni_onb[rel] = y
                 for n in y[1]:
-                    dizin.setdefault(n, rel)
+                    if rel not in dizin.setdefault(n, []):
+                        dizin[n].append(rel)
         bilgi["ocr_bekleyen"] = sum(1 for x in yeni_onb.values() if x[1] is None)
         try:
             onbellek_yolu.parent.mkdir(parents=True, exist_ok=True)
@@ -337,7 +355,7 @@ def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path) -> tuple:
     return dizin, bilgi
 
 
-def fatura_klasor_ozeti(klasor_path: Path) -> list:
+def fatura_klasor_ozeti(klasor_path: Path, yon: str = "alis") -> list:
     """Teşhis: firma klasöründe adında FATURA/ARŞİV geçen klasörlerdeki dosya türleri
     ve okunamayan (izin) klasörler. PDF bulunamadığında nedenini göstermek için."""
     out = {}
@@ -346,12 +364,10 @@ def fatura_klasor_ozeti(klasor_path: Path) -> list:
     def _hata(e):
         hatalar.append(f"{getattr(e, 'filename', '')}: {e.strerror or e}")
 
-    for kok, dizinler, dosyalar in os.walk(klasor_path, onerror=_hata):
+    for kok, dizinler, dosyalar in os.walk(fatura_klasoru(klasor_path, yon), onerror=_hata):
         rel = Path(kok).relative_to(klasor_path)
         if "cikan" in rel.parts:
             dizinler[:] = []
-            continue
-        if not any(("FATUR" in norm(x).replace(" ", "") or "ARSIV" in norm(x).replace(" ", "")) for x in rel.parts):
             continue
         uz = {}
         for f in dosyalar:
@@ -368,3 +384,69 @@ def fatura_klasor_ozeti(klasor_path: Path) -> list:
             yol = h.split(":")[0]
         sonuc.append({"yol": yol, "uzantilar": {}, "dosya": 0, "hata": h.split(":", 1)[-1].strip()})
     return sonuc
+
+
+# ------------------------------------------------------------------ dönem (ay) klasörleri
+# fatura/gelen/09, fatura/gelen/10 ... (alış) · fatura/giden/09 ... (satış)
+# Her ay klasöründe o ayın fatura listesi (Excel, ör. İVD e-Arşiv listesi) ve fatura PDF'leri durur.
+_YON_KLASOR = {"alis": ("gelen", "alis", "alislar", "alis faturalari"),
+               "satis": ("giden", "satis", "satislar", "satis faturalari", "kesilen")}
+_AY_ADLARI = {"OCAK": 1, "SUBAT": 2, "MART": 3, "NISAN": 4, "MAYIS": 5, "HAZIRAN": 6, "TEMMUZ": 7,
+              "AGUSTOS": 8, "EYLUL": 9, "EKIM": 10, "KASIM": 11, "ARALIK": 12}
+
+
+def _ay_no(ad: str):
+    """'09', '9', '2026-09', '09.2026', '09 EYLÜL', 'Eylül' -> (yıl|None, ay) ya da None"""
+    n = norm(ad)
+    for k, v in _AY_ADLARI.items():
+        if k in n.replace(" ", ""):
+            y = re.search(r"(20\d{2})", n)
+            return (int(y.group(1)) if y else None, v)
+    m = re.fullmatch(r"\s*(?:(20\d{2})\D*)?(\d{1,2})(?:\D*(20\d{2}))?\D*", n)
+    if m and 1 <= int(m.group(2)) <= 12:
+        y = m.group(1) or m.group(3)
+        return (int(y) if y else None, int(m.group(2)))
+    return None
+
+
+def yon_klasoru(klasor_path: Path, yon: str) -> Path | None:
+    """fatura/gelen (alış) ya da fatura/giden (satış) — büyük/küçük harf ve Türkçe karakter duyarsız."""
+    kok = next((p for p in klasor_path.iterdir() if p.is_dir() and norm(p.name) == "FATURA"), None) \
+        if klasor_path.is_dir() else None
+    if not kok:
+        return None
+    adlar = {norm(x) for x in _YON_KLASOR.get(yon, ())}
+    return next((p for p in sorted(kok.iterdir()) if p.is_dir() and norm(p.name) in adlar), None)
+
+
+def donemler(klasor_path: Path, yon: str) -> list:
+    """Yön klasöründeki ay klasörleri: [{ad, yol, yil, ay, excel, pdf}] (en yeni ay önce)."""
+    yk = yon_klasoru(klasor_path, yon)
+    if not yk:
+        return []
+    out = []
+    for p in yk.iterdir():
+        if not p.is_dir():
+            continue
+        ay = _ay_no(p.name)
+        if not ay:
+            continue
+        dosyalar = [f for f in p.rglob("*") if f.is_file() and not f.name.startswith((".", "~$"))]
+        out.append({"ad": p.name, "yol": p.relative_to(klasor_path).as_posix(), "yil": ay[0], "ay": ay[1],
+                    "excel": sum(1 for f in dosyalar if f.suffix.lower() in _EXCEL),
+                    "pdf": sum(1 for f in dosyalar if f.suffix.lower() == ".pdf"),
+                    "mtime": max([f.stat().st_mtime for f in dosyalar] or [p.stat().st_mtime])})
+    out.sort(key=lambda x: (x["yil"] or 0, x["ay"], x["mtime"]), reverse=True)
+    return out
+
+
+def donem_excelleri(klasor_path: Path, yon: str, ad: str) -> list:
+    """Seçilen ay klasöründeki fatura listeleri (Excel). Döner: [Path]"""
+    yk = yon_klasoru(klasor_path, yon)
+    if not yk or not ad or "/" in ad or "\\" in ad or ad in (".", ".."):
+        return []
+    p = yk / ad
+    if not p.is_dir():
+        return []
+    return sorted(f for f in p.rglob("*") if f.is_file() and f.suffix.lower() in _EXCEL
+                  and not f.name.startswith((".", "~$")))

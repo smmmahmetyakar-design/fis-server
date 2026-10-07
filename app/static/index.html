@@ -118,6 +118,8 @@
   /* fatura PDF alanı */
   .fatura-pdf-alani{margin-top:18px;padding-top:14px;border-top:1px solid #efe9dc}
   .fatura-pdf-alani h3{margin:0 0 4px;font-size:14px;color:var(--ana)}
+  .donem-satir{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;padding:8px 12px;border-radius:8px;background:#eef6ef;border:1px solid #cfe3d2;font-size:13px}
+  .donem-satir select{width:auto;padding:4px 8px}
   .yz-durum{font-size:12px;margin-top:10px;padding:6px 10px;border-radius:6px;background:#f4f4f4;color:#555}
   .yz-durum.acik{background:#eef3fb;color:#24456b}
   .yz-sinav{font-size:12px;margin-top:8px}
@@ -213,6 +215,7 @@
       <button class="btn btn-ana" onclick="belgeYukle()">Yükle</button>
       <div class="hint" style="margin-top:6px">Birden çok dosya seçebilirsiniz. PDF/resim OCR ile okunur (Türkçe).</div>
     </div>
+    <div id="donemSatir" class="donem-satir" style="display:none"></div>
     <div id="belgeListe" style="margin-top:12px"></div>
 
     <!-- yalnızca alış / satış fatura sekmelerinde -->
@@ -574,6 +577,7 @@ async function firmaDurum(){
     bl.innerHTML=eskiNot+gorunen.map(f=>`<div class="dosya-satir"><span style="flex:1">📎 ${f}</span><button class="btn btn-x" onclick="belgeSil('${f.replace(/'/g,"")}')">🗑</button></div>`).join('');
   }else bl.innerHTML='<div class="hint">Bu sayfada henüz belge yüklenmedi.</div>'+eskiNot;
   if(aktifTip.startsWith('fatura')) faturaPdfListele();
+  donemSatirCiz();
   loadCiktilar();
   // fiş no önerisi
   try{
@@ -833,10 +837,10 @@ function karsTeshis(v){
     : '<div>Sunucu klasöründe adında "fatura" geçen klasörde hiç dosya görünmüyor (klasör boş ya da araç erişemiyor).</div>');
   const pdfYok=v.sayilar.pdf_yok||0;
   if(pdfYok) parca.push(`<div>${pdfYok} faturanın PDF'i yok. "Fatura PDF'leri" alanında ${t.alan_pdf_sayisi||0} fatura var. `+
-    (t.klasor?(t.klasor_fatura_var?`Sunucu klasörünün (${esc(t.klasor)}) fatura klasörlerinde ${t.klasor_pdf_sayisi} PDF tarandı, ${t.klasor_numarali_pdf}'inde fatura numarası okundu; listedeki numaralardan ${t.klasor_eslesen} tanesi orada bulundu.`+
+    (t.klasor?(t.klasor_fatura_var?`Sunucu klasöründe (${esc(t.klasor)}/${aktifYon()==='alis'?'fatura/gelen':'fatura/giden'}) ${t.klasor_pdf_sayisi} PDF tarandı, ${t.klasor_numarali_pdf}'inde fatura numarası okundu; listedeki numaralardan ${t.klasor_eslesen} tanesi orada bulundu.`+
         (t.klasor_ocr_bekleyen?` <b>${t.klasor_ocr_bekleyen} taranmış (resim) PDF arka planda OCR ile okunuyor — birkaç dakika sonra pencereyi yeniden açın.</b>`:'')+
         ((t.klasor_numarasiz||[]).length?`<details><summary>numarası okunamayan PDF'ler (${t.klasor_numarasiz.length})</summary>${t.klasor_numarasiz.map(esc).join('<br>')}</details>`:'')
-        :`Sunucu klasöründe (${esc(t.klasor)}) adında "fatura" ya da "arşiv" geçen bir klasör yok — fatura PDF'leri oraya konursa kendiliğinden bulunur.`)
+        :`Sunucu klasöründe (${esc(t.klasor)}) ${aktifYon()==='alis'?'fatura/gelen':'fatura/giden'} klasörü yok — faturalar (ay klasörleriyle: 09, 10 …) oraya konursa kendiliğinden bulunur.`)
       :'Firma bir sunucu klasörüne bağlı değil; PDF\'leri "Fatura PDF\'leri" alanına yükleyin.')+'</div>');
   if(!parca.length || (!listeKdvYok && !pdfYok && (t.tablolar||[]).every(x=>x.kdv_sutunu_var))) return '';
   return `<div class="uyari" style="font-size:12.5px;margin-bottom:10px;line-height:1.45">${parca.join('')}</div>`;
@@ -908,6 +912,37 @@ async function satirPdfEkle(inp){
     toast('PDF eklendi, yeniden işleniyor',true);
     faturaPdfListele();
     isle();
+  }catch(e){ hideLoading(); toast('Bağlantı hatası: '+e.message,false); }
+}
+async function donemSatirCiz(){
+  const el=$('donemSatir');
+  if(!firmaKod || !aktifTip.startsWith('fatura')){ el.style.display='none'; return; }
+  const yon=aktifYon(), firma=firmaKod;
+  let v; try{ v=await (await fetch(`/api/firma/${firma}/donemler/${yon}`)).json(); }catch(e){ el.style.display='none'; return; }
+  if(firma!==firmaKod || aktifYon()!==yon) return;
+  if(!v.klasor){ el.style.display='none'; return; }
+  el.style.display='flex';
+  const klasorAd=yon==='alis'?'fatura/gelen':'fatura/giden';
+  if(!v.donemler.length){
+    el.innerHTML=`📅 <span>Sunucuda ay klasörü yok. <span class="hint">${esc(v.klasor)}/${v.yon_klasoru||klasorAd}/09, /10 … klasörleri açıp her ayın listesini ve PDF'lerini koyarsanız buradan tek tıkla alınır.</span></span>`;
+    return;
+  }
+  el.innerHTML=`📅 <span>Dönem:</span>
+    <select id="donemSec">${(()=>{ const sec=(v.donemler.find(x=>x.excel)||v.donemler[0]).ad;
+      return v.donemler.map(x=>`<option value="${esc(x.ad)}" ${x.ad===sec?'selected':''}>${esc(x.ad)} — ${x.excel?x.excel+' liste':'liste yok'}, ${x.pdf} PDF</option>`).join(''); })()}</select>
+    <button class="btn btn-ana" onclick="donemAl()" style="padding:5px 14px">Sunucudan al</button>
+    <span class="hint">${esc(v.klasor)}/${esc(v.yon_klasoru)}/&lt;ay&gt; — listeyi alır; PDF'ler İşle'de numarasından eşleşir.</span>`;
+}
+async function donemAl(){
+  const ad=$('donemSec').value;
+  showLoading(`${ad} dönemi alınıyor...`);
+  try{
+    const r=await fetch(`/api/firma/${firmaKod}/donem-al/${aktifYon()}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({donem:ad})});
+    hideLoading();
+    if(!r.ok){ toast((await r.json().catch(()=>({}))).detail||'Alınamadı',false); return; }
+    const j=await r.json(); const ob=oturumSet(); j.dosyalar.forEach(f=>ob.add(f));
+    toast(`${ad}: ${j.dosyalar.length} liste alındı — İşle'ye basabilirsiniz`,true);
+    firmaDurum();
   }catch(e){ hideLoading(); toast('Bağlantı hatası: '+e.message,false); }
 }
 function eskiBelgeleriAl(){ const ob=oturumSet(); eskiBelgeler.forEach(f=>ob.add(f)); firmaDurum(); }
