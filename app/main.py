@@ -879,7 +879,8 @@ def isle(kod: str, tip: str, body: IsleBody):
         gecmis_s = km.gecmis.get("satirlar", [])
         gider_onerici = gider_yz.onerici(d, km.hesaplar, isleyici.alt_hesap_kodlari(km.hesaplar), body.yon,
                                          gider_yz.kullanim_ozeti(gecmis_s, body.yon),
-                                         gider_yz.gecmis_ornekler(gecmis_s, body.yon))
+                                         gider_yz.ogrenilen_kalem_ornekleri(gider_ogrenme, body.yon)
+                                         + gider_yz.gecmis_ornekler(gecmis_s, body.yon))
     fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon, pdf_faturalar=pdf_faturalar,
                                      gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici)
     if sunucu_pdf_not:
@@ -985,6 +986,7 @@ class OgretBody(BaseModel):
     rol: str = ""          # fatura satırının rolü: gider | cari | kdv | diger
     oran: int = 0          # KDV satırı için oran (KDV hesabı orana göre öğrenilir)
     yon: str = "alis"      # fatura için alis | satis
+    kalemler: list[str] = []   # fatura gider satırı: faturanın kalem açıklamaları (açıklamaya göre öğrenme)
 
 
 @app.post("/api/firma/{kod}/ogret/{tip}")
@@ -1009,6 +1011,10 @@ def ogret(kod: str, tip: str, body: OgretBody):
         if body.rol != "gider":
             return {"ok": True, "ogrenilen": 0, "not": "bu satır türü öğrenilmez"}
         og[f"{body.yon}|{norm(body.aciklama)}"] = body.kod
+        # kalem açıklamasına göre de öğren: aynı açıklama başka bir faturada (başka satıcıda) da gelsin
+        for a in body.kalemler[:15]:
+            if norm(a):
+                og[f"kalem|{body.yon}|{norm(a)}"] = body.kod
         _write_json(p, og)
         return {"ok": True, "ogrenilen": len(og), "tur": "gider"}
     km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", _gecmis_kaynak(d, tip))

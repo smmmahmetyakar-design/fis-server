@@ -129,6 +129,14 @@ def gecmis_ornekler(gecmis_satirlar: list, yon: str) -> list:
     return list(birlesik.values())
 
 
+def ogrenilen_kalem_ornekleri(gider_ogrenme: dict | None, yon: str) -> list:
+    """Kullanıcının fatura kalem açıklamalarına göre seçtiği hesaplar — yapay zekâya örnek olarak
+    ("kalem: TIR KİRALAMA BEDELİ → 760..."). Kelimesi tutan kalemler soruya en yakın örnek olur."""
+    onek = f"kalem|{yon}|"
+    return [{"ad": f"kalem: {k[len(onek):]}"[:60], "cari": "", "gider": v, "sayi": 1}
+            for k, v in (gider_ogrenme or {}).items() if k.startswith(onek)]
+
+
 def benzer_ornekler(ornekler: list, cari_ad: str, aciklamalar: list, aday_kodlar: set,
                     haric: str = "", en_fazla: int = 8) -> list:
     """Sorulan faturaya en çok benzeyen geçmiş örnekler (unvan + kalem kelimeleri ortaklığı).

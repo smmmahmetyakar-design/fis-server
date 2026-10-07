@@ -1864,6 +1864,50 @@ def _liste_pdf_birlestir(liste, pdfler):
     return liste, uyarilar
 
 
+def _kalem_ogrenmesi(f: dict, gider_ogrenme: dict | None, yon: str, alt_kodlar: set) -> dict | None:
+    """Faturanın kalem açıklamaları için kullanıcının daha önce seçtiği gider hesabı.
+    Öğrenme anahtarı: "kalem|<yön>|<NORM(açıklama)>". Birebir eşleşme yoksa kelimelerinin
+    çoğu tutan öğrenilmiş açıklama (benzer=True — KONTROL ister). Kalemler farklı hesaplara
+    gidiyorsa tutarı en büyük olan kalemin hesabı seçilir."""
+    og = gider_ogrenme or {}
+    onek = f"kalem|{yon}|"
+    ogrenilen = {k[len(onek):]: v for k, v in og.items() if k.startswith(onek) and v in alt_kodlar}
+    if not ogrenilen:
+        return None
+    detay = f.get("kalem_detay") or [{"a": a, "t": None} for a in (f.get("kalem_aciklamalari") or [])]
+    if not detay:
+        return None
+    from app.kurallar import kelimeler
+    bulunan = []          # (tutar, kod, açıklama, benzer)
+    for k in detay:
+        n = norm(k.get("a", ""))
+        if not n:
+            continue
+        if n in ogrenilen:
+            bulunan.append((k.get("t") or 0, ogrenilen[n], k["a"], False))
+            continue
+        kw = kelimeler(n)
+        if len(kw) < 2:
+            continue
+        en, en_skor = None, 0.0
+        for ad, kod in ogrenilen.items():
+            ow = kelimeler(ad)
+            if not ow:
+                continue
+            skor = len(kw & ow) / len(kw | ow)
+            if skor > en_skor:
+                en, en_skor = (ad, kod), skor
+        if en and en_skor >= 0.6:
+            bulunan.append((k.get("t") or 0, en[1], k["a"], True))
+    if not bulunan:
+        return None
+    tam = [b for b in bulunan if not b[3]]
+    secim = max(tam or bulunan, key=lambda b: b[0])
+    return {"kod": secim[1], "benzer": not tam,
+            "not": f"Kalem öğrenmesi: '{secim[2][:50]}' daha önce bu hesaba yazıldı"
+                   + (" (benzer açıklama)" if not tam else "")}
+
+
 KARSILASTIRMA_ORANLARI = (1, 10, 20)
 
 
@@ -2123,8 +2167,14 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         gider_kaynak, gider_not = "", ""
         yasak_onek = ("320", "329", "331", "335", "336", "120", "121", "100", "102", "191", "391")
         ogr = (gider_ogrenme or {}).get(f"{yon}|{norm(cari_ad)}")
-        if ogr and ogr in alt_kodlar:
+        kalem_es = _kalem_ogrenmesi(f, gider_ogrenme, yon, alt_kodlar)
+        if kalem_es and not kalem_es["benzer"]:
+            # kullanıcının bu kalem açıklaması için seçtiği hesap (cariden bağımsız, en özel bilgi)
+            gider_kod, gider_kaynak, gider_not = kalem_es["kod"], "ogrenme_kalem", kalem_es["not"]
+        elif ogr and ogr in alt_kodlar:
             gider_kod, gider_kaynak = ogr, "ogrenme"
+        elif kalem_es:
+            gider_kod, gider_kaynak, gider_not = kalem_es["kod"], "ogrenme_kalem_benzer", kalem_es["not"]
         elif gider_kod and gider_kod in alt_kodlar and gider_kod != cari_kod \
                 and not gider_kod.startswith(yasak_onek):
             gider_kaynak = "gecmis"
@@ -2183,7 +2233,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             # Doğrulanmamış hesaplar: Excel'e aktarılır ama fiş açıklamasına KONTROL yazılır
             # (kullanıcı önizlemede düzeltir ya da onaylarsa işaret kalkar).
             kontrol = []
-            if s["rol"] == "gider" and gider_kaynak in ("yz", "tahmin"):
+            if s["rol"] == "gider" and gider_kaynak in ("yz", "tahmin", "ogrenme_kalem_benzer"):
                 kontrol.append("gider")
             if s["rol"] == "kdv" and not hesap:
                 kontrol.append("kdv")

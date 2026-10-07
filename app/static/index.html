@@ -1009,7 +1009,7 @@ function totals(){
   const al=satirlar.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0);
   return {b,al,dengeli:Math.abs(b-al)<0.01};
 }
-const KAYNAK_AD={yz:'yapay zekâ', tahmin:'varsayılan', ogrenme:'öğrenilen', gecmis:'geçmiş fiş'};
+const KAYNAK_AD={yz:'yapay zekâ', tahmin:'varsayılan', ogrenme:'öğrenilen', gecmis:'geçmiş fiş', ogrenme_kalem:'öğrenilen (kalem)', ogrenme_kalem_benzer:'benzer kalem'};
 const KONTROL_AD={gider:'gider hesabı yapay zekâ/varsayılan', cari:'cari bulunamadı (198)', kdv:'KDV hesabı yok',
   belge:'fatura bilgisi yapay zekâ ile okundu', benzer_ad:'geçmişte unvanın yalnız bir kısmı tuttu',
   kdv_yok:'KDV ayrılamadı — tutarın tamamı (KDV dahil) gidere yazıldı', dengesiz:'fiş dengesiz'};
@@ -1023,7 +1023,7 @@ function kontrolOnayla(i){
   const s=satirlar[i]; if(!s||!s.hesap) return;
   if(firmaKod && s.detay && (s.rol==='gider'||s.rol==='cari'||s.rol==='kdv')){
     fetch(`/api/firma/${firmaKod}/ogret/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:s.detay,kod:s.hesap,rol:s.rol||'',yon:aktifYon(),oran:s.oran||0})}).catch(()=>{});
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:s.detay,kod:s.hesap,rol:s.rol||'',yon:aktifYon(),oran:s.oran||0,kalemler:s.rol==='gider'?(s.fatura_kalemleri||[]):[]})}).catch(()=>{});
   }
   // aynı fişte aynı role ve hesaba sahip satırlar da (çok oranlı faturada birden çok gider satırı) onaylanır
   const benzerAd=s.rol==='cari' && (s.kontrol||[]).includes('benzer_ad');
@@ -1152,7 +1152,7 @@ function edit(i,alan,deger){
   // hesap elle değişince öğret
   if(alan==='hesap' && deger && deger!==eski && satirlar[i].detay){
     fetch(`/api/firma/${firmaKod}/ogret/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:satirlar[i].detay,kod:deger,rol:satirlar[i].rol||'',yon:aktifYon(),oran:satirlar[i].oran||0})}).catch(()=>{});
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:satirlar[i].detay,kod:deger,rol:satirlar[i].rol||'',yon:aktifYon(),oran:satirlar[i].oran||0,kalemler:satirlar[i].rol==='gider'?(satirlar[i].fatura_kalemleri||[]):[]})}).catch(()=>{});
     // KDV hesabı orana bağlı: aynı oranlı, hesabı boş ya da eskisiyle aynı olan tüm KDV satırlarını da güncelle
     if(satirlar[i].rol==='kdv' && satirlar[i].oran){
       let n=0;
