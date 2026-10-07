@@ -932,15 +932,22 @@ class KuralMotoru:
             sonuc["ek"] = sira[1] if len(sira) > 1 else ""
             sonuc["kdv"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)
                                                if k.startswith("191") and k in mizan_kodlari))
-            sonuc["tevkifat"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)
-                                                     if k.startswith("191") and k in mizan_kodlari and k not in sonuc["kdv"]))
+            # tevkifatlı alış: sorumlu sıfatıyla ödenecek KDV 360 alacağa yazılmış
+            sonuc["tevkifat"] = list(dict.fromkeys(str(r.get("hesap", "")).strip() for r in satirlar
+                                                   if str(r.get("hesap", "")).strip().startswith("360")
+                                                   and str(r.get("hesap", "")).strip() in mizan_kodlari
+                                                   and float(r.get("alacak", 0) or 0) > 0))
         else:
             sonuc["cari"] = say_sec(satirlar, lambda k: k.startswith(("120", "121")), borc_mu=True)
             sonuc["ana"] = say_sec(satirlar, lambda k: k.startswith(("600", "601", "602", "603", "610", "611", "612")), borc_mu=False)
-            sonuc["kdv"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)
-                                               if k.startswith("391") and k in mizan_kodlari))
-            sonuc["tevkifat"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)
-                                                     if k.startswith("391") and k in mizan_kodlari and k not in sonuc["kdv"]))
+            # tevkifatlı satış: 391'in BORCUNA yazılan hesap tevkifat hesabıdır (KDV alacakta)
+            # (iade faturasında normal KDV hesabı da borçlanır: yalnız hiç alacağa yazılmamış olan sayılır)
+            k391 = [(str(r.get("hesap", "")).strip(), float(r.get("borc", 0) or 0), float(r.get("alacak", 0) or 0))
+                    for r in satirlar]
+            k391 = [x for x in k391 if x[0].startswith("391") and x[0] in mizan_kodlari]
+            alacakli = {k for k, b, a in k391 if a > 0}
+            sonuc["tevkifat"] = list(dict.fromkeys(k for k, b, a in k391 if b > 0 and k not in alacakli))
+            sonuc["kdv"] = list(dict.fromkeys(k for k, b, a in k391 if k not in sonuc["tevkifat"]))
 
         if any(sonuc[k] for k in ("cari", "ana", "kdv", "tevkifat")):
             sonuc["kaynak"] = "gecmis_fatura"

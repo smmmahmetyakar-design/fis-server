@@ -1007,7 +1007,7 @@ class OgretBody(BaseModel):
     tip: str
     aciklama: str
     kod: str
-    rol: str = ""          # fatura satırının rolü: gider | cari | kdv | diger
+    rol: str = ""          # fatura satırının rolü: gider | cari | kdv | tevkifat | diger
     oran: int = 0          # KDV satırı için oran (KDV hesabı orana göre öğrenilir)
     yon: str = "alis"      # fatura için alis | satis
     kalemler: list[str] = []   # fatura gider satırı: faturanın kalem açıklamaları (açıklamaya göre öğrenme)
@@ -1019,7 +1019,7 @@ def ogret(kod: str, tip: str, body: OgretBody):
     if tip not in TIPLER:
         raise HTTPException(400, "Geçersiz tip")
     d = firma_dir(kod)
-    if tip == "fatura" and body.rol in ("gider", "kdv", "diger"):
+    if tip == "fatura" and body.rol in ("gider", "kdv", "tevkifat", "diger"):
         # Faturada bütün satırların açıklaması cari adıdır. Gider satırındaki
         # düzeltme "cari adı -> kod" diye genel öğrenmeye yazılırsa cari
         # eşleştirmesini bozar ve gider hiç hatırlanmaz. Gider kendi dosyasına,
@@ -1033,6 +1033,11 @@ def ogret(kod: str, tip: str, body: OgretBody):
             og[f"kdv|{body.yon}|{body.oran}"] = body.kod
             _write_json(p, og)
             return {"ok": True, "ogrenilen": len(og), "tur": "kdv"}
+        if body.rol == "tevkifat":
+            # tevkifat hesabı (alışta 360 sorumlu KDV, satışta 391 tevkifat) firma geneli
+            og[f"tevkifat|{body.yon}"] = body.kod
+            _write_json(p, og)
+            return {"ok": True, "ogrenilen": len(og), "tur": "tevkifat"}
         if body.rol != "gider":
             return {"ok": True, "ogrenilen": 0, "not": "bu satır türü öğrenilmez"}
         if not (body.sadece_kalem and body.kalemler):

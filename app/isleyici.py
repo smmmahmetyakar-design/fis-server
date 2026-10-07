@@ -625,10 +625,14 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                         sut["mat_18"] = j
                     elif c == "KDV 20 MATRAH" or ("20LIK" in c.replace("'","").replace(" ","") and "MATRAH" in c):
                         sut["mat_20"] = j
-                    elif c == "TEVKIFAT TOPLAMI" or "TEVKIFAT" in c and "ORAN" in c:
-                        sut["tevkifat"] = j
-                    elif c == "ILK TEVKIFAT KODU":
-                        sut["tevkifat_kod"] = j
+                    elif "TEVKIFAT" in c and "KOD" in c:
+                        sut.setdefault("tevkifat_kod", j)
+                    elif "TEVKIFAT" in c and "ORAN" in c:
+                        sut.setdefault("tevkifat_oran", j)     # 7/10, %70 ya da 0,7
+                    elif "TEVKIFAT" in c and "MATRAH" not in c and "tevkifat" not in sut:
+                        sut["tevkifat"] = j                     # tevkifat TUTARI (KDV'nin alıcının ödeyeceği kısmı)
+                    elif c in ("FATURA TIPI", "FATURA TIP") and "tur" not in sut:
+                        sut["tur"] = j
                     elif c in ("EK VERGILER", "EK VERGI", "DIGER VERGILER", "OIV", "OIV TUTARI", "OIV TUTAR",
                                "OTV", "OTV TUTARI", "OTV TUTAR") \
                             or "OZEL ILETISIM" in c or "OZEL TUKETIM" in c:
@@ -775,7 +779,12 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                 tevkifat = _sayi(g(row, "tevkifat")) or 0
                 tevkifat_kod = str(g(row, "tevkifat_kod") or "").strip()
                 ek_vergi = _sayi(g(row, "ek_vergi")) or 0
-                tur = str(g(row, "tur") or "SATIS").strip().upper()
+                tur = norm(str(g(row, "tur") or "SATIS")) or "SATIS"
+                if "TEVKIFAT" in tur:
+                    tur = "TEVKIFAT"        # "Tevkifatlı", "TEVKİFAT" …
+                elif "IADE" in tur:
+                    tur = "IADE"
+                tevkifat_oran = _tevkifat_orani(g(row, "tevkifat_oran"))
                 senaryo = str(g(row, "senaryo") or "").strip().upper()
 
                 # toplam sütunu yoksa (satış Excel'i) kalemlerden hesapla
@@ -799,6 +808,9 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                     eksik.append("kdv")
                 if not kalemler and kdv_top > 0 and toplam > 0:
                     t = _yk_oran_turet(round(toplam - ek_vergi, 2), kdv_top)
+                    if not t and tevkifat > 0:
+                        # toplam ödenecek tutar olabilir (KDV dahil − tevkifat)
+                        t = _yk_oran_turet(round(toplam + tevkifat - ek_vergi, 2), kdv_top)
                     if t:
                         kalemler.append({"oran": t[0], "matrah": t[1], "kdv": t[2]})
                     else:
@@ -818,6 +830,15 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                 tarih = _tarih_iso(g(row, "tarih"))
                 if not tarih:
                     eksik.append("tarih")
+
+                # Tevkifat tutarı yok ama oranı var: tevkifat = KDV × oran
+                kdv_sum = round(sum(k["kdv"] for k in kalemler), 2)
+                if not tevkifat and tevkifat_oran and kdv_sum > 0:
+                    tevkifat = round(kdv_sum * tevkifat_oran, 2)
+                if tevkifat > 0 and kdv_sum and tevkifat > kdv_sum + 0.05:
+                    tevkifat = 0      # KDV'den büyük tevkifat olmaz — sütun yanlış okunmuş
+                if tevkifat > 0:
+                    tur = "TEVKIFAT"
 
                 faturalar.append({
                     "fatura_no": str(fno).strip(),
@@ -883,24 +904,66 @@ def _kdv_hesabi_ad(kod_ad_list, oran, yon="alis"):
     return ""
 
 
-def _tevkifat_hesabi(kod_ad_list, yon="satis"):
-    """Tevkifat KDV hesabını bulur. Satışta 391.02 gibi 'HESAPLANAN...TEVKIFAT',
-    alışta 191.03 gibi 'SORUMLU SIFATIYLA ODENEN KDV'."""
-    if yon == "satis":
-        prefix = "391"; ara = ("TEVKIF", "HESAPLANAN")
+TEVKIFAT_ORANLARI = (0.2, 0.3, 0.4, 0.5, 0.7, 0.9, 1.0)   # 2/10 … 9/10, tam tevkifat
+
+
+def _tevkifat_orani(v):
+    """'7/10', '%70', '70', '0,7' -> 0.7; okunamazsa 0."""
+    if v is None:
+        return 0.0
+    s = str(v).strip().replace("%", "").replace(" ", "")
+    m = re.match(r"^(\d+)\s*/\s*(\d+)$", s)
+    if m and int(m.group(2)):
+        r = int(m.group(1)) / int(m.group(2))
     else:
-        prefix = "191"; ara = ("SORUMLU", "TEVKIF")
-    adaylar = []
-    for h in kod_ad_list:
-        kod = h["kod"]
-        if not kod.startswith(prefix):
-            continue
-        nad = norm(h["ad"])
-        if any(a in nad for a in ara):
-            adaylar.append((kod.count("."), kod))
-    if adaylar:
-        adaylar.sort(reverse=True)
-        return adaylar[0][1]
+        x = _sayi(s)
+        if not x:
+            return 0.0
+        r = x / 100 if x > 1 else x
+    return r if 0 < r <= 1 else 0.0
+
+
+def _tevkifat_tahmin(kalemler, toplam, ek_vergi=0.0):
+    """Listede tevkifat yok ama toplam KDV dahil tutardan KDV'nin standart bir
+    tevkifat payı (2/10 … 9/10, tamamı ya da bir oranın KDV'sinin payı) kadar azsa
+    o fark tevkifattır (entegratör listesinde 'Toplam' = ödenecek tutar). Döner: tutar ya da 0."""
+    if not kalemler or not toplam:
+        return 0.0
+    kdv_dahil = sum(k["matrah"] + k["kdv"] for k in kalemler) + (ek_vergi or 0)
+    fark = round(kdv_dahil - toplam, 2)
+    kdv = sum(k["kdv"] for k in kalemler)
+    if fark <= 0.05 or kdv <= 0 or fark > kdv + 0.05:
+        return 0.0
+    tabanlar = [kdv] + [k["kdv"] for k in kalemler if k["kdv"] > 0]
+    for t in tabanlar:
+        for r in TEVKIFAT_ORANLARI:
+            if abs(t * r - fark) <= 0.05 + 0.0005 * t:
+                return fark
+    return 0.0
+
+
+def _tevkifat_hesabi(kod_ad_list, yon="satis", alt_kodlar=None):
+    """Tevkifat hesabı.
+    Alışta (alıcı sorumlu): tevkif edilen KDV'yi alıcı 2 No.lu beyanla öder —
+    360 ÖDENECEK VERGİ VE FONLAR altındaki 'sorumlu/tevkifat KDV' hesabı (alacak).
+    Satışta: 391 HESAPLANAN KDV altındaki 'tevkifat' hesabı (borç; hesaplanan KDV'yi azaltır)."""
+    if yon == "satis":
+        prefix = ("391",); oncelik = (("TEVKIF",),)
+    else:
+        prefix = ("360",); oncelik = (("TEVKIF",), ("SORUMLU",), ("2NOLU", "2NO", "KDV2"), ("KDV",))
+    hesaplar = [h for h in kod_ad_list if h["kod"].startswith(prefix)
+                and (alt_kodlar is None or h["kod"] in alt_kodlar)]
+    for anahtarlar in oncelik:
+        adaylar = []
+        for h in hesaplar:
+            nad = norm(h["ad"]); bit = nad.replace(" ", "").replace(".", "")
+            if any(a in nad or a in bit for a in anahtarlar):
+                if yon == "alis" and anahtarlar == ("KDV",) and ("GELIR" in nad or "STOPAJ" in nad or "DAMGA" in nad):
+                    continue
+                adaylar.append((h["kod"].count("."), h["kod"]))
+        if adaylar:
+            adaylar.sort(key=lambda x: (-x[0], x[1]))
+            return adaylar[0][1]
     return ""
 
 
@@ -1786,7 +1849,7 @@ def _liste_pdf_birlestir(liste, pdfler):
         a = _fno_anahtar(p.get("fatura_no"))
         if a and a not in pdf_idx:
             pdf_idx[a] = p
-    kullanilan, tamamlanan, tutar_farki, kdv_haric = set(), [], [], []
+    kullanilan, tamamlanan, tutar_farki, kdv_haric, tevkifat_pdf = set(), [], [], [], []
     for f in liste:
         a = _fno_anahtar(f["fatura_no"])
         p = pdf_idx.get(a)
@@ -1808,6 +1871,28 @@ def _liste_pdf_birlestir(liste, pdfler):
         if "tarih" in eksik and p.get("tarih"):
             f["tarih"] = p["tarih"]; dolan.append("tarih")
         pdf_tutar_tam = bool(p.get("kalemler")) and not ({"tutar", "kdv"} & set(p.get("eksik", [])))
+        # Tevkifatlı fatura: PDF'in toplamı ÖDENECEK tutar; liste ya ödeneceği ya KDV dahil
+        # toplamı verir. İkisi de aynı faturadır — tevkifat ve KDV dağılımı PDF'ten alınır.
+        p_tev = round(float(p.get("tevkifat") or 0), 2)
+        if p_tev > 0 and pdf_tutar_tam and not f.get("tevkifat"):
+            p_dahil = round((p.get("toplam") or 0) + p_tev, 2)
+            l_top = f.get("toplam") or 0
+            if abs(l_top - p["toplam"]) <= 0.05 or abs(l_top - p_dahil) <= 0.05:
+                f["tevkifat"] = p_tev
+                f["tur"] = "TEVKIFAT"
+                l_dahil = round(sum(k["matrah"] + k["kdv"] for k in f.get("kalemler") or []) + (f.get("ek_vergi") or 0), 2)
+                if "kdv" in eksik or abs(l_dahil - p_dahil) > 0.05:
+                    f["kalemler"] = p["kalemler"]
+                    f["ek_vergi"] = p.get("ek_vergi", 0)
+                    if "kdv" in eksik:
+                        dolan.append("kdv")
+                tevkifat_pdf.append(f["fatura_no"])
+                if p.get("yz"):
+                    f["yz"] = [x for x in dolan if x in p["yz"] or (x == "kdv" and "tutar" in p["yz"])]
+                f["eksik"] = [e for e in eksik if e not in dolan]
+                if dolan:
+                    tamamlanan.append(f["fatura_no"])
+                continue
         ayni_toplam = pdf_tutar_tam and abs((p.get("toplam") or 0) - (f.get("toplam") or 0)) <= 0.05
         # Listedeki tutar PDF'in MATRAHINA eşitse liste KDV hariç tutar vermiş demektir
         # (örn. "Mal Hizmet Toplam Tutarı" sütunu). Bu bir uyuşmazlık değil:
@@ -1875,6 +1960,8 @@ def _liste_pdf_birlestir(liste, pdfler):
     if kdv_haric:
         uyarilar.append(f"{len(kdv_haric)} faturada listedeki tutar KDV hariç (matrah); "
                         f"KDV dahil toplam ve KDV dağılımı PDF'ten alındı: {_kisa_liste(kdv_haric, 4)}")
+    if tevkifat_pdf:
+        uyarilar.append(f"{len(tevkifat_pdf)} faturada KDV tevkifatı PDF'ten alındı: {_kisa_liste(tevkifat_pdf, 4)}")
     if eklenen:
         uyarilar.append(f"Listede olmayan {len(eklenen)} fatura PDF'ten eklendi: {_kisa_liste(eklenen)}")
     if eklenemeyen:
@@ -2010,14 +2097,22 @@ def liste_pdf_karsilastir(liste: list, pdfler: list, tolerans: float = 0.05) -> 
                     farklar.append(f"%{o} matrah" if o != "diger" else "%0/diğer matrah")
                 if abs(ld[o][1] - pd[o][1]) > tolerans:
                     farklar.append(f"%{o} KDV" if o != "diger" else "%0/diğer KDV")
-            if abs((f.get("toplam") or 0) - (p.get("toplam") or 0)) > tolerans:
+            # tevkifatlı faturada PDF toplamı ödenecek tutardır; liste KDV dahil toplamı da verebilir
+            p_tev = float(p.get("tevkifat") or 0)
+            l_top, p_top = f.get("toplam") or 0, p.get("toplam") or 0
+            if abs(l_top - p_top) > tolerans and not (p_tev and abs(l_top - (p_top + p_tev)) <= tolerans):
                 farklar.append("toplam")
+            l_tev = float(f.get("tevkifat") or 0)
+            if l_tev and p_tev and abs(l_tev - p_tev) > tolerans:
+                farklar.append("tevkifat")
             durum = "farkli" if farklar else "uyumlu"
         satirlar.append({
             "fatura_no": f.get("fatura_no", ""), "tarih": f.get("tarih", ""), "cari": f.get("cari_ad", ""),
             "liste": ld, "pdf": pd, "liste_toplam": round(f.get("toplam") or 0, 2),
             "pdf_toplam": round(p.get("toplam") or 0, 2) if p else None,
             "pdf_dosya": pdf_bilgi(p) if p else None, "durum": durum, "farklar": farklar,
+            "liste_tevkifat": round(float(f.get("tevkifat") or 0), 2),
+            "pdf_tevkifat": round(float(p.get("tevkifat") or 0), 2) if p else None,
         })
     for a, p in pdf_idx.items():
         if a in gorulen or p.get("sunucudan"):
@@ -2027,6 +2122,7 @@ def liste_pdf_karsilastir(liste: list, pdfler: list, tolerans: float = 0.05) -> 
             "liste": None, "pdf": _oran_dagilim(p) if tam(p) else None, "liste_toplam": None,
             "pdf_toplam": round(p.get("toplam") or 0, 2), "pdf_dosya": pdf_bilgi(p),
             "durum": "listede_yok", "farklar": [],
+            "liste_tevkifat": None, "pdf_tevkifat": round(float(p.get("tevkifat") or 0), 2),
         })
 
     # oran bazında toplamlar: "ortak" = iki tarafı da okunabilen faturalar (karşılaştırılabilir küme);
@@ -2053,12 +2149,20 @@ def liste_pdf_karsilastir(liste: list, pdfler: list, tolerans: float = 0.05) -> 
         for o in t_:
             for taraf in ("liste", "pdf"):
                 t_[o][taraf] = [round(x, 2) for x in t_[o][taraf]]
+    tevkifat = {"liste": 0.0, "pdf": 0.0, "liste_tum": 0.0, "pdf_tum": 0.0, "sayi": 0}
+    for r in satirlar:
+        lt, pt = r.get("liste_tevkifat") or 0, r.get("pdf_tevkifat") or 0
+        tevkifat["liste_tum"] += lt; tevkifat["pdf_tum"] += pt
+        tevkifat["sayi"] += bool(lt or pt)
+        if r["liste"] and r["pdf"]:
+            tevkifat["liste"] += lt; tevkifat["pdf"] += pt
+    tevkifat = {k: (round(v, 2) if isinstance(v, float) else v) for k, v in tevkifat.items()}
     sayilar = {}
     for r in satirlar:
         sayilar[r["durum"]] = sayilar.get(r["durum"], 0) + 1
     sira = {"farkli": 0, "liste_kdv_yok": 1, "pdf_eksik": 2, "pdf_yok": 3, "listede_yok": 4, "uyumlu": 5}
     satirlar.sort(key=lambda r: (sira.get(r["durum"], 9), r["tarih"] or "", r["fatura_no"]))
-    return {"satirlar": satirlar, "toplam": toplam, "toplam_tum": tum, "sayilar": sayilar,
+    return {"satirlar": satirlar, "toplam": toplam, "toplam_tum": tum, "sayilar": sayilar, "tevkifat": tevkifat,
             "ortak_sayi": ortak_sayi, "liste_kdv_sayi": liste_sayi, "pdf_kdv_sayi": pdf_sayi}
 
 
@@ -2163,6 +2267,8 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
     kalem_bekleyen = set()
     kdv_eksik = {}      # "%20 için 191" -> {fatura no}
     fark_yazilan, fark_dengesiz, yeni_hesap = [], [], {}
+    tevkifatli, tevkifat_tahminli, tevkifat_tutarsiz = [], [], []
+    tevkifat_hesapsiz, tevkifat_kdvden, tevk_hesap_belirsiz = set(), set(), set()
     # bu firmanın geçmiş kayıtlarında (fiş listesi / muavin) gider-gelir tarafında kullanılmış hesaplar
     kullanilan_gider = {str(r.get("hesap", "")).strip() for r in km.gecmis.get("satirlar", [])
                         if float((r.get("borc") if yon == "alis" else r.get("alacak")) or 0) > 0}
@@ -2175,6 +2281,15 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         tarih = f["tarih"]
         fatura_no = f["fatura_no"]
         toplam = f["toplam"]
+
+        # KDV tevkifatı: listede/PDF'te yoksa liste toplamı KDV dahil tutardan standart bir
+        # tevkifat payı kadar azsa tahmin edilir (KONTROL işaretli)
+        tevk = round(float(f.get("tevkifat") or 0), 2)
+        tevk_tahmin = False
+        if not tevk and f.get("kalemler") and f.get("senaryo") != "TEMELFATURA" \
+                and not ({"kdv", "tutar"} & set(f.get("eksik") or [])):
+            tevk = _tevkifat_tahmin(f["kalemler"], toplam, f.get("ek_vergi") or 0)
+            tevk_tahmin = tevk > 0
 
         if f.get("tur") == "IADE":
             uyarilar.append(f"{cari_ad[:40]} ({fatura_no}): IADE faturasi - borc/alacak yonu kontrol edilmeli")
@@ -2334,6 +2449,14 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             s["kdv_haric"] = round(sum(float(k.get("matrah") or 0) for k in f.get("kalemler") or []), 2)
             s["kdv_dagilim"] = [{"oran": k.get("oran"), "matrah": round(float(k.get("matrah") or 0), 2),
                                  "kdv": round(float(k.get("kdv") or 0), 2)} for k in f.get("kalemler") or []]
+            if tevk > 0:
+                kdv_dahil_ = round(sum(float(k.get("matrah") or 0) + float(k.get("kdv") or 0)
+                                       for k in f.get("kalemler") or []) + float(f.get("ek_vergi") or 0), 2)
+                s["tevkifat"] = tevk
+                s["kdv_dahil"] = kdv_dahil_
+                s["odenecek"] = round(kdv_dahil_ - tevk, 2)
+                if tevk_tahmin:
+                    s["tevkifat_tahmin"] = True
             # faturanın PDF'i (arayüzde açıp bakmak için)
             pdf_ad = f.get("pdf") or (f.get("dosya", "") if (f.get("kaynak") == "pdf" or f.get("pdf_yer")) else "")
             if pdf_ad:
@@ -2342,7 +2465,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 if f.get("pdf_sayfa") or f.get("sayfa"):
                     s["pdf_sayfa"] = f.get("pdf_sayfa") or f.get("sayfa")
             # rol: arayüzde düzeltme hangi öğrenmeye gidecek (gider düzeltmesi cariye öğrenilmesin)
-            if "KDV)" in detay_ek or hesap.startswith(("191", "391")):
+            if rol == "tevkifat":
+                s["rol"] = "tevkifat"
+            elif "KDV)" in detay_ek or hesap.startswith(("191", "391")):
                 s["rol"] = "kdv"
                 m_ = re.search(r"%(\d+)", detay_ek)
                 if m_:
@@ -2369,6 +2494,10 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 kontrol.append("gider")
             if s["rol"] == "kdv" and not hesap:
                 kontrol.append("kdv")
+            if s["rol"] == "tevkifat" and (not hesap or fatura_no in tevk_hesap_belirsiz):
+                kontrol.append("tevkifat_hesap")
+            if tevk_tahmin and s["rol"] in ("tevkifat", "cari"):
+                kontrol.append("tevkifat_tahmin")
             # Listede/PDF'te KDV dağılımı yoksa tutarın tamamı (KDV dahil) gidere yazılır — kontrol şart
             if s["rol"] == "gider" and (not f.get("kalemler") or {"kdv", "tutar"} & set(f.get("eksik") or [])):
                 kontrol.append("kdv_yok")
@@ -2401,6 +2530,22 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 return gecmis_kdv[0]
             return _kdv_hesabi_ad([{"kod": k, "ad": a} for k, a in km.hesaplar], oran, yon)
 
+        def tevkifat_hesap_sec(yon):
+            # kullanıcının düzelttiği (firma geneli) > bu carinin geçmişi > mizan adı
+            ogr = (gider_ogrenme or {}).get(f"tevkifat|{yon}")
+            if ogr and ogr in alt_kodlar:
+                return ogr
+            for kod in gecmis_es.get("tevkifat") or []:
+                ad_ = norm(km.hesap_adi(kod) or "")
+                # 360'ta gelir vergisi stopajı (SMM, kira) da olur — KDV tevkifatı sayılmaz
+                if kod in alt_kodlar and not any(x in ad_ for x in ("GELIR", "STOPAJ", "DAMGA", "SGK", "SIGORTA", "KURUMLAR")):
+                    return kod
+            kod = _tevkifat_hesabi(hes_list, yon, alt_kodlar)
+            ad_ = norm(km.hesap_adi(kod) or "") if kod else ""
+            if kod and "TEVKIF" not in ad_ and "SORUMLU" not in ad_:
+                tevk_hesap_belirsiz.add(fatura_no)   # adı yalnız "KDV" — bir kez onaylanınca öğrenilir
+            return kod
+
         # FAKTORİNG / BSMV (TEMELFATURA + ek vergi)
         # Matrah + BSMV toplamı TEK satır olarak 780.02'ye yazılır.
         # Kalemlerin varlığı önemsiz — TEMELFATURA + ek_vergi kesin faktoring senaryosu.
@@ -2415,50 +2560,8 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             fis += 1
             continue
 
-        # TEVKIFATLI fatura
-        if f["tur"] == "TEVKIFAT" and f["tevkifat"] > 0:
-            # kalemler normal (gider matrah + normal KDV), sonra tevkifat kısmı ayrı hesaba
-            for k in f["kalemler"]:
-                oran = k["oran"]
-                matrah = k["matrah"]; kdv = k["kdv"]
-                if yon == "alis":
-                    # alışta: gider + %20 KDV borç
-                    fisler.append(sat(gider_kod or vars_gider, matrah, 0, f" (%{oran})"))
-                    kdv_kod = gecmis_kdv_sec(oran, "alis") or ""
-                    if not kdv_kod: kdv_eksik.setdefault(f"%{oran} için 191", set()).add(fatura_no)
-                    fisler.append(sat(kdv_kod, kdv, 0, f" (%{oran} KDV)"))
-                else:  # satış
-                    kdv_kod = gecmis_kdv_sec(oran, "satis") or ""
-                    if not kdv_kod: kdv_eksik.setdefault(f"%{oran} için 391", set()).add(fatura_no)
-                    fisler.append(sat(gider_kod or vars_gider, 0, matrah, f" (%{oran})"))
-                    fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
-
-            # tevkifat: satışta 391 alacaktan düşülür (biz KDV'nin bir kısmını
-            # tahsil etmedik, alıcı direkt vergiye ödedi); alışta ise sorumlu KDV.
-            tevk_kod = _tevkifat_hesabi(hes_list, yon)
-            if yon == "alis":
-                # alışta sorumlu sıfatıyla ödenecek KDV borç
-                if tevk_kod:
-                    fisler.append(sat(tevk_kod, f["tevkifat"], 0, " (tevkifat KDV)"))
-                fisler.append(sat(cari_kod or "198.01.001", 0, toplam))
-            else:
-                # satışta: tevkifat KDV BORÇ (bizde iade edilecek KDV)
-                # Ödenecek Tutar = toplam - tevkifat, bu kadar 120 borç
-                if tevk_kod:
-                    fisler.append(sat(tevk_kod, f["tevkifat"], 0, " (tevkifat/iade KDV)"))
-                # Ödenecek = KDV dahil toplam − tevkifat. KDV dahil toplam kalemlerden hesaplanır:
-                # listelerin "Toplam" sütunu kimi zaman zaten ödenecek tutardır (eLogo), ondan
-                # bir daha tevkifat düşülürse fiş tevkifat kadar dengesiz çıkıyordu.
-                kdv_dahil = round(sum(k["matrah"] + k["kdv"] for k in f["kalemler"]), 2)
-                odenecek = round(kdv_dahil - f["tevkifat"], 2)
-                if toplam and abs(toplam - odenecek) > 0.05 and abs(toplam - kdv_dahil) > 0.05:
-                    uyarilar.append(f"{fatura_no}: tevkifatlı faturada liste toplamı ({toplam:,.2f}) ne KDV dahil "
-                                    f"toplamı ({kdv_dahil:,.2f}) ne ödenecek tutarı ({odenecek:,.2f}) tutuyor — kontrol edin")
-                fisler.append(sat(cari_kod or "198.01.001", odenecek, 0, " (ödenecek)"))
-            fis += 1
-            continue
-
-        # NORMAL SATIŞ/ALIŞ FATURASI (çok KDV oranlı olabilir)
+        # NORMAL SATIŞ/ALIŞ FATURASI (çok KDV oranlı olabilir; tevkifatlı da bu yoldan:
+        # gider/gelir ve KDV'nin TAMAMI normal yazılır, tevkifat ayrı satırda, cari ödenecek tutarla)
         fatura_bas = len(fisler)
         # Kalem yok ama toplam varsa (OCR gürültülü perakende fişi): tek satır
         # gider/gelir yaz. Kullanıcı Düzenle'de KDV'yi ayırabilir.
@@ -2501,7 +2604,12 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         # sütunu listede yok) fark kaybolup fiş dengesiz çıkıyordu. Fark carinin geçmişteki
         # ek vergi hesabına (yoksa gider hesabına) yazılır ve uyarılır.
         yazilan = round(sum((x["borc"] if yon == "alis" else x["alacak"]) for x in fisler[fatura_bas:]), 2)
-        fark = round(toplam - yazilan, 2)
+        # Tevkifatlı faturada liste toplamı ya KDV dahil toplam ya da ödenecek tutardır
+        # (entegratör listeleri/PDF: ödenecek). Denge KDV dahil toplamla kurulur.
+        toplam_dahil = toplam
+        if tevk > 0 and abs(toplam + tevk - yazilan) < abs(toplam - yazilan):
+            toplam_dahil = round(toplam + tevk, 2)
+        fark = round(toplam_dahil - yazilan, 2)
         if fark > 0.01:
             ek_k = gecmis_es.get("ek", "")
             fark_kod = ek_k if ek_k and ek_k in alt_kodlar else (gider_kod or vars_gider)
@@ -2512,11 +2620,40 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             for x in fisler[fatura_bas:]:
                 x["kontrol"] = list(dict.fromkeys((x.get("kontrol") or []) + ["dengesiz"]))
 
+        # KDV tevkifatı:
+        #  alış : KDV'nin tamamı 191'de (borç); tevkif edilen kısmı alıcı 2 No.lu beyanla
+        #         öder -> 360 sorumlu KDV ALACAK; satıcıya (320) yalnız ödenecek tutar.
+        #  satış: KDV'nin tamamı 391'de (alacak); tevkif edilen kısmı alıcı öder ->
+        #         391 tevkifat hesabı BORÇ (hesaplanan KDV azalır); 120'ye ödenecek tutar.
+        cari_tutar = toplam_dahil
+        if tevk > 0:
+            tevk_kod = tevkifat_hesap_sec(yon)
+            if yon == "alis":
+                if not tevk_kod:
+                    tevkifat_hesapsiz.add(fatura_no)
+                fisler.append(sat(tevk_kod, 0, tevk, " (KDV tevkifatı)", rol="tevkifat"))
+            else:
+                if not tevk_kod:
+                    # ayrı tevkifat hesabı yok: en büyük KDV'li oranın 391 hesabı borçlanır (net hesaplanan KDV)
+                    kdv_satirlari = [x for x in fisler[fatura_bas:] if x.get("rol") == "kdv" and x["hesap"]]
+                    if kdv_satirlari:
+                        tevk_kod = max(kdv_satirlari, key=lambda x: x["alacak"])["hesap"]
+                        tevkifat_kdvden.add(fatura_no)
+                    else:
+                        tevkifat_hesapsiz.add(fatura_no)
+                fisler.append(sat(tevk_kod, tevk, 0, " (KDV tevkifatı)", rol="tevkifat"))
+            cari_tutar = round(toplam_dahil - tevk, 2)
+            tevkifatli.append(fatura_no)
+            if tevk_tahmin:
+                tevkifat_tahminli.append(f"{fatura_no} ({tevk:,.2f})")
+        elif f.get("tur") == "TEVKIFAT":
+            tevkifat_tutarsiz.append(fatura_no)
+
         # karşı taraf (tek satır)
         if yon == "alis":
-            fisler.append(sat(cari_kod or "198.01.001", 0, toplam))
+            fisler.append(sat(cari_kod or "198.01.001", 0, cari_tutar))
         else:
-            fisler.append(sat(cari_kod or "198.01.001", toplam, 0))
+            fisler.append(sat(cari_kod or "198.01.001", cari_tutar, 0))
 
         # Bu firmanın geçmişinde hiç kullanılmamış gider hesabı (yapay zekâ/varsayılan seçtiyse)
         if gider_kaynak in ("yz", "tahmin") and kullanilan_gider and gider_kod and gider_kod not in kullanilan_gider:
@@ -2532,6 +2669,28 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
     if kalem_bekleyen:
         uyarilar.append(f"{len(kalem_bekleyen)} faturanın kalem hesap önerileri yapay zekâda hazırlanıyor — "
                         f"birkaç dakika sonra tekrar İşle'ye basın")
+    if tevkifatli:
+        if yon == "alis":
+            uyarilar.append(f"{len(tevkifatli)} tevkifatlı fatura: KDV'nin tamamı 191'e borç, tevkif edilen kısım "
+                            f"360 sorumlu KDV'ye alacak, satıcıya ödenecek tutar yazıldı: {_kisa_liste(tevkifatli, 4)}")
+        else:
+            uyarilar.append(f"{len(tevkifatli)} tevkifatlı fatura: KDV'nin tamamı 391'e alacak, tevkif edilen kısım "
+                            f"tevkifat hesabına borç, müşteriye ödenecek tutar yazıldı: {_kisa_liste(tevkifatli, 4)}")
+    if tevkifat_tahminli:
+        uyarilar.append(f"{len(tevkifat_tahminli)} faturada tevkifat listede yok; liste toplamı KDV dahil tutardan "
+                        f"tevkifat payı kadar az olduğu için fark tevkifat sayıldı — PDF'ten kontrol et: "
+                        f"{_kisa_liste(tevkifat_tahminli, 4)}")
+    if tevkifat_tutarsiz:
+        uyarilar.append(f"{len(tevkifat_tutarsiz)} fatura tevkifatlı görünüyor ama tevkifat tutarı okunamadı — "
+                        f"fiş tevkifatsız yazıldı; faturanın PDF'ini ekle: {_kisa_liste(tevkifat_tutarsiz, 4)}")
+    if tevkifat_hesapsiz:
+        ne = "360 (sorumlu sıfatıyla ödenecek KDV)" if yon == "alis" else "391 tevkifat"
+        uyarilar.append(f"Mizanda {ne} hesabı bulunamadı ({len(tevkifat_hesapsiz)} fatura) — tevkifat satırı boş "
+                        f"hesapla bırakıldı; bir satırı doğru hesaba çekersen diğerleri de öğrenilir: "
+                        f"{_kisa_liste(sorted(tevkifat_hesapsiz), 4)}")
+    if tevkifat_kdvden:
+        uyarilar.append(f"Mizanda ayrı 391 tevkifat hesabı yok: {len(tevkifat_kdvden)} faturada tevkifat, aynı 391 "
+                        f"KDV hesabının borcuna yazıldı (net hesaplanan KDV): {_kisa_liste(sorted(tevkifat_kdvden), 4)}")
     if fark_yazilan:
         uyarilar.append(f"{len(fark_yazilan)} faturada liste toplamı kalemlerden fazlaydı (ÖİV/ÖTV gibi ek vergi "
                         f"sütunu olmayabilir); fark ayrı satıra yazıldı, kontrol et: {_kisa_liste(fark_yazilan, 4)}")
