@@ -280,8 +280,11 @@
   </div>
 
   <div class="card">
-    <h2>Kayıtlı Çıktılar</h2>
-    <div id="ciktilar" class="hint">—</div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <h2 style="flex:1;margin:0">Kayıtlı Çıktılar</h2>
+      <button class="btn" id="ciktiTumSilBtn" onclick="ciktiTumunuSil()" style="display:none;background:#c0392b;color:#fff;padding:5px 14px;font-size:13px" title="Bu firmanın tüm kayıtlı çıktılarını sil">🗑 Tümünü sil</button>
+    </div>
+    <div id="ciktilar" class="hint" style="margin-top:10px">—</div>
   </div>
 </div>
 
@@ -528,8 +531,10 @@ async function firmaDurum(){
     fk==='eski'  ? 'Eski kural dosyasından (kural.xlsx)' : '';
   // belge listesi
   const bl=$('belgeListe');
-  if(t.belgeler&&t.belgeler.length){
-    bl.innerHTML=t.belgeler.map(f=>`<div class="dosya-satir"><span style="flex:1">📎 ${f}</span><button class="btn btn-x" onclick="belgeSil('${f.replace(/'/g,"")}')">🗑</button></div>`).join('');
+  const ob=oturumSet(), gorunen=(t.belgeler||[]).filter(f=>ob.has(f));
+  ob.forEach(f=>{ if(!(t.belgeler||[]).includes(f)) ob.delete(f); });   // sunucuda silinmişse
+  if(gorunen.length){
+    bl.innerHTML=gorunen.map(f=>`<div class="dosya-satir"><span style="flex:1">📎 ${f}</span><button class="btn btn-x" onclick="belgeSil('${f.replace(/'/g,"")}')">🗑</button></div>`).join('');
   }else bl.innerHTML='<div class="hint">Henüz belge yok.</div>';
   if(aktifTip.startsWith('fatura')) faturaPdfListele();
   loadCiktilar();
@@ -760,6 +765,11 @@ async function klasordanAl(tur, yol){
   }catch(e){ hideLoading(); toast('Bağlantı hatası: '+e.message,false); }
 }
 
+// Yalnızca bu sayfa açıkken yüklenen belgeler gösterilir ve işlenir; önceki
+// oturumlardan sunucuda kalan dosyalar sayfa açılınca gelmez.
+const oturumBelge={};   // "firma|tip" -> Set(dosya adı)
+function oturumSet(){ const k=firmaKod+'|'+apiTip(); return oturumBelge[k]||(oturumBelge[k]=new Set()); }
+
 async function belgeYukle(){
   if(!firmaKod){alert('Önce firma seç');return;}
   const files=$('belgeFile').files; if(!files.length){alert('Dosya seç');return;}
@@ -769,6 +779,7 @@ async function belgeYukle(){
       const fd=new FormData(); fd.append('file',f);
       const r=await fetch(`/api/firma/${firmaKod}/belge/${apiTip()}`,{method:'POST',body:fd});
       if(!r.ok) toast(`${f.name} yükleme hatası`,false);
+      else oturumSet().add((await r.json()).dosya);
     }
     toast(`${files.length} dosya yüklendi`,true);
   }catch(e){ toast('Yükleme hatası: '+e.message,false); }
@@ -777,6 +788,7 @@ async function belgeYukle(){
 async function belgeSil(fn){
   if(!confirm('Silinsin mi?\n'+fn))return;
   await fetch(`/api/firma/${firmaKod}/belge/${apiTip()}/${encodeURIComponent(fn)}`,{method:'DELETE'});
+  oturumSet().delete(fn);
   firmaDurum();
 }
 
@@ -784,12 +796,14 @@ function nf(n){return (Math.round((n||0)*100)/100).toLocaleString('tr-TR',{minim
 
 async function isle(){
   if(!firmaKod){alert('Önce firma seç');return;}
+  const dosyalar=[...oturumSet()];
+  if(!dosyalar.length && !aktifTip.startsWith('fatura')){ alert('Önce 2. bölümden belge yükleyin'); return; }
   showLoading('İşleniyor (OCR sürebilir)...');
   $('durum').textContent='işleniyor...';
   try{
     const yon = aktifYon();
     const resp=await fetch(`/api/firma/${firmaKod}/isle/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,yon})});
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,yon,dosyalar})});
     if(!resp.ok){ const e=await resp.text(); toast('İşleme hatası: '+e,false); hideLoading(); $('durum').textContent=''; return; }
     const r=await resp.json();
     satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false; suzgec='hepsi'; bankaSuzgec='hepsi';
@@ -1024,14 +1038,25 @@ async function disaAktar(format){
 }
 
 async function loadCiktilar(){
+  $('ciktiTumSilBtn').style.display='none';
   if(!firmaKod){$('ciktilar').textContent='—';return;}
   const list=await (await fetch(`/api/firma/${firmaKod}/ciktilar`)).json();
   if(!list.length){$('ciktilar').textContent='Henüz çıktı yok.';return;}
+  $('ciktiTumSilBtn').style.display='inline-block';
+  $('ciktiTumSilBtn').textContent=`🗑 Tümünü sil (${list.length})`;
   $('ciktilar').innerHTML=list.map(f=>{
     const d=new Date(f.tarih); const p=n=>String(n).padStart(2,'0');
     const ts=`${p(d.getDate())}.${p(d.getMonth()+1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
     return `<div class="dosya-satir" style="display:flex;align-items:center;gap:8px"><a href="/api/firma/${firmaKod}/cikti/${encodeURIComponent(f.dosya)}" style="flex:1;color:var(--ana);text-decoration:none">📄 ${f.dosya}</a><span class="hint">${ts} · ${(f.boyut/1024).toFixed(0)} KB</span><button class="btn btn-x" onclick="ciktiSil('${f.dosya.replace(/'/g,"\\'")}')" title="Sil" style="padding:2px 8px;font-size:12px;color:#c0392b;border:1px solid #e0c9c9;background:#fff;cursor:pointer">🗑</button></div>`;
   }).join('');
+}
+async function ciktiTumunuSil(){
+  if(!firmaKod) return;
+  const n=$('ciktilar').querySelectorAll('.dosya-satir').length;
+  if(!confirm(`Bu firmanın ${n} kayıtlı çıktısının TÜMÜ silinsin mi?\nBu işlem geri alınamaz.`)) return;
+  const r=await fetch(`/api/firma/${firmaKod}/ciktilar`,{method:'DELETE'});
+  if(r.ok){ const j=await r.json(); toast(`${j.silinen} çıktı silindi`,true); } else toast('Silme hatası',false);
+  loadCiktilar();
 }
 async function ciktiSil(dosya){
   if(!confirm('Bu çıktıyı silmek istediğinize emin misiniz?\n'+dosya)) return;

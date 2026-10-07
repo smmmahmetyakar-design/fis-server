@@ -645,7 +645,9 @@ def onerilen_fisno(kod: str, tip: str):
 class IsleBody(BaseModel):
     firma_kod: str
     tip: str
-    dosyalar: list[str] = []       # işlenecek belgeler (boşsa tümü)
+    # işlenecek belgeler. None (gönderilmezse): klasördeki tümü. Arayüz yalnızca bu sayfa
+    # açıkken yüklenenleri gönderir; boş liste = hiç belge yok (önceki oturumun dosyaları işlenmez).
+    dosyalar: list[str] | None = None
     fis_baslangic: int = 0         # 0 ise otomatik (son+1)
     gecmis_ekle: bool = False      # çıktıya geçmiş fişleri de kat
     yon: str = "alis"              # fatura için: alis | satis
@@ -659,8 +661,8 @@ def isle(kod: str, tip: str, body: IsleBody):
     d = firma_dir(kod)
     km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", _gecmis_kaynak(d, tip))
 
-    dosyalar = body.dosyalar or [f.name for f in (d / tip).iterdir()
-                                   if f.is_file() and not f.name.startswith("_")]
+    dosyalar = body.dosyalar if body.dosyalar is not None else \
+        [f.name for f in (d / tip).iterdir() if f.is_file() and not f.name.startswith("_")]
     tum_ham = []
     for fn in dosyalar:
         p = d / tip / fn
@@ -890,6 +892,20 @@ def ciktilar(kod: str):
                         "boyut": st.st_size})
     out.sort(key=lambda x: x["tarih"], reverse=True)
     return out
+
+
+@app.delete("/api/firma/{kod}/ciktilar")
+def ciktilar_sil(kod: str):
+    """Firmanın kayıtlı çıktılarının (xlsx/xml) tümünü siler."""
+    d = firma_dir(kod)
+    cd = d / "cikti"
+    silinen = 0
+    if cd.exists():
+        for f in cd.iterdir():
+            if f.is_file() and f.suffix in (".xlsx", ".xml"):
+                f.unlink()
+                silinen += 1
+    return {"ok": True, "silinen": silinen}
 
 
 @app.get("/api/firma/{kod}/cikti/{fname}")
