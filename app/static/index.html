@@ -219,7 +219,7 @@
     <div id="faturaPdfAlani" class="fatura-pdf-alani" style="display:none">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <h3 style="flex:1;margin:0">Fatura PDF'leri (<span id="faturaPdfYon">alış</span>)</h3>
-        <button class="btn btn-kucuk" onclick="karsilastirAc()" title="Listedeki matrah/KDV tutarlarını fatura PDF'leriyle %1, %10, %20 bazında karşılaştır">⚖ Liste–PDF karşılaştır</button>
+        <button class="btn btn-kucuk" onclick="karsilastirAc()" title="Listedeki matrah/KDV tutarlarını fatura PDF'leriyle %1, %10, %20 bazında karşılaştır">⚖ KDV tablosu (Liste–PDF)</button>
       </div>
       <div class="hint" style="margin-bottom:8px">Fatura listesinde eksik kalan cari, tarih ve KDV dağılımı, fatura numarası eşleşen PDF'ten tamamlanır. Listede hiç olmayan faturalar da PDF'ten eklenir. Liste yoksa yalnızca PDF'lerle de çalışır.</div>
       <div class="yukle-kutu" id="faturaPdfKutu">
@@ -244,6 +244,7 @@
       <button class="btn btn-edit" id="duzenleBtn" onclick="duzenleToggle()" style="display:none;align-self:flex-end">✎ Düzenle</button>
       <button class="btn btn-ana" onclick="disaAktar('xlsx')" style="align-self:flex-end">⬇ Excel</button>
       <button class="btn btn-ana" onclick="disaAktar('xml')" style="background:#2f5d6e;align-self:flex-end">⬇ XML</button>
+      <button class="btn" id="karsBtn3" onclick="karsilastirAc()" style="display:none;align-self:flex-end;background:#7a5c12;color:#fff" title="Listedeki matrah/KDV tutarlarını fatura PDF'leriyle %1, %10, %20 bazında karşılaştır">⚖ KDV tablosu (Liste–PDF)</button>
       <span id="durum" class="hint" style="align-self:flex-end"></span>
     </div>
     <div class="hint" style="margin-top:6px">Fiş No 0 = otomatik (geçmiş son fiş no + 1'den devam).</div>
@@ -321,7 +322,7 @@
 <div class="modal-bg" id="karsModal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal kars-modal">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <h3 style="flex:1;margin:0">Liste – PDF karşılaştırması (matrah / KDV, %1 · %10 · %20)</h3>
+      <h3 style="flex:1;margin:0">KDV tablosu — Liste / PDF karşılaştırması (matrah · KDV, %1 · %10 · %20)</h3>
       <label style="font-size:12.5px;display:flex;align-items:center;gap:5px"><input type="checkbox" id="karsSadeceFark" style="width:auto" checked onchange="karsCiz()"> yalnız farklı / eksik olanlar</label>
       <button class="btn btn-gri" onclick="$('karsModal').classList.remove('show')">Kapat</button>
     </div>
@@ -364,6 +365,7 @@ function sekmeSec(tip){
   $('fisKarti').style.display = fisMod ? '' : 'none';
   const faturaMod = tip.startsWith('fatura');
   $('faturaPdfAlani').style.display = faturaMod ? '' : 'none';
+  $('karsBtn3').style.display = faturaMod ? '' : 'none';
   $('faturaPdfYon').textContent = tip==='fatura_satis' ? 'satış' : 'alış';
   $('faturaPdfListe').innerHTML=''; $('yzDurum').innerHTML=''; $('yzSinav').innerHTML='';
   clearTimeout(pdfIzleZamanlayici);
