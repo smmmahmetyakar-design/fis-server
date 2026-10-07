@@ -2242,15 +2242,68 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                     for k, o_ in zip(kalem_hesap_detay, yz_["kalemler"]):
                         if "k" not in k and o_:
                             k["k"], k["kk"], k["g"] = o_["kod"], "yz", o_.get("gerekce", "")
+            # Etkin kalem hesabı: öğrenilmiş kalem > (fatura hesabı kullanıcıdan/geçmişten geliyorsa) o
+            # > yapay zekâ kalem önerisi > fatura hesabı. Yapay zekânın farklı önerisi "yk"de kalır.
+            fatura_guvenilir = gider_kaynak in ("ogrenme", "gecmis")
+            # Fatura hesabı güvenilir olsa da yapay zekâ kalemleri FARKLI hesaplara ayırıyorsa
+            # (karışık fatura: kiralama + malzeme) bölünür; fatura hesabıyla aynı olanlar onaylı sayılır.
+            karisik = len({k["k"] for k in kalem_hesap_detay if k.get("kk") == "yz"}) > 1
+            for k in kalem_hesap_detay:
+                if k.get("kk") in ("ogrenme", "benzer"):
+                    continue
+                if k.get("kk") == "yz" and (not fatura_guvenilir or (karisik and k["k"] != gider_kod)):
+                    continue
+                if k.get("kk") == "yz" and k.get("k") != gider_kod:
+                    k["yk"] = k["k"]
+                if gider_kod:
+                    k["k"], k["kk"] = gider_kod, "fatura"
 
-        def sat(hesap, borc, alacak, detay_ek=""):
+        def gider_bolumleri(oran, matrah):
+            """Bir KDV oranının matrahını kalem hesaplarına böler: [(kod, tutar, açıklamalar, kaynak)].
+            Kalem tutarları o oranın matrahını tutmuyorsa (fatura altı iskonto vb.) bölünmez."""
+            tek = [(gider_kod or vars_gider, matrah, None, None)]
+            det = [k for k in kalem_hesap_detay if k.get("t") is not None and k.get("k")]
+            if not det or len(det) != len(kalem_hesap_detay):
+                return tek
+            if any("o" in k for k in det):
+                det = [k for k in det if k.get("o") == oran]
+            elif len({x["oran"] for x in f.get("kalemler") or []}) > 1:
+                return tek
+            if not det or abs(sum(k["t"] for k in det) - matrah) > 0.05 + 0.01 * len(det):
+                return tek
+            gruplar = {}
+            for k in det:
+                g = gruplar.setdefault(k["k"], {"t": 0.0, "a": [], "kk": set()})
+                g["t"] += k["t"]; g["a"].append(k["a"]); g["kk"].add(k.get("kk", ""))
+            if len(gruplar) == 1 and next(iter(gruplar)) == (gider_kod or vars_gider):
+                return [(gider_kod or vars_gider, matrah, [k["a"] for k in det], None)]
+            out, kalan = [], round(matrah, 2)
+            sirali = sorted(gruplar.items(), key=lambda x: -x[1]["t"])
+            for i, (kod, g) in enumerate(sirali):
+                tutar = kalan if i == len(sirali) - 1 else round(g["t"], 2)
+                kalan = round(kalan - tutar, 2)
+                kaynak_ = ("yz" if "yz" in g["kk"] else "ogrenme_kalem_benzer" if "benzer" in g["kk"]
+                           else "ogrenme_kalem" if g["kk"] <= {"ogrenme"} else None)
+                out.append((kod, tutar, g["a"], kaynak_))
+            return out
+
+        def gider_yaz(oran, matrah, detay_ek=""):
+            """Gider (alış) / gelir (satış) satır(lar)ı — kalem hesaplarına bölünmüş olabilir."""
+            for kod, tutar, aciklamalar, kaynak_ in gider_bolumleri(oran, matrah):
+                if yon == "alis":
+                    fisler.append(sat(kod, tutar, 0, detay_ek, rol="gider", kaynak_=kaynak_, kalemler=aciklamalar))
+                else:
+                    fisler.append(sat(kod, 0, tutar, detay_ek, rol="gider", kaynak_=kaynak_, kalemler=aciklamalar))
+
+        def sat(hesap, borc, alacak, detay_ek="", rol=None, kaynak_=None, kalemler=None):
             # Açıklama alanları SADECE firma adı (KDV oranı, "(faktoring)" gibi ekler yok).
             s = _sat(fisno, tarih, cari_ad, hesap, borc, alacak,
                      evrak_no=fatura_no, detay=cari_ad, kaynak=cari_kaynak or "fatura")
             if belge_rozet:
                 s["belge"] = belge_rozet
             # önizlemede gösterilecek fatura içeriği: kalem açıklamaları ve KDV hariç tutar
-            s["fatura_kalemleri"] = [str(a)[:120] for a in (f.get("kalem_aciklamalari") or [])[:8]]
+            s["fatura_kalemleri"] = [str(a)[:120] for a in (kalemler if kalemler is not None
+                                                            else (f.get("kalem_aciklamalari") or []))[:8]]
             s["fatura_kalem_detay"] = kalem_hesap_detay
             s["kdv_haric"] = round(sum(float(k.get("matrah") or 0) for k in f.get("kalemler") or []), 2)
             s["kdv_dagilim"] = [{"oran": k.get("oran"), "matrah": round(float(k.get("matrah") or 0), 2),
@@ -2268,10 +2321,16 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 m_ = re.search(r"%(\d+)", detay_ek)
                 if m_:
                     s["oran"] = int(m_.group(1))
-            elif hesap == gider_kod and hesap != cari_kod:
+            elif rol == "gider" or (hesap == gider_kod and hesap != cari_kod):
                 s["rol"] = "gider"
-                s["kaynak"] = gider_kaynak
-                if gider_not:
+                s["kaynak"] = kaynak_ or gider_kaynak
+                if kaynak_ and kaynak_ != gider_kaynak:
+                    s["not"] = {"yz": "Kalem bazında yapay zekâ önerisi",
+                                "ogrenme_kalem": "Kalem öğrenmesi",
+                                "ogrenme_kalem_benzer": "Benzer kalem öğrenmesi"}.get(kaynak_, "")
+                    if not s["not"]:
+                        del s["not"]
+                elif gider_not:
                     s["not"] = gider_not
             elif hesap == cari_kod:
                 s["rol"] = "cari"
@@ -2280,7 +2339,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             # Doğrulanmamış hesaplar: Excel'e aktarılır ama fiş açıklamasına KONTROL yazılır
             # (kullanıcı önizlemede düzeltir ya da onaylarsa işaret kalkar).
             kontrol = []
-            if s["rol"] == "gider" and gider_kaynak in ("yz", "tahmin", "ogrenme_kalem_benzer"):
+            if s["rol"] == "gider" and s.get("kaynak") in ("yz", "tahmin", "ogrenme_kalem_benzer"):
                 kontrol.append("gider")
             if s["rol"] == "kdv" and not hesap:
                 kontrol.append("kdv")
@@ -2372,21 +2431,18 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         # gider/gelir yaz. Kullanıcı Düzenle'de KDV'yi ayırabilir.
         if not f["kalemler"] and toplam > 0:
             if yon == "alis":
-                fisler.append(sat(gider_kod or vars_gider, toplam, 0))
+                fisler.append(sat(gider_kod or vars_gider, toplam, 0, rol="gider"))
             else:
-                fisler.append(sat(gider_kod or vars_gider, 0, toplam))
+                fisler.append(sat(gider_kod or vars_gider, 0, toplam, rol="gider"))
         for k in f["kalemler"]:
             oran = k["oran"]
             matrah = k["matrah"]; kdv = k["kdv"]
             if oran == 0:
                 # KDV'siz kalem
-                if yon == "alis":
-                    fisler.append(sat(gider_kod or vars_gider, matrah, 0))
-                else:
-                    fisler.append(sat(gider_kod or vars_gider, 0, matrah))
+                gider_yaz(0, matrah)
                 continue
             if yon == "alis":
-                fisler.append(sat(gider_kod or vars_gider, matrah, 0, f" (%{oran})"))
+                gider_yaz(oran, matrah, f" (%{oran})")
                 kdv_kod = gecmis_kdv_sec(oran, "alis")
                 if not kdv_kod:
                     kdv_eksik.setdefault(f"%{oran} için 191", set()).add(fatura_no)
@@ -2395,7 +2451,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 kdv_kod = gecmis_kdv_sec(oran, "satis")
                 if not kdv_kod:
                     kdv_eksik.setdefault(f"%{oran} için 391", set()).add(fatura_no)
-                fisler.append(sat(gider_kod or vars_gider, 0, matrah, f" (%{oran})"))
+                gider_yaz(oran, matrah, f" (%{oran})")
                 fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
 
         # ek vergi (BSMV %5) — TTNET, faktoring karışık faturaları için

@@ -989,6 +989,7 @@ class OgretBody(BaseModel):
     oran: int = 0          # KDV satırı için oran (KDV hesabı orana göre öğrenilir)
     yon: str = "alis"      # fatura için alis | satis
     kalemler: list[str] = []   # fatura gider satırı: faturanın kalem açıklamaları (açıklamaya göre öğrenme)
+    sadece_kalem: bool = False  # kalemlere bölünmüş faturanın bir gider satırı: cari geneline öğrenme
 
 
 @app.post("/api/firma/{kod}/ogret/{tip}")
@@ -1012,7 +1013,8 @@ def ogret(kod: str, tip: str, body: OgretBody):
             return {"ok": True, "ogrenilen": len(og), "tur": "kdv"}
         if body.rol != "gider":
             return {"ok": True, "ogrenilen": 0, "not": "bu satır türü öğrenilmez"}
-        og[f"{body.yon}|{norm(body.aciklama)}"] = body.kod
+        if not (body.sadece_kalem and body.kalemler):
+            og[f"{body.yon}|{norm(body.aciklama)}"] = body.kod
         # kalem açıklamasına göre de öğren: aynı açıklama başka bir faturada (başka satıcıda) da gelsin
         for a in body.kalemler[:15]:
             if norm(a):

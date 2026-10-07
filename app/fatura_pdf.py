@@ -19,7 +19,7 @@ from pathlib import Path
 from app import yapay_zeka
 from app.kurallar import norm
 
-OKUYUCU_SURUM = 4   # 2: fatura kalem açıklamaları (gider seçimi için) · 3: toplu PDF'i faturalara bölme · 4: kalem tutarları
+OKUYUCU_SURUM = 5   # 2: fatura kalem açıklamaları (gider seçimi için) · 3: toplu PDF'i faturalara bölme · 4: kalem tutarları · 5: kalem KDV oranı
 YONLER = ("alis", "satis")
 
 _kilit = threading.RLock()
@@ -202,6 +202,7 @@ def _kalem_detaylari(tablolar: list) -> list:
             if j is None:
                 continue
             t = next((k for k, c in enumerate(nrow) if "MAL HIZMET TUTAR" in c), None)
+            o = next((k for k, c in enumerate(nrow) if "KDV" in c and "ORAN" in c), None)
             if t is None:
                 adaylar = [k for k, c in enumerate(nrow) if ("TUTAR" in c or c in ("TUTAR", "BEDEL"))
                            and not any(x in c for x in ("KDV", "ISKONTO", "FIYAT", "VERGI", "TOPLAM"))]
@@ -213,7 +214,11 @@ def _kalem_detaylari(tablolar: list) -> list:
                 if len(v) <= 2 or re.fullmatch(r"[\d.,%\s]+(TL)?", v):
                     continue
                 tutar = _sayi(r[t]) if t is not None and t < len(r) else None
-                out.append({"a": v[:120], "t": round(tutar, 2) if tutar is not None else None})
+                oran = _sayi(r[o]) if o is not None and o < len(r) else None
+                k_ = {"a": v[:120], "t": round(tutar, 2) if tutar is not None else None}
+                if oran is not None:
+                    k_["o"] = int(round(oran))
+                out.append(k_)
             break
     return out[:30]
 

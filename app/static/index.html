@@ -150,7 +150,7 @@
   .fat-ic{font-size:11.5px;min-width:340px;max-width:560px;color:#333}
   .fat-kalem div{line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:550px}
   .kalem-kod{font-weight:600;font-family:ui-monospace,Consolas,monospace;font-size:11px;cursor:help}
-  .kalem-kod.kk-ogrenme{color:#1e6b34} .kalem-kod.kk-benzer{color:#8a6d1a} .kalem-kod.kk-yz{color:#4b2f86} .kalem-kod.kk-bekliyor{color:#999}
+  .kalem-kod.kk-ogrenme{color:#1e6b34} .kalem-kod.kk-benzer{color:#8a6d1a} .kalem-kod.kk-yz{color:#4b2f86} .kalem-kod.kk-bekliyor{color:#999} .kalem-kod.kk-fatura{color:#24456b}
   .fat-tutar{margin-top:3px;white-space:nowrap}
   .hesap-ad{font-size:10.5px;color:#6b6b6b;margin-top:1px;line-height:1.25;max-width:260px}
   .hesap-ad.yok{color:#b0322a}
@@ -1021,18 +1021,20 @@ function kontrolHTML(s){
   return ` <span class="kontrol-rozet" title="Doğrulanmamış: ${esc(neden)} — onaylanmazsa Excel'de açıklamaya KONTROL yazılır">KONTROL</span>`+
     (s.hesap?`<button class="kontrol-onay" onclick="kontrolOnayla(${s._idx})" title="Bu hesap doğru — onayla ve öğret">✓ onayla</button>`:'');
 }
+// faturanın gideri kalemlere bölünmüş mü (birden çok gider satırı, farklı hesaplar)
+function bolunmusFis(s){ return new Set(satirlar.filter(x=>x.fisno===s.fisno && x.rol==='gider').map(x=>x.hesap)).size>1; }
 function kontrolOnayla(i){
   const s=satirlar[i]; if(!s||!s.hesap) return;
   if(firmaKod && s.detay && (s.rol==='gider'||s.rol==='cari'||s.rol==='kdv')){
     fetch(`/api/firma/${firmaKod}/ogret/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:s.detay,kod:s.hesap,rol:s.rol||'',yon:aktifYon(),oran:s.oran||0,kalemler:s.rol==='gider'?(s.fatura_kalemleri||[]):[]})}).catch(()=>{});
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:s.detay,kod:s.hesap,rol:s.rol||'',yon:aktifYon(),oran:s.oran||0,kalemler:s.rol==='gider'?(s.fatura_kalemleri||[]):[],sadece_kalem:bolunmusFis(s)})}).catch(()=>{});
   }
   // aynı fişte aynı role ve hesaba sahip satırlar da (çok oranlı faturada birden çok gider satırı) onaylanır
   const benzerAd=s.rol==='cari' && (s.kontrol||[]).includes('benzer_ad');
   satirlar.forEach(x=>{ if(x.fisno===s.fisno && x.rol===s.rol && x.hesap===s.hesap) delete x.kontrol; });
   // cari onaylandıysa aynı geçmiş kaydından gelen gider hesabı da onaylı sayılır
   if(benzerAd) satirlar.forEach(x=>{ if(x.fisno===s.fisno && x.kontrol){ x.kontrol=x.kontrol.filter(k=>k!=='benzer_ad'); if(!x.kontrol.length) delete x.kontrol; } });
-  if(s.rol==='gider') satirlar.forEach(x=>{ if(x.fisno===s.fisno && x.rol==='gider'){ x.kaynak='ogrenme'; delete x.not; } });
+  if(s.rol==='gider') satirlar.forEach(x=>{ if(x.fisno===s.fisno && x.rol==='gider' && x.hesap===s.hesap){ x.kaynak='ogrenme'; delete x.not; } });
   render();
 }
 let sonIsleSonuc=null;   // süzgeç/düzenleme sonrası yeniden çizimde uyarılar kaybolmasın
@@ -1099,10 +1101,10 @@ function render(r){
   const fatHucre=(s,ilk)=>{
     if(!fatSut) return '';
     if(!ilk) return '<td class="l fat-ic"></td>';
-    const KK={ogrenme:'öğrenilen',benzer:'benzer kalemden öğrenilen — kontrol edin',yz:'yapay zekâ önerisi',bekliyor:'yapay zekâ hazırlıyor'};
+    const KK={ogrenme:'öğrenilen',benzer:'benzer kalemden öğrenilen — kontrol edin',yz:'yapay zekâ önerisi',bekliyor:'yapay zekâ hazırlıyor',fatura:'faturanın hesabı (öğrenilen/geçmiş)'};
     const det=(s.fatura_kalem_detay&&s.fatura_kalem_detay.length)?s.fatura_kalem_detay:(s.fatura_kalemleri||[]).map(a=>({a,t:null}));
     const kal=det.map(k=>({k, metin:k.a+(k.t!=null?` (${nf(k.t)})`:'')}));
-    const kodHTML=k=>k.k?`<span class="kalem-kod kk-${k.kk||''}" title="${esc((hesapAd(k.k)||'')+' — '+(KK[k.kk]||'')+(k.g?': '+k.g:''))}">(${esc(k.k)})</span> `
+    const kodHTML=k=>k.k?`<span class="kalem-kod kk-${k.kk||''}" title="${esc((hesapAd(k.k)||'')+' — '+(KK[k.kk]||'')+(k.g&&k.kk==='yz'?': '+k.g:'')+(k.yk?' · yapay zekâ önerisi: '+k.yk+' '+(hesapAd(k.yk)||''):''))}">(${esc(k.k)})</span> `
       :(k.kk==='bekliyor'?'<span class="kalem-kod kk-bekliyor" title="yapay zekâ hazırlıyor">(…)</span> ':'');
     const dag=(s.kdv_dagilim||[]).filter(k=>k.matrah||k.kdv);
     const kalHTML=kal.length?`<div class="fat-kalem" title="${esc(kal.map(x=>(x.k.k?'('+x.k.k+') ':'')+x.metin).join('\n'))}">${kal.slice(0,6).map(x=>`<div>• ${kodHTML(x.k)}${esc(x.metin)}</div>`).join('')}${kal.length>6?`<div class="hint">+${kal.length-6} kalem</div>`:''}</div>`:`<div class="hint">${s.pdf?'PDF\'te kalem açıklaması okunamadı':'kalem açıklaması için PDF yok'}</div>`;
@@ -1156,7 +1158,7 @@ function edit(i,alan,deger){
   // hesap elle değişince öğret
   if(alan==='hesap' && deger && deger!==eski && satirlar[i].detay){
     fetch(`/api/firma/${firmaKod}/ogret/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:satirlar[i].detay,kod:deger,rol:satirlar[i].rol||'',yon:aktifYon(),oran:satirlar[i].oran||0,kalemler:satirlar[i].rol==='gider'?(satirlar[i].fatura_kalemleri||[]):[]})}).catch(()=>{});
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:satirlar[i].detay,kod:deger,rol:satirlar[i].rol||'',yon:aktifYon(),oran:satirlar[i].oran||0,kalemler:satirlar[i].rol==='gider'?(satirlar[i].fatura_kalemleri||[]):[],sadece_kalem:bolunmusFis(satirlar[i])})}).catch(()=>{});
     // KDV hesabı orana bağlı: aynı oranlı, hesabı boş ya da eskisiyle aynı olan tüm KDV satırlarını da güncelle
     if(satirlar[i].rol==='kdv' && satirlar[i].oran){
       let n=0;
