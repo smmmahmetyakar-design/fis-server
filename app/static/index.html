@@ -942,10 +942,10 @@ async function donemSatirCiz(){
     return;
   }
   el.innerHTML=`📅 <span>Dönem:</span>
-    <select id="donemSec">${(()=>{ const sec=(v.donemler.find(x=>x.excel)||v.donemler[0]).ad;
-      return v.donemler.map(x=>`<option value="${esc(x.ad)}" ${x.ad===sec?'selected':''}>${esc(x.ad)} — ${x.excel?x.excel+' liste':'liste yok'}, ${x.pdf} PDF</option>`).join(''); })()}</select>
+    <select id="donemSec">${(()=>{ const sec=(v.donemler.find(x=>x.excel||x.pdf)||v.donemler[0]).ad;
+      return v.donemler.map(x=>`<option value="${esc(x.ad)}" ${x.ad===sec?'selected':''}>${esc(x.ad)} — ${x.excel?x.excel+' liste':'liste yok'}, ${x.pdf} PDF${!x.excel&&x.pdf?' (yalnız PDF)':''}</option>`).join(''); })()}</select>
     <button class="btn btn-ana" onclick="donemAl()" style="padding:5px 14px">Sunucudan al</button>
-    <span class="hint">${esc(v.klasor)}/${esc(v.yon_klasoru)}/&lt;ay&gt; — listeyi alır; PDF'ler İşle'de numarasından eşleşir.</span>`;
+    <span class="hint">${esc(v.klasor)}/${esc(v.yon_klasoru)}/&lt;ay&gt; — listeyi ve eşleşen PDF'leri alır; listesi olmayan ayda PDF'ler (tek toplu PDF de olur) fatura olarak alınır.</span>`;
 }
 async function donemAl(){
   const ad=$('donemSec').value;
@@ -955,6 +955,10 @@ async function donemAl(){
     hideLoading();
     if(!r.ok){ toast((await r.json().catch(()=>({}))).detail||'Alınamadı',false); return; }
     const j=await r.json(); const ob=oturumSet(); j.dosyalar.forEach(f=>ob.add(f));
+    if(j.liste_yok){
+      toast(`${ad}: liste yok — ${j.pdf_alinan} PDF'ten ${j.pdf_fatura} fatura alındı`+(j.pdf_eksik?` (${j.pdf_eksik} faturada eksik alan)`:'')+` — İşle'ye basabilirsiniz`, true);
+      firmaDurum(); return;
+    }
     toast(`${ad}: ${j.dosyalar.length} liste alındı`+(j.pdf_alinan?`, ${j.pdf_alinan} fatura PDF'i eşleşti`:'')+
       (j.pdf_bulunamayan?` (${j.pdf_bulunamayan} faturanın PDF'i klasörde yok)`:'')+` — İşle'ye basabilirsiniz`,true);
     firmaDurum();

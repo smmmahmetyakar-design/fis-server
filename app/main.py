@@ -745,7 +745,29 @@ def fatura_donem_al(kod: str, yon: str, body: dict):
     ad = str(body.get("donem", ""))
     excel = sk.donem_excelleri(kp, yon, ad)
     if not excel:
-        raise HTTPException(404, f"'{ad}' klasöründe fatura listesi (Excel) yok")
+        # Liste yok: ayın PDF'leri (tek toplu PDF de olur) fatura olarak alınır — liste olmadan
+        # yalnız PDF'lerle çalışılır. Sunucudan "yalnız tamamlayıcı" diye alınmış olsalar bile
+        # artık gerçek fatura sayılırlar.
+        pdfler = sk.donem_pdfleri(kp, yon, ad)
+        if not pdfler:
+            raise HTTPException(404, f"'{ad}' klasöründe fatura listesi (Excel) ya da PDF yok")
+        k = fatura_pdf.klasor(d, yon)
+        sunucudan = set(_read_json(k / "_sunucudan.json", []))
+        fatura_sayisi, eksik = 0, 0
+        for src in pdfler:
+            hedef = k / src.name
+            if not hedef.exists() or hedef.stat().st_size != src.stat().st_size:
+                shutil.copy2(src, hedef)
+            sunucudan.discard(hedef.name)
+            kayit = fatura_pdf.oku(k, hedef, yon)
+            fl = kayit.get("faturalar") or []
+            fatura_sayisi += len(fl)
+            eksik += sum(1 for f in fl if f.get("eksik"))
+        _write_json(k / "_sunucudan.json", sorted(sunucudan))
+        _kaynak_yaz(d, f"donem:{yon}", "sunucu", f"{ad} ({len(pdfler)} PDF, liste yok)")
+        return {"ok": True, "donem": ad, "dosyalar": [], "liste_yok": True, "pdf_alinan": len(pdfler),
+                "pdf_fatura": fatura_sayisi, "pdf_eksik": eksik, "pdf_bulunamayan": 0,
+                "pdf_mesaj": f"Liste yok — {len(pdfler)} PDF'ten {fatura_sayisi} fatura alındı"}
     hedef_k = d / "fatura"
     hedef_k.mkdir(exist_ok=True)
     alinan = []

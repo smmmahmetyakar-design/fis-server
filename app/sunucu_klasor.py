@@ -455,3 +455,15 @@ def donem_excelleri(klasor_path: Path, yon: str, ad: str) -> list:
         return []
     return sorted(f for f in p.rglob("*") if f.is_file() and f.suffix.lower() in _EXCEL
                   and not f.name.startswith((".", "~$")))
+
+
+def donem_pdfleri(klasor_path: Path, yon: str, ad: str) -> list:
+    """Seçilen ay klasöründeki fatura PDF'leri. Döner: [Path]"""
+    yk = yon_klasoru(klasor_path, yon)
+    if not yk or not ad or "/" in ad or "\\" in ad or ad in (".", ".."):
+        return []
+    p = yk / ad
+    if not p.is_dir():
+        return []
+    return sorted(f for f in p.rglob("*") if f.is_file() and f.suffix.lower() == ".pdf"
+                  and not f.name.startswith((".", "~$")))
