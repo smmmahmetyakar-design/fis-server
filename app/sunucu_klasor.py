@@ -5,7 +5,9 @@ Klasör düzeni (her firma için):
     NN_FIRMA_ADI/
         mizan/          <- mizan Excel'i (xlsx/xls)
         fislistesi/     <- muhasebe programından alınan fiş listesi / muavin (xlsx/xls)
-        banka/ dekont/ fatura/ fis/   (gelen / cikan alt klasörleri)
+        banka/ dekont/ fis/
+        fatura/gelen/<ay>   <- alış faturaları (liste + PDF), ay klasörleri: 09, 10 ...
+        fatura/cikan/<ay>   <- satış faturaları
 
 Bu modül klasörü yalnızca OKUR. Dosyalar araç veri klasörüne kopyalanarak
 kullanılır; sunucudaki asıl dosyaya hiç yazılmaz.
@@ -92,7 +94,7 @@ def klasor_oner(firma_ad: str, kod: str = "") -> str:
 
 def adaylar(klasor_path: Path, tur: str) -> list:
     """Firma klasöründe verilen tür için aday dosyaları listeler (en yeni önce).
-    'cikan' klasörleri (araç çıktıları) hiç taranmaz."""
+    'cikan' klasörleri (satış faturaları) mizan / fiş listesi için taranmaz."""
     if tur not in _BEKLENEN:
         return []
     alt, uzantilar = _BEKLENEN[tur]
@@ -254,15 +256,17 @@ def _ocr_arka_plan(isler: list, onbellek_yolu: Path):
             _ocr_sirada.discard(str(p))
 
 
-# Faturaların tek yeri: alış -> fatura/gelen, satış -> fatura/giden; içinde ay klasörleri
+# Faturaların tek yeri: alış -> fatura/gelen, satış -> fatura/cikan; içinde ay klasörleri
 # (09, 10, 11 ya da 2026-09, Eylül ...). Fatura önce kendi ayının klasöründe aranır.
-FATURA_KLASORU = {"alis": ("fatura", "gelen"), "satis": ("fatura", "giden")}
+FATURA_KLASORU = {"alis": ("fatura", "gelen"), "satis": ("fatura", "cikan")}
 _AYLAR = {"OCAK": 1, "SUBAT": 2, "MART": 3, "NISAN": 4, "MAYIS": 5, "HAZIRAN": 6, "TEMMUZ": 7,
           "AGUSTOS": 8, "EYLUL": 9, "EKIM": 10, "KASIM": 11, "ARALIK": 12}
 
 
 def fatura_klasoru(klasor_path: Path, yon: str = "alis") -> Path:
-    return klasor_path.joinpath(*FATURA_KLASORU.get(yon, FATURA_KLASORU["alis"]))
+    """Yönün fatura klasörü (alış: fatura/gelen, satış: fatura/cikan). Klasör adı farklı
+    yazılmışsa ("Çıkan", "giden", "Satış Faturaları") onu bulur; yoksa varsayılan yolu döndürür."""
+    return yon_klasoru(klasor_path, yon) or klasor_path.joinpath(*FATURA_KLASORU.get(yon, FATURA_KLASORU["alis"]))
 
 
 def ay_klasoru(ad: str):
@@ -276,12 +280,12 @@ def ay_klasoru(ad: str):
 
 
 def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path, yon: str = "alis") -> tuple:
-    """Firmanın fatura klasöründeki (alış: fatura/gelen, satış: fatura/giden — ay alt
+    """Firmanın fatura klasöründeki (alış: fatura/gelen, satış: fatura/cikan — ay alt
     klasörleri dahil) PDF'ler: fatura no -> [göreli yol, ...] (aynı numara birden çok yerde olabilir).
     Dosya adındaki ve PDF metnindeki (tüm sayfalar — taranmış toplu PDF'te her sayfa
     ayrı fatura olabilir) numaralar. Metni olmayan (taranmış) PDF'ler arka planda OCR'lanır.
     Sonuç (yol + değişiklik zamanı) önbelleğe yazılır; her seferinde yeniden okunmaz.
-    'cikan' (araç çıktıları) taranmaz.
+    Alışta fatura/gelen altındaki 'cikan' adlı alt klasörler taranmaz.
     Döner: (dizin, bilgi) — bilgi: taranan, numarali, ocr_bekleyen, numarasiz (dosya listesi)"""
     import json
     with _ocr_kilit:
@@ -364,9 +368,10 @@ def fatura_klasor_ozeti(klasor_path: Path, yon: str = "alis") -> list:
     def _hata(e):
         hatalar.append(f"{getattr(e, 'filename', '')}: {e.strerror or e}")
 
-    for kok, dizinler, dosyalar in os.walk(fatura_klasoru(klasor_path, yon), onerror=_hata):
+    yk = fatura_klasoru(klasor_path, yon)
+    for kok, dizinler, dosyalar in os.walk(yk, onerror=_hata):
         rel = Path(kok).relative_to(klasor_path)
-        if "cikan" in rel.parts:
+        if "cikan" in Path(kok).relative_to(yk).parts:
             dizinler[:] = []
             continue
         uz = {}
@@ -387,10 +392,10 @@ def fatura_klasor_ozeti(klasor_path: Path, yon: str = "alis") -> list:
 
 
 # ------------------------------------------------------------------ dönem (ay) klasörleri
-# fatura/gelen/09, fatura/gelen/10 ... (alış) · fatura/giden/09 ... (satış)
+# fatura/gelen/09, fatura/gelen/10 ... (alış) · fatura/cikan/09 ... (satış)
 # Her ay klasöründe o ayın fatura listesi (Excel, ör. İVD e-Arşiv listesi) ve fatura PDF'leri durur.
 _YON_KLASOR = {"alis": ("gelen", "alis", "alislar", "alis faturalari"),
-               "satis": ("giden", "satis", "satislar", "satis faturalari", "kesilen")}
+               "satis": ("cikan", "giden", "satis", "satislar", "satis faturalari", "kesilen")}
 _AY_ADLARI = {"OCAK": 1, "SUBAT": 2, "MART": 3, "NISAN": 4, "MAYIS": 5, "HAZIRAN": 6, "TEMMUZ": 7,
               "AGUSTOS": 8, "EYLUL": 9, "EKIM": 10, "KASIM": 11, "ARALIK": 12}
 
@@ -410,7 +415,7 @@ def _ay_no(ad: str):
 
 
 def yon_klasoru(klasor_path: Path, yon: str) -> Path | None:
-    """fatura/gelen (alış) ya da fatura/giden (satış) — büyük/küçük harf ve Türkçe karakter duyarsız."""
+    """fatura/gelen (alış) ya da fatura/cikan (satış) — büyük/küçük harf ve Türkçe karakter duyarsız."""
     kok = next((p for p in klasor_path.iterdir() if p.is_dir() and norm(p.name) == "FATURA"), None) \
         if klasor_path.is_dir() else None
     if not kok:

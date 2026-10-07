@@ -851,10 +851,10 @@ function karsTeshis(v){
     : '<div>Sunucu klasöründe adında "fatura" geçen klasörde hiç dosya görünmüyor (klasör boş ya da araç erişemiyor).</div>');
   const pdfYok=v.sayilar.pdf_yok||0;
   if(pdfYok) parca.push(`<div>${pdfYok} faturanın PDF'i yok. "Fatura PDF'leri" alanında ${t.alan_pdf_sayisi||0} fatura var. `+
-    (t.klasor?(t.klasor_fatura_var?`Sunucu klasöründe (${esc(t.klasor)}/${aktifYon()==='alis'?'fatura/gelen':'fatura/giden'}) ${t.klasor_pdf_sayisi} PDF tarandı, ${t.klasor_numarali_pdf}'inde fatura numarası okundu; listedeki numaralardan ${t.klasor_eslesen} tanesi orada bulundu.`+
+    (t.klasor?(t.klasor_fatura_var?`Sunucu klasöründe (${esc(t.klasor)}/${aktifYon()==='alis'?'fatura/gelen':'fatura/cikan'}) ${t.klasor_pdf_sayisi} PDF tarandı, ${t.klasor_numarali_pdf}'inde fatura numarası okundu; listedeki numaralardan ${t.klasor_eslesen} tanesi orada bulundu.`+
         (t.klasor_ocr_bekleyen?` <b>${t.klasor_ocr_bekleyen} taranmış (resim) PDF arka planda OCR ile okunuyor — birkaç dakika sonra pencereyi yeniden açın.</b>`:'')+
         ((t.klasor_numarasiz||[]).length?`<details><summary>numarası okunamayan PDF'ler (${t.klasor_numarasiz.length})</summary>${t.klasor_numarasiz.map(esc).join('<br>')}</details>`:'')
-        :`Sunucu klasöründe (${esc(t.klasor)}) ${aktifYon()==='alis'?'fatura/gelen':'fatura/giden'} klasörü yok — faturalar (ay klasörleriyle: 09, 10 …) oraya konursa kendiliğinden bulunur.`)
+        :`Sunucu klasöründe (${esc(t.klasor)}) ${aktifYon()==='alis'?'fatura/gelen':'fatura/cikan'} klasörü yok — faturalar (ay klasörleriyle: 09, 10 …) oraya konursa kendiliğinden bulunur.`)
       :'Firma bir sunucu klasörüne bağlı değil; PDF\'leri "Fatura PDF\'leri" alanına yükleyin.')+'</div>');
   if(!parca.length || (!listeKdvYok && !pdfYok && (t.tablolar||[]).every(x=>x.kdv_sutunu_var))) return '';
   return `<div class="uyari" style="font-size:12.5px;margin-bottom:10px;line-height:1.45">${parca.join('')}</div>`;
@@ -936,7 +936,7 @@ async function donemSatirCiz(){
   if(firma!==firmaKod || aktifYon()!==yon) return;
   if(!v.klasor){ el.style.display='none'; return; }
   el.style.display='flex';
-  const klasorAd=yon==='alis'?'fatura/gelen':'fatura/giden';
+  const klasorAd=yon==='alis'?'fatura/gelen':'fatura/cikan';
   if(!v.donemler.length){
     el.innerHTML=`📅 <span>Sunucuda ay klasörü yok. <span class="hint">${esc(v.klasor)}/${v.yon_klasoru||klasorAd}/09, /10 … klasörleri açıp her ayın listesini ve PDF'lerini koyarsanız buradan tek tıkla alınır.</span></span>`;
     return;

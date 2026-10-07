@@ -673,7 +673,7 @@ def onerilen_fisno(kod: str, tip: str):
 
 def _sunucu_fatura_pdf_al(d: Path, tum_ham: list, yon: str) -> dict:
     """Listedeki fatura numaralarıyla eşleşen PDF'leri firmanın sunucu klasöründen
-    (alış: fatura/gelen, satış: fatura/giden — ay klasörleri dahil) bulup fatura PDF'leri alanına kopyalar. Böylece listede olmayan
+    (alış: fatura/gelen, satış: fatura/cikan — ay klasörleri dahil) bulup fatura PDF'leri alanına kopyalar. Böylece listede olmayan
     KDV dağılımı PDF'ten tamamlanır ve önizlemede fatura açılabilir.
     Yalnızca listedeki numaralar alınır (klasördeki her PDF fişe eklenmesin)."""
     kp = _firma_klasoru(d)
