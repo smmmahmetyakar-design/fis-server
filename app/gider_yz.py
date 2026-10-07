@@ -198,6 +198,47 @@ def onerici(d: Path, hesaplar: list, alt_kodlar: set, yon: str, kullanim: dict |
     return _oner
 
 
+def kalem_onerici(d: Path, hesaplar: list, alt_kodlar: set, yon: str, kullanim: dict | None = None,
+                  ornekler: list | None = None):
+    """isle_fatura'ya: (cari, kalem açıklamaları, yon) -> kalem başına öneri.
+    Önbellekte varsa {'kalemler': [{'kod','gerekce'}|None, ...]}; yoksa işi kuyruğa atar ve
+    {'bekliyor': True}; yapay zekâ kapalıysa None. Önbellek: _gider_yz.json ('kalem' anahtarlı)."""
+    aday = adaylar(hesaplar, alt_kodlar, yon)
+    if not aday:
+        return None
+    etkin = yapay_zeka.durum()["etkin"]
+    onbellek = _oku(d)
+
+    def _oner(cari, kalemler, yon_):
+        kalemler = [str(x) for x in kalemler if str(x).strip()][:15]
+        if not kalemler:
+            return None
+        a = "k" + _anahtar(cari, ["\x1f".join(kalemler)], "kalem|" + yon_, aday)
+        kayit = onbellek.get(a)
+        if kayit and kayit.get("kalemler"):
+            return {"kalemler": [x if x and x.get("kod") in alt_kodlar else None for x in kayit["kalemler"]]}
+        if kayit and kayit.get("red") and kayit.get("model") == yapay_zeka.aktif_model():
+            return None
+        if kayit and kayit.get("hata"):
+            try:
+                if datetime.now() - datetime.fromisoformat(kayit["zaman"]) < timedelta(hours=1):
+                    return None
+            except Exception:
+                return None
+        if not etkin:
+            return None
+        benzer = benzer_ornekler(ornekler or [], cari, kalemler, {k for k, _ in aday})
+
+        def _is():
+            sonuc = yapay_zeka.kalem_hesaplari_sec(cari, kalemler, yon_, aday, kullanim, benzer)
+            _kaydet(d, a, {"kalemler": sonuc, "cari": cari, "yon": yon_} if sonuc
+                    else {"red": True, "cari": cari, "yon": yon_})
+        fatura_pdf.is_ekle(("kalem", d.as_posix(), a), _is,
+                           lambda e: _kaydet(d, a, {"hata": f"{e.__class__.__name__}: {e}", "cari": cari, "yon": yon_}))
+        return {"bekliyor": True}
+    return _oner
+
+
 def _kaydet(d: Path, anahtar: str, kayit: dict):
     with _kilit:
         v = _oku(d)

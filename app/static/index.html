@@ -147,8 +147,10 @@
   .kontrol-rozet{display:inline-block;background:#ffd84d;color:#5a4500;font-size:10.5px;font-weight:600;border-radius:3px;padding:0 5px;margin-left:4px;cursor:help}
   .kontrol-onay{font-size:10.5px;padding:0 5px;margin-left:3px;border:1px solid #b9a24a;background:#fffbe6;color:#5a4500;border-radius:3px;cursor:pointer}
   tr.kontrol-satir td{background:#fffbe0}
-  .fat-ic{font-size:11.5px;min-width:200px;max-width:340px;color:#333}
-  .fat-kalem div{line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:330px}
+  .fat-ic{font-size:11.5px;min-width:340px;max-width:560px;color:#333}
+  .fat-kalem div{line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:550px}
+  .kalem-kod{font-weight:600;font-family:ui-monospace,Consolas,monospace;font-size:11px;cursor:help}
+  .kalem-kod.kk-ogrenme{color:#1e6b34} .kalem-kod.kk-benzer{color:#8a6d1a} .kalem-kod.kk-yz{color:#4b2f86} .kalem-kod.kk-bekliyor{color:#999}
   .fat-tutar{margin-top:3px;white-space:nowrap}
   .hesap-ad{font-size:10.5px;color:#6b6b6b;margin-top:1px;line-height:1.25;max-width:260px}
   .hesap-ad.yok{color:#b0322a}
@@ -1097,11 +1099,13 @@ function render(r){
   const fatHucre=(s,ilk)=>{
     if(!fatSut) return '';
     if(!ilk) return '<td class="l fat-ic"></td>';
-    const kal=(s.fatura_kalem_detay&&s.fatura_kalem_detay.length)
-      ? s.fatura_kalem_detay.map(k=>k.a+(k.t!=null?` (${nf(k.t)})`:''))
-      : (s.fatura_kalemleri||[]);
+    const KK={ogrenme:'öğrenilen',benzer:'benzer kalemden öğrenilen — kontrol edin',yz:'yapay zekâ önerisi',bekliyor:'yapay zekâ hazırlıyor'};
+    const det=(s.fatura_kalem_detay&&s.fatura_kalem_detay.length)?s.fatura_kalem_detay:(s.fatura_kalemleri||[]).map(a=>({a,t:null}));
+    const kal=det.map(k=>({k, metin:k.a+(k.t!=null?` (${nf(k.t)})`:'')}));
+    const kodHTML=k=>k.k?`<span class="kalem-kod kk-${k.kk||''}" title="${esc((hesapAd(k.k)||'')+' — '+(KK[k.kk]||'')+(k.g?': '+k.g:''))}">(${esc(k.k)})</span> `
+      :(k.kk==='bekliyor'?'<span class="kalem-kod kk-bekliyor" title="yapay zekâ hazırlıyor">(…)</span> ':'');
     const dag=(s.kdv_dagilim||[]).filter(k=>k.matrah||k.kdv);
-    const kalHTML=kal.length?`<div class="fat-kalem" title="${esc(kal.join('\n'))}">${kal.slice(0,4).map(x=>`<div>• ${esc(x)}</div>`).join('')}${kal.length>4?`<div class="hint">+${kal.length-4} kalem</div>`:''}</div>`:`<div class="hint">${s.pdf?'PDF\'te kalem açıklaması okunamadı':'kalem açıklaması için PDF yok'}</div>`;
+    const kalHTML=kal.length?`<div class="fat-kalem" title="${esc(kal.map(x=>(x.k.k?'('+x.k.k+') ':'')+x.metin).join('\n'))}">${kal.slice(0,6).map(x=>`<div>• ${kodHTML(x.k)}${esc(x.metin)}</div>`).join('')}${kal.length>6?`<div class="hint">+${kal.length-6} kalem</div>`:''}</div>`:`<div class="hint">${s.pdf?'PDF\'te kalem açıklaması okunamadı':'kalem açıklaması için PDF yok'}</div>`;
     const tutar=s.kdv_haric?`<div class="fat-tutar">KDV hariç: <b>${nf(s.kdv_haric)}</b>${dag.length>1||(dag[0]&&dag[0].oran)?` <span class="hint">(${dag.map(k=>'%'+k.oran+': '+nf(k.matrah)).join(' · ')})</span>`:''}</div>`:'';
     return `<td class="l fat-ic">${kalHTML}${tutar}</td>`;
   };

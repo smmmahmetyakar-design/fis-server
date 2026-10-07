@@ -1864,6 +1864,27 @@ def _liste_pdf_birlestir(liste, pdfler):
     return liste, uyarilar
 
 
+def _kalem_ogrenilmis(aciklama: str, ogrenilen: dict):
+    """Tek kalem açıklaması için öğrenilmiş hesap: (kod, benzer_mi) ya da None."""
+    from app.kurallar import kelimeler
+    n = norm(aciklama)
+    if not n:
+        return None
+    if n in ogrenilen:
+        return ogrenilen[n], False
+    kw = kelimeler(n)
+    if len(kw) < 2:
+        return None
+    en, en_skor = None, 0.0
+    for ad, kod in ogrenilen.items():
+        ow = kelimeler(ad)
+        if ow:
+            skor = len(kw & ow) / len(kw | ow)
+            if skor > en_skor:
+                en, en_skor = kod, skor
+    return (en, True) if en and en_skor >= 0.6 else None
+
+
 def _kalem_ogrenmesi(f: dict, gider_ogrenme: dict | None, yon: str, alt_kodlar: set) -> dict | None:
     """Faturanın kalem açıklamaları için kullanıcının daha önce seçtiği gider hesabı.
     Öğrenme anahtarı: "kalem|<yön>|<NORM(açıklama)>". Birebir eşleşme yoksa kelimelerinin
@@ -2016,7 +2037,7 @@ def liste_pdf_karsilastir(liste: list, pdfler: list, tolerans: float = 0.05) -> 
 
 
 def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
-                gider_ogrenme=None, gider_onerici=None):
+                gider_ogrenme=None, gider_onerici=None, kalem_onerici=None):
     """
     Fatura listesi -> muhasebe fişi.
     ALIŞ: gider(7xx) + 191(indirilecek KDV) borç / 320(satıcı) alacak
@@ -2113,6 +2134,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
     if not vars_gider and yon == "alis":   # tercihli gruplarda yoksa herhangi bir 7xx gider alt hesabı
         vars_gider = next((k for k, _ in km.hesaplar if k in alt_kodlar and k[:1] == "7" and not k.startswith("79")), "")
     gider_bekleyen = set()
+    kalem_bekleyen = set()
     kdv_eksik = {}      # "%20 için 191" -> {fatura no}
     fark_yazilan, fark_dengesiz, yeni_hesap = [], [], {}
     # bu firmanın geçmiş kayıtlarında (fiş listesi / muavin) gider-gelir tarafında kullanılmış hesaplar
@@ -2196,6 +2218,31 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         belge_rozet = ("yz" if f.get("yz") else
                        "pdf" if (f.get("pdf") or f.get("kaynak") == "pdf") else "")
 
+        # Kalem başına hesap: öğrenilmiş (birebir / benzer) ya da yapay zekâ önerisi
+        kalem_hesap_detay = [dict(k) for k in (f.get("kalem_detay") or [])[:12]] or \
+            [{"a": a, "t": None} for a in (f.get("kalem_aciklamalari") or [])[:12]]
+        if kalem_hesap_detay:
+            onek_ = f"kalem|{yon}|"
+            ogrenilen_ = {k[len(onek_):]: v for k, v in (gider_ogrenme or {}).items()
+                          if k.startswith(onek_) and v in alt_kodlar}
+            eksik_ = False
+            for k in kalem_hesap_detay:
+                o_ = _kalem_ogrenilmis(k.get("a", ""), ogrenilen_) if ogrenilen_ else None
+                if o_:
+                    k["k"], k["kk"] = o_[0], ("benzer" if o_[1] else "ogrenme")
+                else:
+                    eksik_ = True
+            if eksik_ and kalem_onerici:
+                yz_ = kalem_onerici(cari_ad, [k.get("a", "") for k in kalem_hesap_detay], yon)
+                if yz_ and yz_.get("bekliyor"):
+                    kalem_bekleyen.add(fatura_no)
+                    for k in kalem_hesap_detay:
+                        k.setdefault("kk", "bekliyor")
+                elif yz_ and yz_.get("kalemler"):
+                    for k, o_ in zip(kalem_hesap_detay, yz_["kalemler"]):
+                        if "k" not in k and o_:
+                            k["k"], k["kk"], k["g"] = o_["kod"], "yz", o_.get("gerekce", "")
+
         def sat(hesap, borc, alacak, detay_ek=""):
             # Açıklama alanları SADECE firma adı (KDV oranı, "(faktoring)" gibi ekler yok).
             s = _sat(fisno, tarih, cari_ad, hesap, borc, alacak,
@@ -2204,7 +2251,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 s["belge"] = belge_rozet
             # önizlemede gösterilecek fatura içeriği: kalem açıklamaları ve KDV hariç tutar
             s["fatura_kalemleri"] = [str(a)[:120] for a in (f.get("kalem_aciklamalari") or [])[:8]]
-            s["fatura_kalem_detay"] = (f.get("kalem_detay") or [])[:12]
+            s["fatura_kalem_detay"] = kalem_hesap_detay
             s["kdv_haric"] = round(sum(float(k.get("matrah") or 0) for k in f.get("kalemler") or []), 2)
             s["kdv_dagilim"] = [{"oran": k.get("oran"), "matrah": round(float(k.get("matrah") or 0), 2),
                                  "kdv": round(float(k.get("kdv") or 0), 2)} for k in f.get("kalemler") or []]
@@ -2393,6 +2440,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         uyarilar.append(f"{len(kontrollu)} faturada doğrulanmamış hesap ya da tutar var (yapay zekâ/tahmin, benzer ad, KDV ayrılamadı, dengesiz) — "
                         f"sarı KONTROL işaretli satırları düzelt ya da ✓ ile onayla; onaylanmayanların "
                         f"Excel'de açıklamasına KONTROL yazılır: {_kisa_liste(kontrollu, 4)}")
+    if kalem_bekleyen:
+        uyarilar.append(f"{len(kalem_bekleyen)} faturanın kalem hesap önerileri yapay zekâda hazırlanıyor — "
+                        f"birkaç dakika sonra tekrar İşle'ye basın")
     if fark_yazilan:
         uyarilar.append(f"{len(fark_yazilan)} faturada liste toplamı kalemlerden fazlaydı (ÖİV/ÖTV gibi ek vergi "
                         f"sütunu olmayabilir); fark ayrı satıra yazıldı, kontrol et: {_kisa_liste(fark_yazilan, 4)}")
@@ -2687,12 +2737,13 @@ def isle_fis(kalemler, km, fis0=1, karsi_hesap="198.01.001"):
     return fisler, uyarilar
 
 
-def isle(tip, hamlar, km, fis0, yon="alis", pdf_faturalar=None, gider_ogrenme=None, gider_onerici=None):
+def isle(tip, hamlar, km, fis0, yon="alis", pdf_faturalar=None, gider_ogrenme=None, gider_onerici=None,
+         kalem_onerici=None):
     if tip == "banka":
         return isle_banka(hamlar, km, fis0)
     if tip == "fatura":
         return isle_fatura(hamlar, km, fis0, yon=yon, pdf_faturalar=pdf_faturalar,
-                           gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici)
+                           gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici, kalem_onerici=kalem_onerici)
     if tip == "cek":
         return isle_cek(hamlar, km, fis0)
     if tip == "fis":

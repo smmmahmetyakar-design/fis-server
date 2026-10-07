@@ -278,6 +278,78 @@ Kurallar:
 gerekce alanına seçimin nedenini tek kısa Türkçe cümleyle yaz."""
 
 
+_KALEM_TALIMAT = """Sen deneyimli bir Türk muhasebecisin (Tekdüzen Hesap Planı).
+Sana bir faturanın karşı tarafı, numaralı fatura kalemleri ve firmanın mizanındaki aday hesaplar
+verilecek. HER KALEM İÇİN ayrı ayrı, o kalemin {ne} için EN UYGUN TEK hesabı seç.
+
+Kurallar:
+- Yalnızca verilen listedeki kodlardan seçebilirsin; her kalem numarası için bir kod döndür.
+- Her hesabın yanında BU FİRMADA geçmişte kaç kez kullanıldığı yazar; "kalem:" ile başlayan
+  örnekler kullanıcının daha önce o açıklama için kendisinin seçtiği hesaptır — en güçlü ipucu budur.
+- 150-157 stok hesapları yalnızca firmanın SATMAK için aldığı mallar içindir; firmanın kendi
+  kullanımı için yapılan alımlar (kiralama, nakliye, iş makinesi çalışması, hizmet, ofis, yemek...)
+  stok değil GİDERDİR.
+- Aynı faturadaki kalemler farklı hesaplara gidebilir."""
+
+
+def kalem_hesaplari_sec(cari_ad: str, kalemler: list, yon: str, adaylar: list, kullanim: dict | None = None,
+                        ornekler: list | None = None) -> list | None:
+    """Fatura kalemlerinin her biri için hesap önerir. Döner: [{'kod','gerekce'}] (kalem sırasıyla)
+    ya da None (geçersiz cevap)."""
+    if not OLLAMA_URL or not adaylar or not kalemler:
+        return None
+    kodlar = [k for k, _ in adaylar]
+    sema = {"type": "object", "properties": {"kalemler": {"type": "array", "items": {
+        "type": "object", "properties": {"no": {"type": "integer"}, "kod": {"type": "string", "enum": kodlar},
+                                         "gerekce": {"type": "string"}},
+        "required": ["no", "kod", "gerekce"]}}}, "required": ["kalemler"]}
+    ne = "gider/maliyet/stok kaydı (alış faturası)" if yon == "alis" else "gelir kaydı (satış faturası)"
+    liste = "\n".join(f"{i + 1}. {a}" for i, a in enumerate(kalemler[:15]))
+    govde = {
+        "model": aktif_model(), "stream": False, "format": sema,
+        "options": {"temperature": 0, "num_ctx": 8192},
+        "messages": [
+            {"role": "system", "content": _KALEM_TALIMAT.format(ne=ne)},
+            {"role": "user", "content": f"{_ornek_metni(ornekler, adaylar)}KARŞI TARAF: {cari_ad}\n\n"
+                                        f"FATURA KALEMLERİ:\n{liste}\n\n"
+                                        f"SEÇEBİLECEĞİN HESAPLAR (kod — ad):\n{_hesap_listesi(adaylar, kullanim)}"},
+        ],
+    }
+    yanit = _istek("/api/chat", _govde_hazirla(govde), zaman_asimi=ZAMAN_ASIMI)
+    sonuc = json.loads((yanit.get("message") or {}).get("content", "") or "{}")
+    out = [None] * min(len(kalemler), 15)
+    for x in sonuc.get("kalemler") or []:
+        try:
+            i = int(x.get("no")) - 1
+        except Exception:
+            continue
+        kod = str(x.get("kod", "")).strip()
+        if 0 <= i < len(out) and kod in kodlar:
+            out[i] = {"kod": kod, "gerekce": str(x.get("gerekce", "")).strip()[:160]}
+    return out if any(out) else None
+
+
+def _hesap_listesi(adaylar: list, kullanim: dict | None) -> str:
+    kullanim = kullanim or {}
+    sirali = sorted(adaylar, key=lambda x: -kullanim.get(x[0], (0, []))[0])
+    satirlar_ = []
+    for k, a in sirali:
+        sayi, ornek = kullanim.get(k, (0, []))
+        ek = (f"  [bu firmada {sayi} kez: {'; '.join(ornek[:3])}]" if sayi
+              else "  [bu firmada hiç kullanılmamış]") if kullanim else ""
+        satirlar_.append(f"{k} — {a}{ek}")
+    return "\n".join(satirlar_)
+
+
+def _ornek_metni(ornekler: list | None, adaylar: list) -> str:
+    if not ornekler:
+        return ""
+    ad_of = dict(adaylar)
+    return "BU FİRMANIN GEÇMİŞ KAYITLARINDAN ÖRNEKLER (karşı taraf → yazıldığı hesap):\n" + \
+        "\n".join(f"- {o['ad']} → {o['gider']} {ad_of.get(o['gider'], '')}"
+                  + (f" ({o['sayi']} fatura)" if o.get("sayi", 1) > 1 else "") for o in ornekler) + "\n\n"
+
+
 def gider_sec(cari_ad: str, aciklamalar: list, yon: str, adaylar: list, kullanim: dict | None = None,
               ornekler: list | None = None) -> dict | None:
     """Fatura için gider (alış) / gelir (satış) hesabı önerir.

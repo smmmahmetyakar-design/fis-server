@@ -873,16 +873,18 @@ def isle(kod: str, tip: str, body: IsleBody):
         for pf in pdf_faturalar:
             if pf.get("dosya") in sunucudan:
                 pf["sunucudan"] = True
-    gider_ogrenme, gider_onerici = None, None
+    gider_ogrenme, gider_onerici, kalem_onerici = None, None, None
     if tip == "fatura":
         gider_ogrenme = _read_json(d / "fatura_gider_ogrenme.json", {})
         gecmis_s = km.gecmis.get("satirlar", [])
-        gider_onerici = gider_yz.onerici(d, km.hesaplar, isleyici.alt_hesap_kodlari(km.hesaplar), body.yon,
-                                         gider_yz.kullanim_ozeti(gecmis_s, body.yon),
-                                         gider_yz.ogrenilen_kalem_ornekleri(gider_ogrenme, body.yon)
-                                         + gider_yz.gecmis_ornekler(gecmis_s, body.yon))
+        alt_ = isleyici.alt_hesap_kodlari(km.hesaplar)
+        kullanim_ = gider_yz.kullanim_ozeti(gecmis_s, body.yon)
+        ornekler_ = gider_yz.ogrenilen_kalem_ornekleri(gider_ogrenme, body.yon) + gider_yz.gecmis_ornekler(gecmis_s, body.yon)
+        gider_onerici = gider_yz.onerici(d, km.hesaplar, alt_, body.yon, kullanim_, ornekler_)
+        kalem_onerici = gider_yz.kalem_onerici(d, km.hesaplar, alt_, body.yon, kullanim_, ornekler_)
     fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon, pdf_faturalar=pdf_faturalar,
-                                     gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici)
+                                     gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici,
+                                     kalem_onerici=kalem_onerici)
     if sunucu_pdf_not:
         uyarilar.append(sunucu_pdf_not)
     if yz_bekleyen:
