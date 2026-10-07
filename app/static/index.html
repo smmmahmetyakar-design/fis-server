@@ -533,9 +533,11 @@ async function firmaDurum(){
   const bl=$('belgeListe');
   const ob=oturumSet(), gorunen=(t.belgeler||[]).filter(f=>ob.has(f));
   ob.forEach(f=>{ if(!(t.belgeler||[]).includes(f)) ob.delete(f); });   // sunucuda silinmişse
+  eskiBelgeler=(t.belgeler||[]).filter(f=>!ob.has(f));
+  const eskiNot=eskiBelgeler.length?`<div class="hint" style="margin-top:6px">Önceki oturumlardan sunucuda ${eskiBelgeler.length} belge var (gizli, işlenmez). <a href="#" onclick="eskiBelgeleriAl();return false">Listeye geri al</a></div>`:'';
   if(gorunen.length){
-    bl.innerHTML=gorunen.map(f=>`<div class="dosya-satir"><span style="flex:1">📎 ${f}</span><button class="btn btn-x" onclick="belgeSil('${f.replace(/'/g,"")}')">🗑</button></div>`).join('');
-  }else bl.innerHTML='<div class="hint">Henüz belge yok.</div>';
+    bl.innerHTML=eskiNot+gorunen.map(f=>`<div class="dosya-satir"><span style="flex:1">📎 ${f}</span><button class="btn btn-x" onclick="belgeSil('${f.replace(/'/g,"")}')">🗑</button></div>`).join('');
+  }else bl.innerHTML='<div class="hint">Bu sayfada henüz belge yüklenmedi.</div>'+eskiNot;
   if(aktifTip.startsWith('fatura')) faturaPdfListele();
   loadCiktilar();
   // fiş no önerisi
@@ -768,6 +770,8 @@ async function klasordanAl(tur, yol){
 // Yalnızca bu sayfa açıkken yüklenen belgeler gösterilir ve işlenir; önceki
 // oturumlardan sunucuda kalan dosyalar sayfa açılınca gelmez.
 const oturumBelge={};   // "firma|tip" -> Set(dosya adı)
+let eskiBelgeler=[];
+function eskiBelgeleriAl(){ const ob=oturumSet(); eskiBelgeler.forEach(f=>ob.add(f)); firmaDurum(); }
 function oturumSet(){ const k=firmaKod+'|'+apiTip(); return oturumBelge[k]||(oturumBelge[k]=new Set()); }
 
 async function belgeYukle(){
@@ -797,7 +801,7 @@ function nf(n){return (Math.round((n||0)*100)/100).toLocaleString('tr-TR',{minim
 async function isle(){
   if(!firmaKod){alert('Önce firma seç');return;}
   const dosyalar=[...oturumSet()];
-  if(!dosyalar.length && !aktifTip.startsWith('fatura')){ alert('Önce 2. bölümden belge yükleyin'); return; }
+  if(!dosyalar.length && !aktifTip.startsWith('fatura')){ alert('Bu sayfada belge yüklenmedi. 2. bölümden belgeyi yükleyin'+(eskiBelgeler.length?' ya da önceki oturumdaki belgeler için "Listeye geri al"a basın.':'.')); return; }
   showLoading('İşleniyor (OCR sürebilir)...');
   $('durum').textContent='işleniyor...';
   try{
@@ -845,7 +849,7 @@ function kontrolOnayla(i){
 let sonIsleSonuc=null;   // süzgeç/düzenleme sonrası yeniden çizimde uyarılar kaybolmasın
 function render(r){
   if(r) sonIsleSonuc=r; else r=sonIsleSonuc;
-  if(!satirlar.length){$('onizle').innerHTML='<div class="hint">Sonuç yok. Belge yükleyip işleyin.</div>';return;}
+  if(!satirlar.length){$('onizle').innerHTML=`<div class="hint">Sonuç yok. ${oturumSet().size?'Yüklenen belgelerden fiş satırı çıkmadı — dosya biçimini ve uyarıları kontrol edin.':'Bu sayfada belge yüklenmedi: 2. bölümden belgeyi yükleyin (önceki oturumun belgeleri gizlidir, oradaki "Listeye geri al" ile de kullanabilirsiniz).'}</div>`+((r&&r.uyarilar&&r.uyarilar.length)?'<ul class="uyari uyari-liste">'+r.uyarilar.slice(0,12).map(u=>`<li>${esc(u)}</li>`).join('')+'</ul>':'');return;}
   const t=totals(); const dz=duzenleMod;
   let h='';
   if(r&&r.okunan_belgeler) h+='<div class="hint" style="margin-bottom:8px">Okunan: '+r.okunan_belgeler.map(b=>`${b.dosya} (${b.tur})`).join(', ')+'</div>';
