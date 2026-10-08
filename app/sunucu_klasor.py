@@ -27,8 +27,6 @@ FIRMALAR_DIR = Path(os.environ.get("FIS_FIRMALAR", "/firmalar"))
 
 TURLER = ("mizan", "fis-listesi")
 _EXCEL = (".xlsx", ".xls")
-_XML = (".xml", ".zip")                 # e-Fatura UBL XML'i ya da GİB'in indirdiği ZIP
-_FATURA_BELGE = (".pdf",) + _XML
 
 # tür -> (beklenen alt klasör, kabul edilen uzantılar)
 _BEKLENEN = {
@@ -301,8 +299,8 @@ def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path, yon: str = "alis")
     yeni_onb, ocr_isleri = {}, []
     adaylar_ = []
     if kok.is_dir():
-        for p in sorted(kok.rglob("*")):
-            if not p.is_file() or p.name.startswith((".", "~$")) or p.suffix.lower() not in _FATURA_BELGE:
+        for p in sorted(kok.rglob("*.[pP][dD][fF]")):
+            if not p.is_file() or p.name.startswith((".", "~$")):
                 continue
             if "cikan" in p.relative_to(kok).parts:
                 continue
@@ -317,14 +315,6 @@ def fatura_pdf_dizini(klasor_path: Path, onbellek_yolu: Path, yon: str = "alis")
         if kayit and kayit[0] == mt and kayit[1] is not None:
             nolar = kayit[1]
             yeni_onb[rel] = kayit
-        elif p.suffix.lower() in _XML:
-            # e-Fatura XML'i / GİB ZIP'i: numara doğrudan XML'den (OCR gerekmez)
-            try:
-                from app.ubl_fatura import fatura_nolari as _xml_nolari
-                nolar = _xml_nolari(p.read_bytes())
-            except Exception:
-                nolar = []
-            yeni_onb[rel] = [mt, nolar]
         else:
             nolar, metin_var = _pdf_metin_nolari(p)
             if not nolar and not metin_var:
@@ -450,7 +440,6 @@ def donemler(klasor_path: Path, yon: str) -> list:
         out.append({"ad": p.name, "yol": p.relative_to(klasor_path).as_posix(), "yil": ay[0], "ay": ay[1],
                     "excel": sum(1 for f in dosyalar if f.suffix.lower() in _EXCEL),
                     "pdf": sum(1 for f in dosyalar if f.suffix.lower() == ".pdf"),
-                    "xml": sum(1 for f in dosyalar if f.suffix.lower() in _XML),
                     "mtime": max([f.stat().st_mtime for f in dosyalar] or [p.stat().st_mtime])})
     out.sort(key=lambda x: (x["yil"] or 0, x["ay"], x["mtime"]), reverse=True)
     return out
@@ -469,12 +458,12 @@ def donem_excelleri(klasor_path: Path, yon: str, ad: str) -> list:
 
 
 def donem_pdfleri(klasor_path: Path, yon: str, ad: str) -> list:
-    """Seçilen ay klasöründeki fatura PDF'leri ve e-Fatura XML/ZIP'leri. Döner: [Path]"""
+    """Seçilen ay klasöründeki fatura PDF'leri. Döner: [Path]"""
     yk = yon_klasoru(klasor_path, yon)
     if not yk or not ad or "/" in ad or "\\" in ad or ad in (".", ".."):
         return []
     p = yk / ad
     if not p.is_dir():
         return []
-    return sorted(f for f in p.rglob("*") if f.is_file() and f.suffix.lower() in _FATURA_BELGE
+    return sorted(f for f in p.rglob("*") if f.is_file() and f.suffix.lower() == ".pdf"
                   and not f.name.startswith((".", "~$")))

@@ -16,7 +16,7 @@ import hashlib, json, os, queue, re, threading, time
 from datetime import datetime
 from pathlib import Path
 
-from app import yapay_zeka, ubl_fatura
+from app import yapay_zeka
 from app.kurallar import norm
 
 OKUYUCU_SURUM = 6   # 2: fatura kalem açıklamaları (gider seçimi için) · 3: toplu PDF'i faturalara bölme · 4: kalem tutarları · 5: kalem KDV oranı · 6: tevkifat / çok oranlı özet
@@ -74,9 +74,7 @@ def _guncelle(k: Path, dosya: str, **alanlar):
 
 
 def pdf_dosyalari(k: Path) -> list:
-    """Fatura belgeleri: PDF'ler ve e-Fatura XML'leri (tek .xml ya da GİB .zip'i)."""
-    return sorted(p for p in k.iterdir() if p.is_file() and not p.name.startswith("_")
-                  and p.suffix.lower() in (".pdf",) + ubl_fatura.UZANTILAR)
+    return sorted(p for p in k.iterdir() if p.is_file() and p.suffix.lower() == ".pdf")
 
 
 def _sha1(p: Path) -> str:
@@ -258,10 +256,7 @@ def _sayfa_oku(sayfa: dict, dosya: str, yon: str) -> dict | None:
 def _dosya_oku(p: Path, yon: str) -> tuple:
     """Döner: (faturalar, sayfa_metinleri). Çok sayfalı PDF önce sayfa sayfa
     denenir; her sayfa ayrı fatura no'lu tam bir fatura çıkıyorsa birden çok
-    fatura sayılır, yoksa dosyanın tamamı tek faturadır.
-    e-Fatura XML'i (ya da XML içeren ZIP) doğrudan ve kesin okunur."""
-    if p.suffix.lower() in ubl_fatura.UZANTILAR:
-        return ubl_fatura.dosya_oku(p, yon), []
+    fatura sayılır, yoksa dosyanın tamamı tek faturadır."""
     sayfalar = _sayfalar(p)
     if len(sayfalar) > 1:
         tek_tek = [_sayfa_oku(s, p.name, yon) for s in sayfalar]
@@ -407,36 +402,13 @@ def faturalar(d: Path, yon: str) -> tuple:
                 any(f.get("eksik") for f in kayit.get("faturalar") or []):
             bekleyen += 1
         out.extend(json.loads(json.dumps(kayit.get("faturalar") or [])))   # derin kopya
-    return xml_oncelikli(out), bekleyen
-
-
-def _fno(s) -> str:
-    return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
-
-
-def xml_oncelikli(out: list) -> list:
-    """Aynı fatura hem XML hem PDF olarak varsa XML esastır (kesin veri); PDF'in adı
-    yalnız faturayı açmak için 'goruntu' alanında tutulur."""
-    xml_no = {_fno(f.get("fatura_no")): f for f in out if f.get("kaynak") == "xml" and f.get("fatura_no")}
-    if not xml_no:
-        return out
-    tekil = []
-    for f in out:
-        x = xml_no.get(_fno(f.get("fatura_no")))
-        if x is not None and f is not x:
-            if str(f.get("dosya", "")).lower().endswith(".pdf"):
-                x["goruntu"] = f["dosya"]
-            continue
-        tekil.append(f)
-    return tekil
+    return out, bekleyen
 
 
 # ------------------------------------------------------------------ yapay zekâ kuyruğu
 def yz_kuyruga_al(k: Path, dosya: str, yon: str, zorla: bool = False) -> bool:
     """Yapay zekâ açıksa dosyayı kuyruğa atar. Kapalıysa durumu not eder."""
     global _isci
-    if Path(dosya).suffix.lower() in ubl_fatura.UZANTILAR:
-        return False            # XML zaten kesin okunur; yapay zekâ PDF metni içindir
     yz = yapay_zeka.durum()
     if not yz["etkin"]:
         not_ = [f"Yapay zekâ kullanılamıyor: {yz['hata']}"]

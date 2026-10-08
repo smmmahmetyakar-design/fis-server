@@ -1,7 +1,7 @@
 """
 Belge okuyucu — gelen dosyayı ham satır/tablo verisine çevirir.
 Desteklenen: .xlsx/.xls (openpyxl), .pdf (pdfplumber; metin yoksa OCR),
-             .png/.jpg/.jpeg (OCR: pytesseract), e-Fatura .xml / GİB .zip (UBL).
+             .png/.jpg/.jpeg (OCR: pytesseract).
 
 Çıktı: {"tur": "excel|pdf|pdf_ocr|resim_ocr", "tablolar": [[[hücre,...],...]],
          "ham_metin": "...", "uyari": "..."}
@@ -198,33 +198,9 @@ def _magic_tur(path: Path) -> str:
     return ""
 
 
-def ubl_oku(path: Path):
-    """e-Fatura UBL XML'i (ya da GİB ZIP'i): faturalar yöne bağlı olmadan ayrıştırılır;
-    karşı taraf (satıcı/alıcı) işlenirken seçilir (isleyici._ubl_faturalar)."""
-    from app import ubl_fatura
-    faturalar, hatalar = [], []
-    for ad, x in ubl_fatura.xmlleri(path.read_bytes()):
-        try:
-            faturalar.append(ubl_fatura.ayristir(x))
-        except Exception as e:
-            hatalar.append(f"{ad or path.name}: {e.__class__.__name__}")
-    return {"tur": "ubl", "tablolar": [], "ham_metin": "", "ubl": faturalar,
-            "uyari": ("Okunamayan XML: " + ", ".join(hatalar)) if hatalar else ""}
-
-
 def belge_oku(path: Path, orijinal_ad: str = ""):
     ext = _ext(orijinal_ad or path.name)
     tur = _magic_tur(path)              # önce GERÇEK içerik türü
-
-    # e-Fatura XML'i ya da GİB ZIP'i (ZIP, xlsx ile aynı imzayı taşır — önce bu denenir)
-    if tur in ("xlsx", "html", "") or ext in (".xml", ".zip"):
-        from app import ubl_fatura
-        try:
-            with open(path, "rb") as f:
-                if ubl_fatura.ubl_mu(f.read()):
-                    return ubl_oku(path)
-        except OSError:
-            pass
 
     # İçerik türü kesinse ona güven (uzantı yalan söyleyebilir: Logo .xls der ama xlsx yazar)
     if tur == "xlsx":

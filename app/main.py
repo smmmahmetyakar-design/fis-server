@@ -30,7 +30,7 @@ from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar
 from app.belge_oku import belge_oku
 from app import isleyici
 from app import sunucu_klasor as sk
-from app import fatura_pdf, yapay_zeka, gider_yz, ubl_fatura
+from app import fatura_pdf, yapay_zeka, gider_yz
 
 DATA_DIR = Path(os.environ.get("FIS_DATA", "/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -525,20 +525,6 @@ async def belge_yukle(kod: str, tip: str, file: UploadFile = File(...)):
     return {"ok": True, "dosya": fname}
 
 
-def _efatura_goster(p: Path):
-    """e-Fatura: ZIP'teki GİB görüntüsü (HTML) varsa onu, yoksa XML'in kendisini gösterir.
-    HTML, betik çalıştırmasın diye sıkı CSP ile sunulur."""
-    data = p.read_bytes()
-    html = ubl_fatura.html_gorunum(data)
-    if html:
-        return StreamingResponse(io.BytesIO(html), media_type="text/html; charset=utf-8",
-                                 headers={"Content-Security-Policy": "script-src 'none'; connect-src 'none'"})
-    xmller = ubl_fatura.xmlleri(data)
-    if xmller:
-        return StreamingResponse(io.BytesIO(xmller[0][1]), media_type="application/xml")
-    return None
-
-
 @app.get("/api/firma/{kod}/belge/{tip}/{fname}")
 def belge_ac(kod: str, tip: str, fname: str):
     """2. bölüme yüklenmiş belgeyi tarayıcıda açar (önizlemedeki 📄 bağlantısı)."""
@@ -547,10 +533,6 @@ def belge_ac(kod: str, tip: str, fname: str):
     p = firma_dir(kod) / tip / _guvenli_ad(fname)
     if not p.is_file():
         raise HTTPException(404, "Yok")
-    if p.suffix.lower() in ubl_fatura.UZANTILAR:
-        r = _efatura_goster(p)
-        if r is not None:
-            return r
     tur = "application/pdf" if p.suffix.lower() == ".pdf" else None
     return FileResponse(p, media_type=tur,
                         headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(p.name)}"})
@@ -582,21 +564,17 @@ def _guvenli_ad(fname: str) -> str:
 
 @app.post("/api/firma/{kod}/fatura-pdf/{yon}")
 async def fatura_pdf_yukle(kod: str, yon: str, file: UploadFile = File(...)):
-    """Tek bir fatura PDF'i ya da e-Fatura XML'i (.xml / GİB .zip) yükler, hemen okur;
-    PDF'te eksik alan kalırsa yapay zekâ kuyruğuna atar (arka planda)."""
+    """Tek bir fatura PDF'i yükler, hemen metinden okur; eksik alan kalırsa
+    yapay zekâ kuyruğuna atar (arka planda)."""
     _yon_kontrol(yon)
     d = firma_dir(kod)
     data = await file.read()
-    if data[:5] == b"%PDF-":
-        uzanti = ".pdf"
-    elif ubl_fatura.ubl_mu(data):
-        uzanti = ".zip" if data[:4] == b"PK\x03\x04" else ".xml"
-    else:
-        raise HTTPException(400, f"{file.filename}: PDF ya da e-Fatura XML'i değil")
+    if data[:5] != b"%PDF-":
+        raise HTTPException(400, f"{file.filename}: PDF değil")
     k = fatura_pdf.klasor(d, yon)
-    fname = re.sub(r"[^\w.\- ]", "_", file.filename or f"fatura{uzanti}").lstrip("_") or f"fatura{uzanti}"
-    if not fname.lower().endswith(uzanti):
-        fname += uzanti
+    fname = re.sub(r"[^\w.\- ]", "_", file.filename or "fatura.pdf").lstrip("_") or "fatura.pdf"
+    if not fname.lower().endswith(".pdf"):
+        fname += ".pdf"
     (k / fname).write_bytes(data)
     sunucudan = _read_json(k / "_sunucudan.json", [])
     if fname in sunucudan:          # elle yüklendi: artık normal fatura PDF'i
@@ -623,10 +601,6 @@ def fatura_pdf_ac(kod: str, yon: str, fname: str):
     p = fatura_pdf.klasor(d, yon) / _guvenli_ad(fname)
     if not p.is_file():
         raise HTTPException(404, "PDF yok")
-    if p.suffix.lower() in ubl_fatura.UZANTILAR:
-        r = _efatura_goster(p)
-        if r is not None:
-            return r
     return FileResponse(p, media_type="application/pdf",
                         headers={"Content-Disposition": f"inline; filename*=UTF-8''{quote(p.name)}"})
 
@@ -722,8 +696,7 @@ def _sunucu_fatura_pdf_al(d: Path, tum_ham: list, yon: str) -> dict:
     alinan = []
     for no in sorted(eksik):
         rel = dizin.get(no)
-        if isinstance(rel, list):          # aynı numara birden çok dosyada: XML önce, sonra ad sırası
-            rel = sorted(rel, key=lambda r: Path(r).suffix.lower() not in ubl_fatura.UZANTILAR)
+        if isinstance(rel, list):          # aynı numara birden çok dosyada: ilki (ad sırası)
             rel = rel[0] if rel else ""
         if not rel:
             sonuc["bulunamayan"].append(no)
@@ -794,7 +767,7 @@ def fatura_donem_al(kod: str, yon: str, body: dict):
         _kaynak_yaz(d, f"donem:{yon}", "sunucu", f"{ad} ({len(pdfler)} PDF, liste yok)")
         return {"ok": True, "donem": ad, "dosyalar": [], "liste_yok": True, "pdf_alinan": len(pdfler),
                 "pdf_fatura": fatura_sayisi, "pdf_eksik": eksik, "pdf_bulunamayan": 0,
-                "pdf_mesaj": f"Liste yok — {len(pdfler)} dosyadan (PDF/XML) {fatura_sayisi} fatura alındı"}
+                "pdf_mesaj": f"Liste yok — {len(pdfler)} PDF'ten {fatura_sayisi} fatura alındı"}
     hedef_k = d / "fatura"
     hedef_k.mkdir(exist_ok=True)
     alinan = []
