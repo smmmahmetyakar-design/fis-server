@@ -1811,6 +1811,20 @@ def _pdf_gercek_faturalar(hamlar, yon="alis"):
     return out
 
 
+def _ubl_faturalar(hamlar, yon="alis"):
+    """Belge alanına atılmış e-Fatura XML'lerinin (ya da GİB ZIP'lerinin) faturaları."""
+    from app import ubl_fatura
+    out = []
+    for h in hamlar:
+        if h.get("tur") != "ubl":
+            continue
+        for x in h.get("ubl") or []:
+            out.append(ubl_fatura.kayda_cevir(x, yon, h.get("dosya", "")))
+    for f in out:
+        f["pdf_yer"] = "belge"
+    return out
+
+
 def alt_hesap_kodlari(hesaplar) -> set:
     """Kayıt atılabilir (en alt kırılım) hesaplar: başka bir hesabın üst hesabı
     olmayanlar. "740" ve "740.01" üst hesaptır, "740.01.001" alt hesaptır."""
@@ -1850,15 +1864,37 @@ def _liste_pdf_birlestir(liste, pdfler):
         if a and a not in pdf_idx:
             pdf_idx[a] = p
     kullanilan, tamamlanan, tutar_farki, kdv_haric, tevkifat_pdf = set(), [], [], [], []
+    xml_esas, xml_fark = [], []
     for f in liste:
         a = _fno_anahtar(f["fatura_no"])
         p = pdf_idx.get(a)
         if not p:
             continue
         kullanilan.add(a)
-        f["pdf"] = p.get("dosya", "")
+        f["pdf"] = p.get("goruntu") or p.get("dosya", "")
         f["pdf_sayfa"] = p.get("sayfa", 0)
         f["pdf_yer"] = p.get("pdf_yer") or "alan"
+        if p.get("kaynak") == "xml" and p.get("kalemler") and "tutar" not in (p.get("eksik") or []):
+            # e-Fatura XML'i kesin veridir: KDV dağılımı, tevkifat ve ek vergiler XML'den alınır.
+            # Liste toplamı XML'in ödenecek ya da KDV dahil tutarıyla tutmuyorsa uyarılır.
+            p_dahil = round((p.get("toplam") or 0) + (p.get("tevkifat") or 0), 2)
+            l_top = f.get("toplam") or 0
+            if l_top and abs(l_top - p["toplam"]) > 0.05 and abs(l_top - p_dahil) > 0.05:
+                xml_fark.append(f"{f['fatura_no']} (liste {l_top:,.2f} / XML {p['toplam']:,.2f})")
+            eksik = list(f.get("eksik", []))
+            if p.get("cari_ad") and ("cari" in eksik or not f.get("cari_ad")):
+                f["cari_ad"] = p["cari_ad"]
+            if p.get("tarih") and ("tarih" in eksik or not f.get("tarih")):
+                f["tarih"] = p["tarih"]
+            for alan in ("kalemler", "ek_vergi", "toplam", "tevkifat", "tevkifat_kod", "tur", "senaryo"):
+                f[alan] = p.get(alan, f.get(alan))
+            for alan in ("kalem_aciklamalari", "kalem_detay", "vkn"):
+                if p.get(alan):
+                    f[alan] = p[alan]
+            f["kaynak_xml"] = True
+            f["eksik"] = [e for e in eksik if e not in ("kdv", "tutar", "cari", "tarih", "fatura_no")]
+            xml_esas.append(f["fatura_no"])
+            continue
         # fatura kalemlerinin açıklamaları (gider hesabı seçimi için) yalnız PDF'te var
         if p.get("kalem_aciklamalari") and not f.get("kalem_aciklamalari"):
             f["kalem_aciklamalari"] = p["kalem_aciklamalari"]
@@ -1955,6 +1991,10 @@ def _liste_pdf_birlestir(liste, pdfler):
         liste.append(p)
         eklenen.append(p.get("fatura_no") or p.get("dosya", ""))
 
+    if xml_esas:
+        uyarilar.append(f"{len(xml_esas)} faturanın tutar ve KDV dağılımı e-Fatura XML'inden alındı")
+    if xml_fark:
+        uyarilar.append(f"Liste ile XML toplamı farklı (XML esas alındı — kontrol edin): {_kisa_liste(xml_fark, 4)}")
     if tamamlanan:
         uyarilar.append(f"{len(tamamlanan)} faturanın listede eksik bilgisi PDF'ten tamamlandı")
     if kdv_haric:
@@ -1963,7 +2003,7 @@ def _liste_pdf_birlestir(liste, pdfler):
     if tevkifat_pdf:
         uyarilar.append(f"{len(tevkifat_pdf)} faturada KDV tevkifatı PDF'ten alındı: {_kisa_liste(tevkifat_pdf, 4)}")
     if eklenen:
-        uyarilar.append(f"Listede olmayan {len(eklenen)} fatura PDF'ten eklendi: {_kisa_liste(eklenen)}")
+        uyarilar.append(f"Listede olmayan {len(eklenen)} fatura PDF/XML'den eklendi: {_kisa_liste(eklenen)}")
     if eklenemeyen:
         uyarilar.append(f"Tutarı okunamadığı için eklenemeyen PDF: {_kisa_liste(eklenemeyen)}")
     if tutar_farki:
@@ -2204,20 +2244,27 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
     if faturalar:
         # Liste esas; "Fatura PDF'leri" alanındaki PDF'ler eksikleri tamamlar.
         # Belge alanına listeyle birlikte atılmış PDF'ler de aynı işe yarasın.
-        ek_pdf = [f for f in _pdf_gercek_faturalar(hamlar, yon)
+        from app.fatura_pdf import xml_oncelikli
+        ek_pdf = [f for f in _ubl_faturalar(hamlar, yon) + _pdf_gercek_faturalar(hamlar, yon)
                   if _fno_anahtar(f["fatura_no"]) not in {_fno_anahtar(p.get("fatura_no")) for p in pdf_faturalar}]
-        faturalar, birlesme_uyari = _liste_pdf_birlestir(faturalar, pdf_faturalar + ek_pdf)
+        faturalar, birlesme_uyari = _liste_pdf_birlestir(faturalar, xml_oncelikli(pdf_faturalar + ek_pdf))
         uyarilar.extend(birlesme_uyari)
     if not faturalar:
-        # eLogo listesi yok — gerçek e-Fatura/e-Arşiv PDF'i olabilir (tek tek fatura)
-        faturalar = _pdf_gercek_faturalar(hamlar, yon)
-        anahtarlar = {_fno_anahtar(f["fatura_no"]) for f in faturalar}
+        # eLogo listesi yok — gerçek e-Fatura/e-Arşiv XML'i ya da PDF'i olabilir (tek tek fatura).
+        # XML kesin veridir: aynı numaralı PDF'in önüne geçer.
+        from app.fatura_pdf import xml_oncelikli
+        belge_alani = _ubl_faturalar(hamlar, yon) + _pdf_gercek_faturalar(hamlar, yon)
+        anahtarlar = {_fno_anahtar(f["fatura_no"]) for f in belge_alani}
+        alan = []
         for p in pdf_faturalar:
-            if _fno_anahtar(p.get("fatura_no")) in anahtarlar or not p.get("toplam"):
+            # aynı numara belge alanında da varsa: yalnız XML ise alınır (XML, PDF'in önüne geçer)
+            if not p.get("toplam") or (_fno_anahtar(p.get("fatura_no")) in anahtarlar
+                                       and p.get("kaynak") != "xml"):
                 continue
             if not p.get("cari_ad"):
                 p["cari_ad"] = p.get("fatura_no") or p.get("dosya", "")
-            faturalar.append(p)
+            alan.append(p)
+        faturalar = xml_oncelikli(belge_alani + alan)
         eksikli = [f.get("fatura_no") or f.get("dosya", "") for f in faturalar if f.get("eksik")]
         if eksikli:
             uyarilar.append(f"PDF'te eksik alan kalan fatura: {_kisa_liste(eksikli)}")

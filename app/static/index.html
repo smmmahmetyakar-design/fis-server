@@ -219,7 +219,7 @@
   <div class="card" id="belgeKarti">
     <h2>2) Belge Yükle (<span id="belgeTip">banka</span>) — Excel / PDF / Resim</h2>
     <div class="yukle-kutu">
-      <input type="file" id="belgeFile" accept=".xlsx,.xls,.pdf,.png,.jpg,.jpeg" multiple>
+      <input type="file" id="belgeFile" accept=".xlsx,.xls,.pdf,.png,.jpg,.jpeg,.xml,.zip" multiple>
       <button class="btn btn-ana" onclick="belgeYukle()">Yükle</button>
       <div class="hint" style="margin-top:6px">Birden çok dosya seçebilirsiniz. PDF/resim OCR ile okunur (Türkçe).</div>
     </div>
@@ -234,9 +234,9 @@
       </div>
       <div class="hint" style="margin-bottom:8px">Fatura listesinde eksik kalan cari, tarih ve KDV dağılımı, fatura numarası eşleşen PDF'ten tamamlanır. Listede hiç olmayan faturalar da PDF'ten eklenir. Liste yoksa yalnızca PDF'lerle de çalışır.</div>
       <div class="yukle-kutu" id="faturaPdfKutu">
-        <input type="file" id="faturaPdfFile" accept=".pdf" multiple>
-        <button class="btn btn-ana" onclick="faturaPdfYukle()">PDF yükle</button>
-        <div class="hint" style="margin-top:6px">Birden çok PDF seçebilir ya da buraya sürükleyebilirsin. Birden çok fatura içeren tek PDF de olur.</div>
+        <input type="file" id="faturaPdfFile" accept=".pdf,.xml,.zip" multiple>
+        <button class="btn btn-ana" onclick="faturaPdfYukle()">PDF / XML yükle</button>
+        <div class="hint" style="margin-top:6px">Birden çok PDF seçebilir ya da buraya sürükleyebilirsin. Birden çok fatura içeren tek PDF de olur. e-Fatura XML'i (ya da GİB'den indirilen .zip) en güvenilir kaynaktır: tutar ve KDV dağılımı ondan kesin okunur, aynı numaralı PDF'in önüne geçer.</div>
       </div>
       <div id="yzDurum" class="yz-durum"></div>
       <div id="yzSinav" class="yz-sinav"></div>
@@ -767,7 +767,7 @@ async function faturaPdfYz(dosya){
   kutu.addEventListener('dragleave',()=>kutu.classList.remove('dragover'));
   kutu.addEventListener('drop',e=>{
     e.preventDefault(); kutu.classList.remove('dragover');
-    const pdfler=[...e.dataTransfer.files].filter(f=>f.name.toLowerCase().endsWith('.pdf'));
+    const pdfler=[...e.dataTransfer.files].filter(f=>/\.(pdf|xml|zip)$/i.test(f.name));
     if(pdfler.length) faturaPdfYukle(pdfler);
   });
 })();
@@ -915,7 +915,7 @@ function pdfLink(s){
   if(!s.pdf){
     // faturanın PDF'i yok: buradan eklenebilir (Fatura PDF'leri alanına gider, sonra yeniden işlenir)
     if(!aktifTip.startsWith('fatura') || !s.evrak_no) return '';
-    return `<div><label class="pdf-ac pdf-ekle" title="Bu faturanın PDF'ini ekle — KDV dağılımı ve eksikler PDF'ten tamamlanır">📎 PDF ekle<input type="file" accept=".pdf" style="display:none" onchange="satirPdfEkle(this)"></label></div>`;
+    return `<div><label class="pdf-ac pdf-ekle" title="Bu faturanın PDF'ini ekle — KDV dağılımı ve eksikler PDF'ten tamamlanır">📎 PDF ekle<input type="file" accept=".pdf,.xml,.zip" style="display:none" onchange="satirPdfEkle(this)"></label></div>`;
   }
   const yol=s.pdf_yer==='belge'?`belge/${apiTip()}`:`fatura-pdf/${aktifYon()}`;
   const u=`/api/firma/${firmaKod}/${yol}/${encodeURIComponent(s.pdf)}`+(s.pdf_sayfa?`#page=${s.pdf_sayfa}`:'');
@@ -948,8 +948,8 @@ async function donemSatirCiz(){
     return;
   }
   el.innerHTML=`📅 <span>Dönem:</span>
-    <select id="donemSec">${(()=>{ const sec=(v.donemler.find(x=>x.excel||x.pdf)||v.donemler[0]).ad;
-      return v.donemler.map(x=>`<option value="${esc(x.ad)}" ${x.ad===sec?'selected':''}>${esc(x.ad)} — ${x.excel?x.excel+' liste':'liste yok'}, ${x.pdf} PDF${!x.excel&&x.pdf?' (yalnız PDF)':''}</option>`).join(''); })()}</select>
+    <select id="donemSec">${(()=>{ const sec=(v.donemler.find(x=>x.excel||x.pdf||x.xml)||v.donemler[0]).ad;
+      return v.donemler.map(x=>`<option value="${esc(x.ad)}" ${x.ad===sec?'selected':''}>${esc(x.ad)} — ${x.excel?x.excel+' liste':'liste yok'}, ${x.pdf} PDF${x.xml?', '+x.xml+' XML':''}${!x.excel&&(x.pdf||x.xml)?' (liste olmadan)':''}</option>`).join(''); })()}</select>
     <button class="btn btn-ana" onclick="donemAl()" style="padding:5px 14px">Sunucudan al</button>
     <span class="hint">${esc(v.klasor)}/${esc(v.yon_klasoru)}/&lt;ay&gt; — listeyi ve eşleşen PDF'leri alır; listesi olmayan ayda PDF'ler (tek toplu PDF de olur) fatura olarak alınır.</span>`;
 }
