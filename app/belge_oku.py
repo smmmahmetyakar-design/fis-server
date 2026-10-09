@@ -174,6 +174,26 @@ def html_tablo_oku(path: Path):
             "uyari": "" if tablolar else "HTML tablo bulunamadı"}
 
 
+def csv_oku(path: Path):
+    """Banka CSV dökümü (Akbank vb.): kodlama (UTF-8 / Windows-1254) ve ayraç (; , sekme |)
+    kendiliğinden bulunur. Satırlar tek tablo olarak döner."""
+    import csv
+    ham = path.read_bytes()
+    metin = None
+    for kod in ("utf-8-sig", "cp1254", "latin-1"):
+        try:
+            metin = ham.decode(kod)
+            break
+        except UnicodeDecodeError:
+            continue
+    satirlar = [s for s in metin.splitlines()]
+    ornek = "\n".join(satirlar[:40])
+    ayrac = max((";", ",", "\t", "|"), key=lambda a: ornek.count(a))
+    tablo = [[h.strip() for h in r] for r in csv.reader(satirlar, delimiter=ayrac)]
+    tablo = [r for r in tablo if any(r)] or []
+    return {"tur": "csv", "tablolar": [tablo] if tablo else [], "ham_metin": "", "uyari": ""}
+
+
 def _magic_tur(path: Path) -> str:
     """Dosyanın GERÇEK türünü ilk baytlarından anlar (uzantıdan bağımsız)."""
     try:
@@ -227,5 +247,7 @@ def belge_oku(path: Path, orijinal_ad: str = ""):
         return pdf_oku(path)
     if ext in (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"):
         return resim_oku(path)
+    if ext in (".csv", ".txt"):
+        return csv_oku(path)
     return {"tur": "bilinmeyen", "tablolar": [], "ham_metin": "",
             "uyari": f"Dosya türü tanınamadı (uzantı: {ext or 'yok'})"}

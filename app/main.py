@@ -863,6 +863,10 @@ def isle(kod: str, tip: str, body: IsleBody):
         raise HTTPException(400, "Geçersiz tip")
     d = firma_dir(kod)
     km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", _gecmis_kaynak(d, tip))
+    if tip == "banka":
+        # kendi hesapları arası virmanı tanımak için firma unvanı (mizan başlığı, yoksa firma adı)
+        from app.banka import mizan_unvani
+        km.firma_unvan = mizan_unvani(d / "mizan.xlsx") or _read_json(d / "meta.json", {}).get("ad", "")
 
     dosyalar = body.dosyalar if body.dosyalar is not None else \
         [f.name for f in (d / tip).iterdir() if f.is_file() and not f.name.startswith("_")]
@@ -1049,6 +1053,15 @@ def ogret(kod: str, tip: str, body: OgretBody):
         _write_json(p, og)
         return {"ok": True, "ogrenilen": len(og), "tur": "gider"}
     km = KuralMotoru(d / "mizan.xlsx", None if tip == "fatura" else kural_yolu(d, tip), d / f"{tip}_ogrenme.json", _gecmis_kaynak(d, tip))
+    if tip == "banka":
+        # bankada açıklama tarih/referans/numara taşır: anahtar yalnız anlamlı kelimeler
+        from app.banka import banka_anahtar
+        anahtar = banka_anahtar(body.aciklama)
+        if anahtar:
+            km.ogrenme[anahtar] = body.kod
+            from app.kurallar import ogrenme_yaz
+            ogrenme_yaz(km.ogrenme_path, km.ogrenme)
+            return {"ok": True, "ogrenilen": len(km.ogrenme), "anahtar": anahtar}
     km.ogret(body.aciklama, body.kod)
     return {"ok": True, "ogrenilen": len(km.ogrenme)}
 

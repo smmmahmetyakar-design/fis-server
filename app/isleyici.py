@@ -426,129 +426,13 @@ def _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar):
 
 
 def isle_banka(hamlar, km, fis0):
-    """
-    Banka dökümü -> muhasebe fişi.
-    Aynı banka + aynı tarih = tek fiş.
-    Dövizli hesaplar: TCMB kuruyla TL'ye çevrilir.
-    """
-    uyarilar = []
-    hesaplar_list = [{"kod": k, "ad": a} for k, a in km.hesaplar]
-
-    # Her belge için ayrı banka hesabı belirle
-    dosya_to_hesap = {}
-    for h in hamlar:
-        dosya = h.get("dosya", "")
-        hesap = _banka_hesabi_bul([h], hesaplar_list, uyarilar)
-        dosya_to_hesap[dosya] = hesap
-
-    # Döviz tespiti: banka hesabının adından veya belge içeriğinden
-    DOVIZ_KODLARI = {"EUR": "EUR", "USD": "USD", "GBP": "GBP", "CHF": "CHF",
-                     "EURO": "EUR", "DOLAR": "USD", "STERLIN": "GBP"}
-    dosya_to_doviz = {}
-    for h in hamlar:
-        dosya = h.get("dosya", "")
-        banka_hesap = dosya_to_hesap.get(dosya, "")
-        hesap_ad = (km.hesap_adi(banka_hesap) or "").upper()
-        doviz = None
-        # Hesap adında döviz kodu var mı? (örn. "GARANTİ EUR")
-        for anahtar, kod in DOVIZ_KODLARI.items():
-            if anahtar in hesap_ad:
-                doviz = kod; break
-        # Dosya adında da ara
-        if not doviz:
-            for anahtar, kod in DOVIZ_KODLARI.items():
-                if anahtar in dosya.upper():
-                    doviz = kod; break
-        # Belge başlığında ara
-        if not doviz:
-            icerik = (h.get("ham_metin") or "")[:500].upper()
-            for tab in h.get("tablolar", []):
-                for r in tab[:8]:
-                    for c in r:
-                        if c: icerik += " " + str(c).upper()
-            for anahtar, kod in DOVIZ_KODLARI.items():
-                if anahtar in icerik:
-                    doviz = kod; break
-        dosya_to_doviz[dosya] = doviz
-
-    # Dövizli dosyalar varsa TCMB kurlarını hazırla
-    kur_getir_fn = None
-    dovizli_tarihler = {}  # cache: (doviz, tarih) -> kur
-    if any(v for v in dosya_to_doviz.values()):
-        try:
-            from app.tcmb import kur_getir
-            kur_getir_fn = kur_getir
-        except ImportError:
-            uyarilar.append("TCMB modülü yüklenemedi, döviz kurları çevrilmedi")
-
-    kayitlar = _kayitlar(hamlar)
-    if not kayitlar:
-        for h in hamlar:
-            if h.get("ham_metin"):
-                uyarilar.append(f"{h.get('dosya')}: tablo çıkarılamadı, ham metin var")
-        return [], uyarilar
-
-    fisler = []
-    fis = fis0
-
-    # Aynı bankanın aynı tarihteki hareketlerini TEK FİŞTE topla
-    from collections import defaultdict
-    gruplar = defaultdict(list)
-    for k in kayitlar:
-        banka_hesap = dosya_to_hesap.get(k.get("dosya", ""), "102.01.001")
-        tarih = k.get("tarih", "") or ""
-        gruplar[(banka_hesap, tarih)].append(k)
-
-    for (banka_hesap, tarih), grup_kayitlar in sorted(gruplar.items(), key=lambda x: (x[0][1], x[0][0])):
-        fisno = f"{fis:05d}"
-        banka_ad = km.hesap_adi(banka_hesap) or "BANKA"
-
-        for k in grup_kayitlar:
-            karsi, kaynak = km.eslestir(k["aciklama"])
-            if not karsi:
-                karsi = "198.01.001"
-                uyarilar.append(f"{k['aciklama'][:30]}: hesap eşleşmedi")
-            tutar = abs(k["tutar"])
-            evno = k.get("referans", "")
-
-            # Döviz kontrolü
-            dosya = k.get("dosya", "")
-            doviz = dosya_to_doviz.get(dosya)
-            para_birimi = doviz or ""
-            kur_degeri = None
-            doviz_tutar = None
-
-            if doviz and kur_getir_fn:
-                cache_key = (doviz, k["tarih"])
-                if cache_key not in dovizli_tarihler:
-                    try:
-                        dovizli_tarihler[cache_key] = kur_getir_fn(doviz, k["tarih"])
-                    except Exception:
-                        dovizli_tarihler[cache_key] = None
-                kur_degeri = dovizli_tarihler.get(cache_key)
-                if kur_degeri:
-                    doviz_tutar = tutar
-                    tutar = round(tutar * kur_degeri, 2)
-                else:
-                    uyarilar.append(f"{doviz} kuru bulunamadı ({k['tarih']}), tutar çevrilmedi")
-
-            if k["tutar"] >= 0:
-                fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, tutar, 0,
-                    evrak_no=evno, detay=k["aciklama"], kaynak="banka",
-                    para_birimi=para_birimi, kur=kur_degeri, doviz_tutar=doviz_tutar))
-                fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, 0, tutar,
-                    evrak_no=evno, detay=k["aciklama"], kaynak=kaynak,
-                    para_birimi=para_birimi, kur=kur_degeri, doviz_tutar=doviz_tutar))
-            else:
-                fisler.append(_sat(fisno, k["tarih"], banka_ad, karsi, tutar, 0,
-                    evrak_no=evno, detay=k["aciklama"], kaynak=kaynak,
-                    para_birimi=para_birimi, kur=kur_degeri, doviz_tutar=doviz_tutar))
-                fisler.append(_sat(fisno, k["tarih"], banka_ad, banka_hesap, 0, tutar,
-                    evrak_no=evno, detay=k["aciklama"], kaynak="banka",
-                    para_birimi=para_birimi, kur=kur_degeri, doviz_tutar=doviz_tutar))
-        fis += 1
-    return fisler, uyarilar
-
+    """Banka dökümü -> muhasebe fişi (ayrıntı: app/banka.py)."""
+    from app import banka
+    try:
+        from app.tcmb import kur_getir
+    except ImportError:
+        kur_getir = None
+    return banka.isle_banka(hamlar, km, fis0, banka_hesabi_bul=_banka_hesabi_bul, kur_getir=kur_getir)
 
 
 # ----------------------------------------------------------------- FATURA

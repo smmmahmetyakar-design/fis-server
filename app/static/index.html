@@ -219,7 +219,7 @@
   <div class="card" id="belgeKarti">
     <h2>2) Belge Yükle (<span id="belgeTip">banka</span>) — Excel / PDF / Resim</h2>
     <div class="yukle-kutu">
-      <input type="file" id="belgeFile" accept=".xlsx,.xls,.pdf,.png,.jpg,.jpeg" multiple>
+      <input type="file" id="belgeFile" accept=".xlsx,.xls,.csv,.pdf,.png,.jpg,.jpeg" multiple>
       <button class="btn btn-ana" onclick="belgeYukle()">Yükle</button>
       <div class="hint" style="margin-top:6px">Birden çok dosya seçebilirsiniz. PDF/resim OCR ile okunur (Türkçe).</div>
     </div>
@@ -1021,8 +1021,11 @@ function totals(){
   const al=satirlar.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0);
   return {b,al,dengeli:Math.abs(b-al)<0.01};
 }
-const KAYNAK_AD={yz:'yapay zekâ', tahmin:'varsayılan', ogrenme:'öğrenilen', gecmis:'geçmiş fiş', ogrenme_kalem:'öğrenilen (kalem)', ogrenme_kalem_benzer:'benzer kalem'};
-const KONTROL_AD={gider:'gider hesabı yapay zekâ/varsayılan', cari:'cari bulunamadı (198)', kdv:'KDV hesabı yok',
+const KAYNAK_AD={yz:'yapay zekâ', tahmin:'varsayılan', ogrenme:'öğrenilen', gecmis:'geçmiş fiş', ogrenme_kalem:'öğrenilen (kalem)', ogrenme_kalem_benzer:'benzer kalem',
+  masraf:'banka masrafı', vergi:'vergi ödemesi', sgk:'SGK', virman:'virman / döviz', mizan:'hesap adı', banka:'banka'};
+const KONTROL_AD={belirsiz:'geçmişte aynı açıklama birden çok hesaba yazılmış', zayif:'açıklamanın yalnız bir kelimesi tuttu',
+  eslesmedi:'karşı hesap bulunamadı (198)', benzer:'hesap adı bir harf farklı', vergi:'vergi/SGK hesabı kesin değil',
+  gider:'gider hesabı yapay zekâ/varsayılan', cari:'cari bulunamadı (198)', kdv:'KDV hesabı yok',
   belge:'fatura bilgisi yapay zekâ ile okundu', benzer_ad:'geçmişte unvanın yalnız bir kısmı tuttu',
   kdv_yok:'KDV ayrılamadı — tutarın tamamı (KDV dahil) gidere yazıldı', dengesiz:'fiş dengesiz',
   tevkifat_hesap:'tevkifat hesabı bulunamadı ya da adından kesin değil (alışta 360 sorumlu KDV, satışta 391 tevkifat) — bir kez onaylayınca öğrenilir',
@@ -1037,7 +1040,7 @@ function kontrolHTML(s){
 function bolunmusFis(s){ return new Set(satirlar.filter(x=>x.fisno===s.fisno && x.rol==='gider').map(x=>x.hesap)).size>1; }
 function kontrolOnayla(i){
   const s=satirlar[i]; if(!s||!s.hesap) return;
-  if(firmaKod && s.detay && (s.rol==='gider'||s.rol==='cari'||s.rol==='kdv'||s.rol==='tevkifat')){
+  if(firmaKod && s.detay && (s.rol==='gider'||s.rol==='cari'||s.rol==='kdv'||s.rol==='tevkifat'||s.rol==='karsi')){
     fetch(`/api/firma/${firmaKod}/ogret/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),aciklama:s.detay,kod:s.hesap,rol:s.rol||'',yon:aktifYon(),oran:s.oran||0,kalemler:s.rol==='gider'?(s.fatura_kalemleri||[]):[],sadece_kalem:bolunmusFis(s)})}).catch(()=>{});
   }
