@@ -1023,12 +1023,6 @@ function totals(){
 }
 const KAYNAK_AD={yz:'yapay zekâ', tahmin:'varsayılan', ogrenme:'öğrenilen', gecmis:'geçmiş fiş', ogrenme_kalem:'öğrenilen (kalem)', ogrenme_kalem_benzer:'benzer kalem',
   masraf:'banka masrafı', vergi:'vergi ödemesi', sgk:'SGK', kredi_karti:'kredi kartı', virman:'virman / döviz', mizan:'hesap adı', banka:'banka'};
-// "KONTROL - VAKIFBANK TL 598432 - 24.09.2026" / "AKBANK TL-05.08.2026" -> banka adı
-function bankaAnahtar(s){
-  const fa=String(s.fis_aciklama||'').replace(/^\s*KONTROL\s*-\s*/i,'')
-    .replace(/[\s\-–]*(?<![\d.])\d{1,2}[./-]\d{1,2}[./-](?:\d{4}|\d{2})(?![\d.]).*$/,'').trim();
-  return fa || s.hesap || '?';
-}
 const KONTROL_AD={belirsiz:'geçmişte aynı açıklama birden çok hesaba yazılmış', zayif:'açıklamanın yalnız bir kelimesi tuttu',
   eslesmedi:'karşı hesap bulunamadı (198)', benzer:'hesap adı bir harf farklı', vergi:'vergi/SGK hesabı kesin değil',
   gider:'gider hesabı yapay zekâ/varsayılan', cari:'cari bulunamadı (198)', kdv:'KDV hesabı yok',
@@ -1084,25 +1078,25 @@ function render(r){
     ${kontrolSayi?`<button class="btn ${suzgec==='kontrol'?'btn-ana':''}" onclick="suzgecDegistir('kontrol')" style="padding:3px 10px;font-size:12px;background:#ffd84d;color:#5a4500">KONTROL (${kontrolSayi} fiş)</button>`:''}
   </div>`;
 
-  // Süzgeç butonları — Banka bazlı
-  // Fiş açıklamasındaki banka adı (tarih ve KONTROL öneki atılmış): her gün ayrı düğme çıkmasın
+  // Süzgeç butonları — banka HESABI bazlı (102 alt hesabı). Bir fiş, içinde o hesabın satırı
+  // varsa o bankada görünür: TL fişine yazılan döviz satışı GBP hesabında da listelenir.
   const bankaFisleri = new Map();
   satirlar.forEach(s=>{
-    // banka satırlarını bul (kaynak=banka olan veya 102 ile başlayan hesaplar)
-    if(s.kaynak==='banka' || (s.hesap && s.hesap.startsWith('102'))){
-      const ad = bankaAnahtar(s);
-      if(!bankaFisleri.has(ad)) bankaFisleri.set(ad, new Set());
-      bankaFisleri.get(ad).add(s.fisno);
+    if(s.hesap && s.hesap.startsWith('102')){
+      if(!bankaFisleri.has(s.hesap)) bankaFisleri.set(s.hesap, new Set());
+      bankaFisleri.get(s.hesap).add(s.fisno);
     }
   });
-  const bankaSet = new Map([...bankaFisleri].map(([ad, fisler])=>[ad, fisler.size]));
+  const hesapAdi = k => ((hesaplar||[]).find(x=>x.kod===k)||{}).ad || '';
+  const bankaSet = new Map([...bankaFisleri].sort((a,b)=>a[0].localeCompare(b[0])).map(([k, fisler])=>[k, fisler.size]));
   if(bankaSet.size > 1){
     h+=`<div style="margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
       <span style="font-size:12px;color:#666">Banka:</span>
       <button class="btn ${bankaSuzgec==='hepsi'?'btn-ana':''}" onclick="bankaSuzgecDegistir('hepsi')" style="padding:3px 10px;font-size:12px">Tümü</button>`;
     for(const [ad, sayi] of bankaSet){
-      const kisaAd = ad.length > 20 ? ad.slice(0,18)+'…' : ad;
-      h+=`<button class="btn ${bankaSuzgec===ad?'btn-ana':''}" onclick="bankaSuzgecDegistir('${ad.replace(/'/g,"\\'")}')" style="padding:3px 10px;font-size:12px" title="${esc(ad)}">${esc(kisaAd)} (${sayi} fiş)</button>`;
+      const tam = (ad+' '+hesapAdi(ad)).trim();
+      const kisaAd = tam.length > 34 ? tam.slice(0,32)+'…' : tam;
+      h+=`<button class="btn ${bankaSuzgec===ad?'btn-ana':''}" onclick="bankaSuzgecDegistir('${ad.replace(/'/g,"\\'")}')" style="padding:3px 10px;font-size:12px" title="${esc(tam)}">${esc(kisaAd)} (${sayi} fiş)</button>`;
     }
     h+=`</div>`;
   }
@@ -1112,10 +1106,10 @@ function render(r){
   if(suzgec==='eslesmeyen') gosterilecek=gosterilecek.filter(s=>!s.hesap);
   else if(suzgec==='eslesen') gosterilecek=gosterilecek.filter(s=>!!s.hesap);
   else if(suzgec==='kontrol') gosterilecek=gosterilecek.filter(s=>kontrolFis.has(s.fisno));
-  // Banka filtresi: seçilen bankanın fis_aciklama'sına sahip fişleri göster
+  // Banka filtresi: seçilen 102 hesabının satırı olan fişleri göster
   if(bankaSuzgec!=='hepsi'){
     const fisNolar = new Set();
-    gosterilecek.forEach(s=>{ if(bankaAnahtar(s)===bankaSuzgec) fisNolar.add(s.fisno); });
+    satirlar.forEach(s=>{ if(s.hesap===bankaSuzgec) fisNolar.add(s.fisno); });
     gosterilecek = gosterilecek.filter(s=>fisNolar.has(s.fisno));
   }
 
