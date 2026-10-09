@@ -22,9 +22,9 @@ def _cache_yolu(tarih_str: str) -> Path:
 
 
 def _tcmb_url(tarih_str: str) -> str:
-    """TCMB XML URL: https://www.tcmb.gov.tr/kurlar/YYMM/DDMMYYYY.xml"""
+    """TCMB XML URL: https://www.tcmb.gov.tr/kurlar/YYYYMM/DDMMYYYY.xml (klasör adı 4 haneli yıl + ay)"""
     y, m, d = tarih_str.split("-")
-    return f"https://www.tcmb.gov.tr/kurlar/{y[2:]}{m}/{d}{m}{y}.xml"
+    return f"https://www.tcmb.gov.tr/kurlar/{y}{m}/{d}{m}{y}.xml"
 
 
 def _xml_parse(xml_text: str) -> dict:
