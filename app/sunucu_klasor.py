@@ -31,7 +31,7 @@ _EXCEL = (".xlsx", ".xls")
 # tür -> (beklenen alt klasör, kabul edilen uzantılar)
 _BEKLENEN = {
     "mizan": ("mizan", _EXCEL),
-    "fis-listesi": ("fislistesi", _EXCEL),
+    "fis-listesi": ("fislistesi", _EXCEL + (".csv",)),
 }
 
 
@@ -151,6 +151,44 @@ def guvenli_dosya(klasor_path: Path, rel: str) -> Path:
     return p
 
 
+_TR_SAYI = re.compile(r"^-?\d{1,3}(?:\.\d{3})*(?:,\d+)?$|^-?\d+(?:,\d+)?$")
+
+
+def _csv_xlsx_bytes(data: bytes):
+    """Ayraçlı metin (CSV) ise .xlsx'e çevirir; değilse None. Kodlama UTF-8 ya da Windows-1254,
+    ayraç ; , sekme |. Türkçe sayılar ("439.073,57") sayıya çevrilir; tarihler metin kalır."""
+    if b"\x00" in data[:4096]:
+        return None
+    metin = None
+    for kod in ("utf-8-sig", "cp1254"):
+        try:
+            metin = data.decode(kod); break
+        except UnicodeDecodeError:
+            continue
+    if metin is None:
+        return None
+    satirlar = metin.splitlines()
+    ornek = "\n".join(satirlar[:60])
+    ayrac = max((";", "\t", ",", "|"), key=lambda a: ornek.count(a))
+    if ornek.count(ayrac) < 5:
+        return None
+    import csv, openpyxl
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Sayfa1"
+    for r in csv.reader(satirlar, delimiter=ayrac):
+        out = []
+        for h in r:
+            h2 = h.strip()
+            if h2 and _TR_SAYI.match(h2) and not re.match(r"^0\d", h2.split(",")[0].lstrip("-")):
+                try:
+                    out.append(float(h2.replace(".", "").replace(",", "."))); continue
+                except ValueError:
+                    pass
+            out.append(h2 if h2 else None)
+        ws.append(out)
+    buf = io.BytesIO(); wb.save(buf)
+    return buf.getvalue()
+
+
 def excel_xlsx_bytes(data: bytes) -> bytes:
     """Excel içeriğini openpyxl'in okuyabileceği .xlsx'e çevirir.
     Mizan ve fiş listesi okuyucuları openpyxl kullanıyor; eski .xls (BIFF)
@@ -158,7 +196,8 @@ def excel_xlsx_bytes(data: bytes) -> bytes:
     if data[:2] == b"PK":
         return data
     if data[:8] != b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1":
-        return data             # tanınmayan içerik — okuyucu ne yapacağına karar versin
+        csv_x = _csv_xlsx_bytes(data)       # Logo'nun CSV fiş listesi / mizan dökümü
+        return csv_x if csv_x is not None else data   # tanınmayan içerik — okuyucu karar versin
     import xlrd, openpyxl
     kaynak = xlrd.open_workbook(file_contents=data)
     wb = openpyxl.Workbook()

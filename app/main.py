@@ -866,7 +866,8 @@ def isle(kod: str, tip: str, body: IsleBody):
     if tip == "banka":
         # kendi hesapları arası virmanı tanımak için firma unvanı (mizan başlığı, yoksa firma adı)
         from app.banka import mizan_unvani
-        km.firma_unvan = mizan_unvani(d / "mizan.xlsx") or _read_json(d / "meta.json", {}).get("ad", "")
+        km.firma_unvan = mizan_unvani(d / "mizan.xlsx")
+        km.firma_adi = _read_json(d / "meta.json", {}).get("ad", "")
 
     dosyalar = body.dosyalar if body.dosyalar is not None else \
         [f.name for f in (d / tip).iterdir() if f.is_file() and not f.name.startswith("_")]

@@ -603,7 +603,12 @@ def gecmis_fisler_oku(kaynak_path: Path):
     try:
         # NOT: read_only bazı Logo/Luca çıktılarında iter_rows'un erken durmasına
         # neden oluyor; normal modda okunur ama iter_rows ile hızlı geçilir.
-        wb = openpyxl.load_workbook(kaynak_path, data_only=True)
+        if kaynak_path.suffix.lower() in (".csv", ".txt"):
+            import io as _io
+            from app.sunucu_klasor import excel_xlsx_bytes
+            wb = openpyxl.load_workbook(_io.BytesIO(excel_xlsx_bytes(kaynak_path.read_bytes())), data_only=True)
+        else:
+            wb = openpyxl.load_workbook(kaynak_path, data_only=True)
     except Exception:
         return sonuc
 
@@ -680,9 +685,17 @@ def gecmis_fisler_oku(kaynak_path: Path):
         if not fstr or not hstr: continue
         detay = str(gc(row, "detay") or gc(row, "fis_aciklama") or "").strip()
         borc = gc(row, "borc") or 0; alacak = gc(row, "alacak") or 0
+        ft = gc(row, "tarih")
+        if hasattr(ft, "year"):
+            ft = f"{ft.year:04d}-{ft.month:02d}-{ft.day:02d}"
+        else:
+            m_t = re.match(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})", str(ft or "").strip())
+            ft = f"{m_t.group(3)}-{int(m_t.group(2)):02d}-{int(m_t.group(1)):02d}" if m_t else \
+                (str(ft)[:10] if re.match(r"\d{4}-\d{2}-\d{2}", str(ft or "")) else "")
         sonuc["satirlar"].append({"fisno": fstr, "hesap": hstr, "detay": detay,
                                   "fis_aciklama": str(gc(row, "fis_aciklama") or ""),
-                                  "borc": float(borc or 0), "alacak": float(alacak or 0)})
+                                  "borc": float(borc or 0), "alacak": float(alacak or 0),
+                                  "fis_tarih": ft})
         m = re.match(r"0*(\d+)", fstr)
         if m: max_fis = max(max_fis, int(m.group(1)))
         if detay and not hstr.startswith(("102", "100")):
