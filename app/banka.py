@@ -342,7 +342,10 @@ def ekstre_kayitlari(hamlar):
         if not k:
             tum_metin = norm((h.get("ham_metin") or "") + " " + " ".join(
                 str(c) for t in (h.get("tablolar") or []) for row in t for c in row if c))
-            if re.search(r"KAYIT BULUNMU|HAREKET\w* BULUNMA|ISLEM BULUNMA|KAYIT YOK|HAREKET YOK", tum_metin):
+            if "HESAP HAREKETLERINDE ARA" in tum_metin or ("TUTAR ARALIGI" in tum_metin and "GORUNTULE" in tum_metin):
+                uyarilar.append(f"{dosya}: bu PDF ekstre değil, internet şubesindeki arama ekranının çıktısı — hareket listesi yok. "
+                                f"Bankadan 'Hesap Hareketleri'ni Excel ya da ekstre PDF'i olarak indirin")
+            elif re.search(r"KAYIT BULUNMU|HAREKET\w* BULUNMA|ISLEM BULUNMA|KAYIT YOK|HAREKET YOK", tum_metin):
                 uyarilar.append(f"{dosya}: bu dönemde hareket yok (ekstre boş)")
             elif h.get("ham_metin") or h.get("tablolar"):
                 uyarilar.append(f"{dosya}: hareket satırı bulunamadı — başlık (Tarih / Tutar / Açıklama) tanınmadı")
@@ -667,9 +670,10 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
     cok_hesapli = {kk_: v for kk_, v in ad_hesaplari.items() if len(v) >= 2}
 
     def cok_hesapli_ad(r, hesap):
+        # seçilen hesap o adı taşımasa da ("ORTAK HAREKETLERİ") açıklamadaki kişinin birden çok hesabı varsa
         for kk_, v in cok_hesapli.items():
-            if hesap in v and _hepsi_var(list(kk_), set(r["kel"]), r["kel"]):
-                return sorted(v)
+            if _hepsi_var(list(kk_), set(r["kel"]), r["kel"]):
+                return sorted(v | {hesap})
         return None
 
     def vergi_hesabi(r):
@@ -702,7 +706,7 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
 
     def kredi_karti_hesabi(r):
         n = norm(r["aciklama"])
-        if not ("KREDI KART" in n and ("BORC" in n or "ODEME" in n)):
+        if not (re.search(r"\b(KREDI|K) KART", n) and ("BORC" in n or "ODEME" in n)):
             return None
         ebeveyn_kart = {k for k, a in hesaplar if "KREDI KART" in norm(a) and k not in alt}
         adaylar = [k for k, a in hesaplar if k in alt and k.startswith(("309", "300", "329", "336")) and
@@ -749,7 +753,11 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         # 3) geçmiş ve mizan cari adı — güçlüyse (2+ kelime, tek aday) genel kurallardan önce gelir:
         #    firma vergi ödemesini hep 770'e yazıyorsa öyle kalır
         aday = gecmis_mizan(r, masraf_mi)
-        if aday and aday[2] is None:
+        kk = kredi_karti_hesabi(r) if r["yon"] == "cikis" else None
+        if kk is not None and not kk[0] and aday:
+            # kart hesabı mizanda yok: geçmişteki hesap, ama kontrol edilsin (ortağın kartı olabilir)
+            return aday[0], aday[1], "belirsiz", "Kredi kartı ödemesi — mizanda kredi kartı hesabı yok, geçmişteki hesap önerildi"
+        if aday and aday[2] is None and not (kk is not None and kk[0] and kk[0] != aday[0]):
             return aday[:4]
         # 4) banka masraf / ücret satırı (bir kişiye/cariye giden ödeme değilse: "PERSONEL MASRAF ÖDEMESİ")
         if wset & _MASRAF_KELIME and r["yon"] == "cikis" and abs(r["tutar"]) < 5000 and not kendisi_mi(r) and masraf_hesap \
