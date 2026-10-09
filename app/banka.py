@@ -391,6 +391,8 @@ class GecmisBanka:
                 b0 = bankalar[0]
                 yon = "giris" if float(b0.get("borc") or 0) > 0 else "cikis"
                 karsilar = [g for g in gs if g is not b0 and g.get("hesap") != b0.get("hesap")]
+                if len(karsilar) > 4 or re.search(r"ACILIS|KAPANIS|DEVIR", norm(detay)):
+                    continue        # açılış/kapanış fişi: banka hareketi değil
                 for kr in karsilar:
                     self.ornekler.append({"kel": kel, "yon": yon, "banka": b0["hesap"], "hesap": kr["hesap"],
                                           "tutar": round(float(kr.get("borc") or 0) + float(kr.get("alacak") or 0), 2)})
@@ -437,10 +439,11 @@ def _vergi_bilgisi(aciklama):
     n = norm(aciklama)
     if not ("VERGI" in n and ("TAHSIL" in n or "ODEME" in n or "THK" in n)) and "GIB" not in n.split():
         return None
-    m = re.search(r"(?<!\d)(\d{4})\s*-\s*([A-ZÇĞİÖŞÜa-zçğıöşü.]+)", aciklama)
+    m = re.search(r"(?<![\d/])(\d{4})\s*[-/]\s*([A-ZÇĞİÖŞÜa-zçğıöşü][A-ZÇĞİÖŞÜa-zçğıöşü. ]+)", aciklama)
     if not m:
         return ("", "", 0)
-    donem = re.search(r"D[ÖO]NEM\s*:\s*(\d{2})(\d{2})(\d{2})(\d{2})", aciklama, re.I)
+    # "DÖNEM:04260626" (ayyy ayyy) ya da "Dönem :04/2026/06/2026"
+    donem = re.search(r"D[ÖO]NEM\s*:\s*(\d{2})(?:\d{2}|/\d{4})", aciklama, re.I)
     return (m.group(1), norm(m.group(2)), int(donem.group(1)) if donem else 0)
 
 
@@ -556,6 +559,7 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
     # ---------- karşı hesap
     cari_onek = ("120", "121", "126", "131", "136", "159", "195", "196", "300", "303", "320", "321",
                  "329", "331", "335", "336", "340", "400")
+    kullanilan = {str(x.get("hesap", "")) for x in km.gecmis.get("satirlar", [])}
     mizan_adaylari = []
     for k, a in hesaplar:
         if k in alt and k.startswith(cari_onek):
@@ -570,7 +574,7 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         kod, vad, donem = vb
         if not kod:
             return ("", "vergi kodu okunamadı")
-        if "GECICI" in vad or kod in ("0032", "0033"):
+        if "GECICI" in vad or "GEC" in vad.split() or kod in ("0032", "0033"):
             ceyrek = (donem - 1) // 3 + 1 if donem else 0
             gec = [(k, a) for k, a in hesaplar if k in alt and k.startswith(("193", "371"))
                    and "GECICI" in norm(a)]
@@ -590,6 +594,23 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                     bul.sort(key=lambda k: -say.get(k, 0))
                 return (bul[0], f"{kod} {ad_}" + (" — birden çok aday" if len(bul) > 1 else ""))
         return ("", f"{kod} {ad_} — mizanda hesap yok")
+
+    def kredi_karti_hesabi(r):
+        n = norm(r["aciklama"])
+        if not ("KREDI KART" in n and ("BORC" in n or "ODEME" in n)):
+            return None
+        ebeveyn_kart = {k for k, a in hesaplar if "KREDI KART" in norm(a) and k not in alt}
+        adaylar = [k for k, a in hesaplar if k in alt and k.startswith(("309", "300", "329", "336")) and
+                   ("KART" in norm(a) or "CARD" in norm(a) or any(k.startswith(e + ".") for e in ebeveyn_kart))]
+        if not adaylar:
+            return ("", "kredi_karti", "eslesmedi", "Kredi kartı ödemesi — mizanda kredi kartı hesabı yok")
+        son4 = re.findall(r"\*+\s*(\d{4})", r["aciklama"])
+        tutan = [k for k in adaylar if son4 and son4[-1] in (hesap_ad(k) or "")]
+        if tutan:
+            return (tutan[0], "kredi_karti", None, "")
+        if len(adaylar) == 1:
+            return (adaylar[0], "kredi_karti", None, "Kredi kartı ödemesi")
+        return (adaylar[0], "kredi_karti", "belirsiz", "Birden çok kredi kartı hesabı var: " + ", ".join(adaylar[:4]))
 
     def sgk_hesabi(r):
         n = " " + norm(r["aciklama"]) + " "
@@ -617,21 +638,39 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                     en_iyi = (len(ak), kod)
         if en_iyi:
             return en_iyi[1], "ogrenme", None, ""
-        # 3) masraf / BSMV / komisyon
-        if r.get("masraf") or (set(kel) & _MASRAF_KELIME and r["yon"] == "cikis" and abs(r["tutar"]) < 5000
-                               and not kendisi_mi(r)):
-            if masraf_hesap:
-                return masraf_hesap, "masraf", None, ""
-        # 4) vergi / SGK
+        # 2) aynı anda yapılan transferin komisyon / BSMV satırı
+        if r.get("masraf") and masraf_hesap:
+            return masraf_hesap, "masraf", None, ""
+        # 3) geçmiş ve mizan cari adı — güçlüyse (2+ kelime, tek aday) genel kurallardan önce gelir:
+        #    firma vergi ödemesini hep 770'e yazıyorsa öyle kalır
+        aday = gecmis_mizan(r, masraf_mi)
+        if aday and aday[2] is None:
+            return aday[:4]
+        # 4) banka masraf / ücret satırı (bir kişiye/cariye giden ödeme değilse: "PERSONEL MASRAF ÖDEMESİ")
+        if wset & _MASRAF_KELIME and r["yon"] == "cikis" and abs(r["tutar"]) < 5000 and not kendisi_mi(r) and masraf_hesap \
+                and not (aday and aday[4] >= 2):
+            return masraf_hesap, "masraf", None, ""
+        # 5) kredi kartı borç ödemesi
+        kk = kredi_karti_hesabi(r) if r["yon"] == "cikis" else None
+        if kk is not None:
+            return kk
+        # 6) vergi / SGK
         v = vergi_hesabi(r) if r["yon"] == "cikis" else None
         if v is not None:
             kod, aciklama_ = v
             return (kod or ""), "vergi", (None if kod and "aday" not in aciklama_ else "vergi"), \
                 f"Vergi ödemesi ({aciklama_}); gecikme zammı varsa ayrı satıra ayırın"
-        s = sgk_hesabi(r) if r["yon"] == "cikis" else None
-        if s is not None:
-            return s, "sgk", (None if s else "vergi"), "SGK ödemesi"
-        # 5) geçmiş + mizan adı
+        s_ = sgk_hesabi(r) if r["yon"] == "cikis" else None
+        if s_ is not None:
+            return s_, "sgk", (None if s_ else "vergi"), "SGK ödemesi"
+        # 7) zayıf / belirsiz geçmiş eşleşmesi (KONTROL'lü)
+        if aday:
+            return aday[:4]
+        return "", "", "eslesmedi", ""
+
+    def gecmis_mizan(r, masraf_mi):
+        """Geçmiş fiş + mizan cari adı. -> (hesap, kaynak, kontrol|None, not) ya da None"""
+        kel, wset = r["kel"], set(r["kel"])
         tutar = r["tutar"]
         gec = gecmis.adaylar(kel, r["yon"], r["banka"], tutar)
         skor = {}
@@ -650,6 +689,10 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                 if k in skor:
                     skor[k][0] = max(skor[k][0], ms) + 0.5; skor[k][2] = "gecmis"
                 else:
+                    # aynı ad hem 131 hem 331'de olabilir: giden ödeme borcu (3xx), gelen tahsilat
+                    # alacağı (1xx) kapatır; geçmişte kullanılmış hesap öne geçer
+                    ms += 0.3 if (r["yon"] == "cikis") == k.startswith(("3", "4")) else 0
+                    ms += 0.3 if k in kullanilan else 0
                     skor[k] = [ms, 0, "mizan"]
         # mizanda tek kelimesi tutan (TURKCELL İLETİŞİM ...): ilk ayırt edici kelime yalnız o hesapta
         if not skor:
@@ -661,8 +704,9 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                 if len(set(ks)) == 1 and _w_esler(w_, wset, kel):
                     skor[ks[0]] = [1.5, 0, "mizan"]
         if not skor:
-            return "", "", "eslesmedi", ""
+            return None
         sirali = sorted(skor.items(), key=lambda x: (-x[1][0], -x[1][1]))
+        en_skor = sirali[0][1][0]
         en, (sk, adet, kaynak) = sirali[0]
         kontrol = None
         not_ = ""
@@ -676,7 +720,7 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         elif en in bulanik_ and kaynak == "mizan":
             kontrol = "benzer"
             not_ = f"Hesap adı ({hesap_ad(en)}) açıklamayla bir harf farklı"
-        return en, kaynak, kontrol, not_
+        return en, kaynak, kontrol, not_, en_skor
 
     # masraf satırları: aynı anda yapılan transferin "- Komisyon" / "- Vergi (BSMV)" satırları
     for b, rs in bankalar.items():
