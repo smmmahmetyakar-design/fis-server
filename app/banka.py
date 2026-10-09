@@ -748,7 +748,9 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
             m = re.search(r"(\d{2})([./-])(\d{2})\2(\d{4})", fa)
             if m:
                 ay = m.group(2)
-                return fa[:m.start()] + f"{tarih[8:10]}{ay}{tarih[5:7]}{ay}{tarih[:4]}" + fa[m.end():]
+                yeni = fa[:m.start()] + f"{tarih[8:10]}{ay}{tarih[5:7]}{ay}{tarih[:4]}" + fa[m.end():]
+                # geçmişteki açıklamada kalmış "KONTROL -" öneki / baştaki boşluk yeni fişe taşınmasın
+                return re.sub(r"^\s*KONTROL\s*-\s*", "", yeni).strip()
         return f"{hesap_ad(banka) or 'BANKA'} - {gun}"
 
     # ---------- kur
