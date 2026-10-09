@@ -289,6 +289,34 @@ def _kayitlar(hamlar):
 
 
 # ----------------------------------------------------------------- BANKA
+_PB_KELIME = {"GBP": ("GBP", "STERLIN"), "USD": ("USD", "DOLAR"), "EUR": ("EUR", "EURO", "AVRO"),
+              "CHF": ("CHF", "FRANK")}
+
+
+def _hesap_para_birimi(ad_norm: str) -> str:
+    """Hesap adındaki para birimi; döviz kelimesi yoksa TL."""
+    kel = set(ad_norm.split())
+    for pb, kelimeler in _PB_KELIME.items():
+        if kel & set(kelimeler):
+            return pb
+    return "TL"
+
+
+def _ekstre_para_birimi(hamlar) -> str:
+    """Ekstrenin para birimi: dosya adı, 'VADESİZ GBP' hesap türü ya da 'Bakiye : 1.234,56 GBP'.
+    Bulunamazsa ''."""
+    for h in hamlar:
+        ad = norm(h.get("dosya", ""))
+        bas = norm((h.get("ham_metin") or "")[:1200])
+        for kaynak, desen in ((ad, r"\b(GBP|USD|EUR|CHF|TL|TRY)\b"),
+                              (bas, r"\bVADESIZ (GBP|USD|EUR|CHF|TL|TRY)\b"),
+                              (bas, r"\b(?:BALANCE|BAKIYE)\s+[\d\s]+\s(GBP|USD|EUR|CHF|TL|TRY)\b")):
+            m = re.search(desen, kaynak)
+            if m:
+                return "TL" if m.group(1) == "TRY" else m.group(1)
+    return ""
+
+
 def _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar):
     """Belge içeriğinden ve dosya adından banka+hesap numarası ipuçları çıkarır,
     mizandaki en uygun 102 alt hesabını seçer.
@@ -339,6 +367,9 @@ def _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar):
 
     # 2. Mizanda 102 ile başlayan tüm hesaplar
     banka_hesaplari = [(h["kod"], norm(h["ad"])) for h in hesaplar_list if h["kod"].startswith("102")]
+    # Kayıt atılabilir (en alt) hesaplar: "102.01 VAKIFBANK" üst hesabı fişe yazılmasın
+    _ust = {".".join(k.split(".")[:i]) for k, _ in banka_hesaplari for i in range(1, len(k.split(".")))}
+    banka_hesaplari = [x for x in banka_hesaplari if x[0] not in _ust] or banka_hesaplari
     if not banka_hesaplari:
         uyarilar.append("Mizanda 102 hesabı yok, 102.01.001 varsayıldı")
         return "102.01.001"
@@ -411,6 +442,13 @@ def _banka_hesabi_bul(hamlar, hesaplar_list, uyarilar):
                     hesap_rakamlari = set(_re.findall(r'\d{3,}', ad))
                     if hesap_rakamlari & hesap_no_ipuclari:
                         return k
+            # Aynı bankada TL ve döviz hesabı: ekstrenin para birimine göre seç
+            if len(eslesenler) > 1:
+                pb = _ekstre_para_birimi(hamlar)
+                if pb:
+                    uyan = [(k, ad) for k, ad in eslesenler if _hesap_para_birimi(ad) == pb]
+                    if uyan:
+                        return uyan[0][0]
             return eslesenler[0][0]
 
         # Banka tespit edildi ama mizanda bu bankaya ait 102 alt hesap yok
