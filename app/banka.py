@@ -43,7 +43,8 @@ _GENEL = STOP | {"LIMITED", "SIRKETI", "SIRKET", "TICARET", "SANAYI", "ANONIM", 
 
 # mizan adlarında cari olmayan, açıklamada sık geçen kelimeler (hesap adı eşleşmesinde sayılmaz)
 _HESAP_GENEL = {"MASRAFLAR", "MASRAF", "KIRALAMA", "ARAC", "OFIS", "EUR", "USD", "GBP", "TL", "TRY",
-                "AVANSI", "IS", "HUZUR", "HAKKI", "ORTAK", "ORTAKLAR", "PERSONEL", "BORC", "ALACAK"}
+                "AVANSI", "IS", "HUZUR", "HAKKI", "ORTAK", "ORTAKLAR", "PERSONEL", "BORC", "ALACAK",
+                "DIGER", "CESITLI"}
 
 _MASRAF_KELIME = {"KOMISYON", "KOMISYONU", "BSMV", "MASRAF", "MASRAFI", "MASRAFLARI", "UCRET", "UCRETI",
                   "UCRETLERI", "ISLETIM", "AIDAT", "AIDATI", "KESINTI"}
@@ -195,13 +196,20 @@ def _baslik_bul(tablo):
 
 def _tablo_kayitlari(h):
     """Bir belgenin tablolarından hareketler."""
-    out = []
+    out, ilk_hh = [], None
     for tablo in h.get("tablolar", []) or []:
         if not tablo:
             continue
         bas, hh = _baslik_bul(tablo)
         if bas is None:
             continue
+        if out:
+            # PDF'de her sayfanın tablosu ayrı gelir (Enpara): aynı başlıklı devam tablosu okunur,
+            # başka başlıklı tablo (özet vb.) değil
+            if hh != ilk_hh:
+                continue
+        else:
+            ilk_hh = hh
         tj = hh.get("tarih", hh.get("tarih_valor"))
         for row in tablo[bas + 1:]:
             def g(k):
@@ -227,9 +235,16 @@ def _tablo_kayitlari(h):
                         "tutar": round(tutar, 2), "bakiye": _sayi(g("bakiye")),
                         "referans": str(g("referans") or "").strip(),
                         "islem_tipi": str(g("islem_tipi") or "").strip()})
-        if out:
-            break
-    return out
+        if out and h.get("tur") not in ("pdf", "pdf_ocr"):
+            break           # Excel: ilk hareket sayfası yeter
+    # aynı satır iki tabloda (sayfa sonu tekrarı) bir kez sayılsın
+    tekil, gor = [], set()
+    for r in out:
+        im = (r["tarih"], r["saat"], r["tutar"], r["bakiye"], r["aciklama"])
+        if r["bakiye"] is not None and im in gor:
+            continue
+        gor.add(im); tekil.append(r)
+    return tekil
 
 
 _TUTAR_RE = re.compile(r"(?<![\d.,])-?\d{1,3}(?:[.\s]\d{3})*[.,]\d{2}(?![\d])")
@@ -388,6 +403,15 @@ def _isaret_dogrula(kayitlar):
     if isaret == -1:
         for r in kayitlar:
             r["tutar"] = -r["tutar"]
+    # tek tek işareti ters okunmuş satır ("- 147,00 TL": eksi ile sayı arasında boşluk) zincirle düzelir
+    for i in range(1, len(kayitlar)):
+        b0, b1 = kayitlar[i - 1]["bakiye"], kayitlar[i]["bakiye"]
+        if b0 is None or b1 is None:
+            continue
+        r = kayitlar[i] if sira == "artan" else kayitlar[i - 1]
+        fark = (b1 - b0) if sira == "artan" else (b0 - b1)
+        if abs(fark - r["tutar"]) >= 0.011 and abs(fark + r["tutar"]) < 0.011:
+            r["tutar"] = -r["tutar"]; n += 1
     kirik = (len(b) - 1) - n
     return kayitlar, max(kirik, 0)
 
@@ -451,7 +475,9 @@ class GecmisBanka:
             if say:
                 ana_b = say.most_common(1)[0][0]
                 fa, ft = rs[0].get("fis_aciklama") or "", rs[0].get("fis_tarih") or ""
-                if fa and ft >= self.fis_aciklama.get(ana_b, ("",))[0]:
+                # yalnız tarihli açıklama örnek olur ("ENPARA 21.09.2026"); aynı bankaya işlenmiş
+                # fatura fişinin açıklaması ("BİM Birleşik Mağazalar") banka fişi biçimi değil
+                if fa and re.search(r"\d{2}([./-])\d{2}\1\d{4}", fa) and ft >= self.fis_aciklama.get(ana_b, ("",))[0]:
                     self.fis_aciklama[ana_b] = (ft, fa)
             gruplar = defaultdict(list)
             for r in rs:
@@ -760,7 +786,7 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
     kullanilan = {str(x.get("hesap", "")) for x in km.gecmis.get("satirlar", [])}
     mizan_adaylari = []
     for k, a in hesaplar:
-        if k in alt and k.startswith(cari_onek):
+        if k in alt and k.startswith(cari_onek) and "." in k:     # "136 DİĞER ÇEŞİTLİ ALACAKLAR" grup başlığı cari değil
             kel = [w for w in _kelimeler(a) if w not in _GENEL and w not in _HESAP_GENEL]
             if kel and (len(kel) >= 2 or len(kel[0]) >= 5):
                 mizan_adaylari.append((k, kel))
@@ -777,7 +803,8 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
     def cok_hesapli_ad(r, hesap):
         # seçilen hesap o adı taşımasa da ("ORTAK HAREKETLERİ") açıklamadaki kişinin birden çok hesabı varsa
         for kk_, v in cok_hesapli.items():
-            if _hepsi_var(list(kk_), set(r["kel"]), r["kel"]):
+            kt = r.get("kel_tam", r["kel"])      # firma adıyla ortak soyad (MOR reklam / Sezin MOR) atılmadan
+            if _hepsi_var(list(kk_), set(kt), kt):
                 return sorted(v | {hesap})
         return None
 
@@ -989,6 +1016,76 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                     if sr is None or ss is None or abs(sr - ss) <= 5:
                         r["masraf"] = True
                         break
+
+    # ---------- fiş listesinde ZATEN kayıtlı hareketler
+    # Kart/POS harcaması faturayla doğrudan 102'ye işlenmiş olabilir (Mor: BİM, Amazon faturaları
+    # 770+191 / 102) ya da banka fişi daha önce aktarılmış olabilir: aynı banka hesabında, ekstre
+    # döneminde, ±3 gün içinde aynı tutarlı 102 satırı (ya da aynı güne ait birkaç faturanın toplamı:
+    # tek Amazon kart harcaması = 4 fatura) varsa hareket fişe alınmaz — iki kez kaydolmasın.
+    from datetime import date as _date
+    from itertools import combinations
+
+    def _gun(t):
+        try:
+            return _date(int(t[:4]), int(t[5:7]), int(t[8:10])).toordinal()
+        except (ValueError, TypeError):
+            return None
+    kapsam = {}
+    for r in kayitlar:
+        a_, b_ = kapsam.get(r["banka"], (r["tarih"], r["tarih"]))
+        kapsam[r["banka"]] = (min(a_, r["tarih"]), max(b_, r["tarih"]))
+    defter = defaultdict(list)
+    for x in km.gecmis.get("satirlar", []):
+        h_, t_ = str(x.get("hesap", "")), str(x.get("fis_tarih") or "")
+        g_ = _gun(t_) if h_ in kapsam else None
+        if g_ is None or not (_gun(kapsam[h_][0]) <= g_ <= _gun(kapsam[h_][1]) + 2):
+            continue
+        tut = round(float(x.get("borc") or 0) - float(x.get("alacak") or 0), 2)
+        if tut and not re.search(r"ACILIS|KAPANIS|DEVIR", norm(x.get("detay") or "")):
+            defter[h_].append({"gun": g_, "tutar": tut, "x": x, "kel": set(_kelimeler(
+                _tarih_onekini_at(str(x.get("detay") or "")) + " " + str(x.get("fis_aciklama") or "")))})
+
+    def _ortak(r, ds):
+        kt = r.get("kel_tam", r["kel"])
+        return any(_w_esler(w, set(kt), kt) for d in ds for w in d["kel"] if len(w) >= 3 and w not in _GENEL)
+
+    kayitli = []
+    adaylar_k = []
+    for r in kayitlar:
+        if r["es"] is not None:
+            continue
+        gr = _gun(r["tarih"])
+        for d in defter.get(r["banka"], []):
+            if abs(d["tutar"] - r["tutar"]) < 0.005 and abs(d["gun"] - gr) <= 3:
+                adaylar_k.append((abs(d["gun"] - gr), 0 if _ortak(r, [d]) else 1, id(r), r, d))
+    kullanildi = set()
+    for _, _, _, r, d in sorted(adaylar_k, key=lambda z: z[:3]):
+        if r.get("_atla") or id(d) in kullanildi:
+            continue
+        r["_atla"] = True; kullanildi.add(id(d)); kayitli.append((r, [d]))
+    for r in kayitlar:
+        if r.get("_atla") or r["es"] is not None:
+            continue
+        gr = _gun(r["tarih"])
+        havuz = sorted([d for d in defter.get(r["banka"], []) if id(d) not in kullanildi
+                        and (d["tutar"] > 0) == (r["tutar"] > 0) and abs(d["tutar"]) < abs(r["tutar"])
+                        and abs(d["gun"] - gr) <= 3], key=lambda d: abs(d["gun"] - gr))[:12]
+        bulundu = None
+        for n_ in range(2, min(5, len(havuz)) + 1):
+            for c_ in combinations(havuz, n_):
+                if abs(sum(d["tutar"] for d in c_) - r["tutar"]) < 0.005 and _ortak(r, c_):
+                    bulundu = c_; break
+            if bulundu:
+                break
+        if bulundu:
+            r["_atla"] = True; kullanildi.update(id(d) for d in bulundu); kayitli.append((r, list(bulundu)))
+    if kayitli:
+        def _tl(v):
+            return f"{abs(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        ayr = "; ".join(f"{r['tarih'][8:10]}.{r['tarih'][5:7]} {_tl(r['tutar'])} {r['aciklama'][:30]} → fiş "
+                        + "+".join(str(d["x"].get("fisno", "")) for d in ds) for r, ds in sorted(kayitli, key=lambda z: (z[0]["tarih"], z[0].get("saat") or ""))[:12])
+        uyarilar.append(f"{len(kayitli)} hareket fiş listesinde zaten kayıtlı (fatura/fiş ile bankaya işlenmiş) — "
+                        f"iki kez kaydolmasın diye fişe alınmadı: {ayr}" + (" …" if len(kayitli) > 12 else ""))
 
     # ---------- fiş açıklaması (geçmişteki biçimle)
     def fis_aciklamasi(banka, tarih):
