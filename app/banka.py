@@ -411,7 +411,9 @@ def ekstre_kayitlari(hamlar):
             if "HESAP HAREKETLERINDE ARA" in tum_metin or ("TUTAR ARALIGI" in tum_metin and "GORUNTULE" in tum_metin):
                 uyarilar.append(f"{dosya}: bu PDF ekstre değil, internet şubesindeki arama ekranının çıktısı — hareket listesi yok. "
                                 f"Bankadan 'Hesap Hareketleri'ni Excel ya da ekstre PDF'i olarak indirin")
-            elif re.search(r"KAYIT BULUNMU|HAREKET\w* BULUNMA|ISLEM BULUNMA|KAYIT YOK|HAREKET YOK", tum_metin):
+            elif re.search(r"KAYIT BULUNMU|HAREKET\w* BULUNMA|ISLEM BULUNMA|KAYIT YOK|HAREKET YOK", tum_metin) \
+                    or any(_baslik_bul(t)[0] is not None for t in (h.get("tablolar") or [])):
+                # başlık satırı var ama altında hareket yok (İş Bankası boş dönem)
                 uyarilar.append(f"{dosya}: bu dönemde hareket yok (ekstre boş)")
             elif h.get("ham_metin") or h.get("tablolar"):
                 uyarilar.append(f"{dosya}: hareket satırı bulunamadı — başlık (Tarih / Tutar / Açıklama) tanınmadı")
@@ -949,7 +951,8 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         dagink = len(sirali) > 1 and en in gec and pay < 0.6 and not ayni_tutar
         if (len(sirali) > 1 and puan[sirali[1]] >= puan[en] - 0.3) or dagink or varlik_catisma:
             kontrol = "belirsiz"
-            not_ = "Bu açıklama geçmişte başka hesaplara da yazılmış: " + ", ".join(sirali[1:4])
+            not_ = ("Bu açıklama geçmişte başka hesaplara da yazılmış: " if any(k in gec for k in sirali[1:4])
+                    else "Bu ad mizanda başka hesapta da var: ") + ", ".join(sirali[1:4])
         elif sk < 2:
             kontrol = "zayif"
             not_ = "Açıklamanın yalnız bir kelimesi geçmişle / hesap adıyla tuttu"
