@@ -74,7 +74,7 @@ def pdf_oku(path: Path):
                 if temiz:
                     tablolar.append(temiz)
     if metin_var or tablolar:
-        return {"tur": "pdf", "tablolar": tablolar, "ham_metin": "\n".join(ham), "uyari": ""}
+        return {"tur": "pdf", "tablolar": tablolar, "ham_metin": "\n".join(ham), "sayfalar": ham, "uyari": ""}
     # metin yok -> taranmış PDF, OCR gerek
     return pdf_ocr(path)
 
@@ -94,7 +94,7 @@ def pdf_ocr(path: Path):
             im = sayfa.to_image(resolution=300).original
             txt = pytesseract.image_to_string(im, lang=_ocr_lang())
             ham.append(txt)
-    return {"tur": "pdf_ocr", "tablolar": [], "ham_metin": "\n".join(ham),
+    return {"tur": "pdf_ocr", "tablolar": [], "ham_metin": "\n".join(ham), "sayfalar": ham,
             "uyari": "Taranmış PDF OCR ile okundu; verileri kontrol edin."}
 
 
