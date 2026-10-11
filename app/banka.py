@@ -57,11 +57,16 @@ _DOVIZ_KELIME = {"DOVIZ", "KAMBIYO", "ARBITRAJ", "FX"}
 _VIRMAN_KELIME = {"VIRMAN", "HESAPLARARASI", "HESAPLAR"}
 
 
+# kanal / kimlik etiketleri: her açıklamada geçer, kimin/neyin ödemesi olduğunu söylemez
+# ("MOBIL-FAST-5427000212" kart ödemesiyle "MOBIL-FAST-339000190 EKİM KİRA" aynı sayılmasın)
+_KANAL = {"FAST", "MOBIL", "INT", "EFT", "TCKN", "VKN", "ISCEP", "SWIFT"}
+
+
 def _kelimeler(metin: str) -> list:
     """Açıklamanın eşleştirmeye yarayan kelimeleri: rakam içermeyen, 2+ harfli, sırayı koruyarak."""
     out = []
     for w in norm(metin).split():
-        if len(w) < 2 or any(ch.isdigit() for ch in w):
+        if len(w) < 2 or any(ch.isdigit() for ch in w) or w in _KANAL:
             continue
         out.append(w)
     return out
@@ -491,6 +496,11 @@ def ekstre_kayitlari(hamlar):
     return tum, uyarilar
 
 
+def _numaralar(metin):
+    """Açıklamadaki hesap/kart/abone numaraları (6+ hane, baştaki sıfırsız)."""
+    return {n.lstrip("0") for n in re.findall(r"\d{6,}", str(metin or "")) if n.lstrip("0")}
+
+
 def _gun(t):
     """'2026-07-15' -> gün sırası (tarih farkı için)"""
     try:
@@ -529,17 +539,24 @@ class GecmisBanka:
                 if not bankalar:
                     continue
                 kel = _kelimeler(detay)
-                if not kel:
+                # hesap / kart numarası ("01047 6695554 MAAŞ", "01047 6298994 …VERGİ"): Logo açıklamayı
+                # kesince geriye çoğu zaman yalnız numara kalır — kişiyi/işlemi o ayırır
+                nos = _numaralar(detay)
+                if not kel and not nos:
                     continue
-                b0 = bankalar[0]
-                yon = "giris" if float(b0.get("borc") or 0) > 0 else "cikis"
-                karsilar = [g for g in gs if g is not b0 and g.get("hesap") != b0.get("hesap")]
-                if len(karsilar) > 4 or re.search(r"ACILIS|KAPANIS|DEVIR", norm(detay)):
+                if re.search(r"ACILIS|KAPANIS|DEVIR", norm(detay)):
                     continue        # açılış/kapanış fişi: banka hareketi değil
-                for kr in karsilar:
-                    self.ornekler.append({"kel": kel, "yon": yon, "banka": b0["hesap"], "hesap": kr["hesap"],
-                                          "tutar": round(float(kr.get("borc") or 0) + float(kr.get("alacak") or 0), 2),
-                                          "tarih": b0.get("fis_tarih") or ""})
+                # her banka hesabının gözünden (virmanda iki 102 var: her biri öbürünün karşısı)
+                for bh in dict.fromkeys(g["hesap"] for g in bankalar):
+                    b0 = next(g for g in bankalar if g["hesap"] == bh)
+                    yon = "giris" if float(b0.get("borc") or 0) > 0 else "cikis"
+                    karsilar = [g for g in gs if g is not b0 and g.get("hesap") != b0.get("hesap")]
+                    if len(karsilar) > 4:
+                        continue
+                    for kr in karsilar:
+                        self.ornekler.append({"kel": kel, "no": nos, "yon": yon, "banka": b0["hesap"], "hesap": kr["hesap"],
+                                              "tutar": round(float(kr.get("borc") or 0) + float(kr.get("alacak") or 0), 2),
+                                              "tarih": b0.get("fis_tarih") or ""})
 
     def ayikla(self, cikar):
         """Firmanın kendi unvan kelimelerini örneklerden çıkarır (müşteri açıklamalarına
@@ -548,7 +565,7 @@ class GecmisBanka:
             return
         for o in self.ornekler:
             k2 = [w for w in o["kel"] if w not in cikar]
-            o["kel"] = k2 if k2 else ["__KENDI__"]
+            o["kel"] = k2 if (k2 or not o["kel"]) else ["__KENDI__"]
 
     def nadir(self, w):
         """Kelime geçmiş banka açıklamalarının azında geçiyor (firma/kişi adı; 'CARI', 'HAVALE' değil)."""
@@ -569,7 +586,7 @@ class GecmisBanka:
         ad = hesap_adlari or {}
         return max(c, key=lambda h: (c[h] * (3 if re.search(r"BANKA|KOMISYON|MASRAF", norm(ad.get(h, ""))) else 1), c[h]))
 
-    def adaylar(self, kel, yon, banka, tutar, tarih=""):
+    def adaylar(self, kel, yon, banka, tutar, tarih="", nolar=()):
         """-> {hesap: {"taban", "tutar_b", "adet", "agirlik"}}
         taban   : tutan kelime sayısı (+0,3 aynı banka)
         tutar_b : tutar yakınlığı 0..0,6 (aynı açıklama hem transfer hem masrafı için kullanılmışsa:
@@ -587,12 +604,14 @@ class GecmisBanka:
             if o["yon"] != yon:
                 continue
             ok = o["kel"]
-            if not _hepsi_var(ok, wset, kel):
+            no_es = bool(nolar) and bool(o.get("no", set()) & set(nolar)) and \
+                (not ok or any(_w_esler(w, wset, kel) for w in ok))
+            if not no_es and not (ok and _hepsi_var(ok, wset, kel)):
                 continue
             h = o["hesap"]
             d = out.setdefault(h, {"taban": 0, "tutar_b": 0, "adet": 0, "agirlik": 0.0, "kelimeler": set()})
             d["kelimeler"].update(ok)
-            d["taban"] = max(d["taban"], len(set(ok)) + (0.3 if o["banka"] == banka else 0))
+            d["taban"] = max(d["taban"], len(set(ok)) + (2 if no_es else 0) + (0.3 if o["banka"] == banka else 0))
             if abs(o["tutar"] - a) < 0.01:
                 tb = 1.0                       # birebir aynı tutar (aylık kira gibi): güçlü işaret
                 d["ayni_tutar"] = True
@@ -653,7 +672,7 @@ def mizan_unvani(mizan_path) -> str:
                 break
             for c in row:
                 n = norm(c)
-                if len(n) > 8 and re.search(r"\b(LTD|LIMITED|ANONIM|AS|STI|SIRKETI|SIR)\b", n) and "HESAP" not in n:
+                if len(n) > 8 and re.search(r"\b(LTD|LIMITED|ANONIM|AS|A S|STI|SIRKETI|SIR)\b", n) and "HESAP" not in n:
                     return str(c).strip()
     except Exception:
         pass
@@ -668,10 +687,11 @@ def ekstre_unvani(hamlar) -> str:
     for h in hamlar:
         for t in h.get("tablolar") or []:
             for row in t[:25]:
-                hucre = [str(c).strip() for c in row if c not in (None, "") and str(c).strip()]
+                hucre = [str(c).strip() for c in row if c not in (None, "") and str(c).strip() not in ("", ":")]
                 for i, c in enumerate(hucre[:-1]):
                     n = norm(c)
-                    if ("UNVAN" in n or n in ("AD SOYAD", "MUSTERI ADI", "HESAP SAHIBI")) and len(n) < 40:
+                    if ("UNVAN" in n or n in ("AD SOYAD", "MUSTERI ADI", "HESAP SAHIBI", "FIRMA ADI", "FIRMA UNVANI")) \
+                            and len(n) < 40:
                         if gecerli(hucre[i + 1]):
                             return re.split(r"\s{2,}|\bBakiye\b", hucre[i + 1])[0].strip()
         m = re.search(r"(?:[ÜU]nvan[ıi]?|M[üu][şs]teri Ad[ıi])[^:\n]{0,15}:\s*([^\n]{6,80})", h.get("ham_metin") or "")
@@ -876,6 +896,8 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
     def cok_hesapli_ad(r, hesap):
         # seçilen hesap o adı taşımasa da ("ORTAK HAREKETLERİ") açıklamadaki kişinin birden çok hesabı varsa
         for kk_, v in cok_hesapli.items():
+            if unvan_k and kk_ <= set(unvan_k):
+                continue        # firmanın kendi adı ("BAĞIMSIZ DENETİM" gelir hesapları): kişi değil
             kt = r.get("kel_tam", r["kel"])      # firma adıyla ortak soyad (MOR reklam / Sezin MOR) atılmadan
             if _hepsi_var(list(kk_), set(kt), kt):
                 return sorted(v | {hesap})
@@ -1082,7 +1104,7 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         """Geçmiş fiş + mizan cari adı. -> (hesap, kaynak, kontrol|None, not) ya da None"""
         kel, wset = r["kel"], set(r["kel"])
         tutar = r["tutar"]
-        gec = gecmis.adaylar(kel, r["yon"], r["banka"], tutar, r["tarih"])
+        gec = gecmis.adaylar(kel, r["yon"], r["banka"], tutar, r["tarih"], _numaralar(r["aciklama"]))
         taban, gevsek = {}, set()
         for k, d in gec.items():
             # Logo açıklamayı kestiği için transferin komisyon satırı geçmişte transferle aynı
@@ -1163,7 +1185,8 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
             kontrol = "belirsiz"
             not_ = ("Bu açıklama geçmişte başka hesaplara da yazılmış: " if any(k in gec for k in sirali[1:4])
                     else "Bu ad mizanda başka hesapta da var: ") + ", ".join(sirali[1:4])
-        elif sk < 2:
+        elif sk < 2 and not (en in gec and gec[en]["adet"] >= 5 and pay >= 0.9 and len(sirali) == 1):
+            # tek kelime tuttu — ama geçmişte 5+ kez hep aynı hesaba yazılmışsa (günlük vadeli virmanı) değil
             kontrol = "zayif"
             not_ = "Açıklamanın yalnız bir kelimesi geçmişle / hesap adıyla tuttu"
         elif en in bulanik_ and kaynak == "mizan":
@@ -1385,11 +1408,15 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
             continue
         hesap, kaynak, kontrol, not_ = karsi_bul(r)
         # kendi hesaplarımız arası transfer, ama karşı bankanın ekstresi bu tarihi kapsamıyor
-        if kendisi_mi(r) and not r.get("masraf"):
-            if hesap.startswith("102") and not kontrol:
-                kontrol = "belirsiz"
-                not_ = "Kendi hesaplarınız arası transfer — karşı bankanın ekstresi yüklenmedi; banka hesabını kontrol edin"
-            elif (not hesap or hesap.startswith("198") or kontrol == "eslesmedi"):
+        # (karşı hesap başka bir 102 ise — açıklamada adımız geçmese de: "TCMB ALŞ …" — eşi bulunamadı demektir)
+        # vadeli hesaba her gün giden/gelen (geçmişte hep aynı hesaba yazılmış) virman ve hesap numarasından
+        # bulunan mevduat hesabı: vadelinin ayrı ekstresi olmaz, KONTROL gerekmez
+        vadeli_ok = (kaynak == "gecmis" and "VADELI" in norm(hesap_ad(hesap))) or (not_ or "").startswith("Vadeli hesap")
+        if hesap.startswith("102") and not kontrol and not vadeli_ok and not r.get("masraf"):
+            kontrol = "belirsiz"
+            not_ = "Kendi hesaplarınız arası transfer — karşı bankanın ekstresi yüklenmedi; banka hesabını kontrol edin"
+        elif kendisi_mi(r) and not r.get("masraf"):
+            if (not hesap or hesap.startswith("198") or kontrol == "eslesmedi"):
                 t_ = kendi_banka_tahmini(r)
                 if t_:
                     hesap, kaynak, kontrol = t_, "virman", "belirsiz"

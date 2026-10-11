@@ -19,6 +19,10 @@ import openpyxl
 _bellek_cache = {}
 
 
+
+# hesap kodu: 3 hane + noktalı alt kırılımlar; alt kırılım harfli olabilir (UBD: 120.01.K01, 335.01.İ01)
+_HESAP_KODU = re.compile(r"^\d{3}(\.[0-9A-Za-zÇĞİÖŞÜçğıöşü]{1,6})*$")
+
 def norm(s: str) -> str:
     """Türkçe duyarsız normalize: büyük harf, aksan yok, sadece harf/rakam/boşluk."""
     if s is None:
@@ -70,7 +74,7 @@ def mizan_hesaplar(mizan_path: Path):
             continue
         k = str(k).strip(); a = str(a).strip()
         # hesap kodu deseni: rakam ve nokta
-        if re.match(r"^\d{3}(\.\d+)*$", k):
+        if _HESAP_KODU.match(k):
             out.append((k, a))
     _mizan_bellek_cache[kaynak_str] = (mtime, out)
     return out
@@ -100,7 +104,7 @@ def kural_excel_oku(kural_path: Path | None):
                 kod = ws.cell(r, 1).value
                 ad = ws.cell(r, 2).value
                 kull = ws.cell(r, 3).value
-                if kod and re.match(r"^\d{3}(\.\d+)*$", str(kod).strip()):
+                if kod and _HESAP_KODU.match(str(kod).strip()):
                     sonuc["hesaplar"].append({
                         "kod": str(kod).strip(),
                         "ad": str(ad).strip() if ad else "",
@@ -473,7 +477,7 @@ def _mikro_fis_listesi_oku(wb):
             hkod_s = str(hkod).strip()
             if not hkod_s: continue
             if "TOPLAM" in norm(hkod_s): break
-            if not re.match(r'^\d{3}(\.\d+)*$', hkod_s): continue
+            if not _HESAP_KODU.match(hkod_s): continue
             b = _sayi(row[sut["borc"]]) or 0 if "borc" in sut and sut["borc"] < len(row) else 0
             a = _sayi(row[sut["alacak"]]) or 0 if "alacak" in sut and sut["alacak"] < len(row) else 0
             if b == 0 and a == 0: continue
@@ -498,7 +502,7 @@ def _muavin_oku(wb):
     başlığında yazar; her hareket satırına o bölümün hesabı verilir.
     Çıktı diğer okuyucularla aynı: satirlar / son_fis_no / eslesmeler."""
     tarih_re = re.compile(r"^\s*(\d{1,2})[./-](\d{1,2})[./-](\d{4})")
-    hesap_re = re.compile(r"^\s*(\d{3}(?:\.\d+)*)(?:\s+(\S.*))?$")
+    hesap_re = re.compile(r"^\s*(\d{3}(?:\.[0-9A-Za-zÇĞİÖŞÜçğıöşü]{1,6})*)(?:\s+(\S.*))?$")
     for ws in wb.worksheets:
         sut, hesap, satirlar, baslik_goruldu = None, None, [], 0
         for row in ws.iter_rows(values_only=True):
