@@ -204,6 +204,68 @@ def _baslik_bul(tablo):
     return None, None
 
 
+def _ocr_sayi(s, isaretli=True):
+    """OCR'dan gelen tutar: '166-4.810.29' -> -4810.29, '0-792.95' -> -792.95, '037' -> 0.37.
+    Türk ekstrelerinde her tutar 2 kuruş hanelidir: son parçadaki rakamlar / 100."""
+    s = str(s or "").strip()
+    if not re.search(r"\d", s):
+        return None
+    parca = s.split("-")
+    son = next((p for p in reversed(parca) if re.search(r"\d", p)), "")
+    rak = re.sub(r"\D", "", son)
+    if not rak:
+        return None
+    v = int(rak) / 100
+    return -v if (isaretli and "-" in s) else v
+
+
+def _ocr_onar(kayitlar):
+    """OCR ile okunan tutar/bakiyeyi bakiye zinciriyle düzeltir (bakiye_i = bakiye_(i-1) + tutar_i).
+    Önce iki yanındaki farkı da tutmayan tek bakiye onarılır, sonra tutar = bakiye farkı."""
+    if len(kayitlar) < 2:
+        return
+    L = list(kayitlar)
+    if L[0]["tarih"] > L[-1]["tarih"]:
+        L.reverse()                          # en yeni üstte: eskiden yeniye çevir
+    n = len(L)
+    a = [abs(r["tutar"]) if r["tutar"] else None for r in L]
+    b = [r["bakiye"] for r in L]
+    ham = [re.sub(r"\D", "", str(r.get("_ham_tutar") or "")) for r in L]
+
+    def benzer(i, fark):
+        """fark tutarı OCR'ın okuduğuyla tutuyor mu (bozuk okumada rakamlar içinde geçiyor: '6.1,00' ~ 1,00)"""
+        if a[i] is not None and abs(abs(fark) - a[i]) < 0.015:
+            return True
+        r_ = str(int(round(abs(fark) * 100)))
+        return len(r_) >= 3 and r_ in ham[i]
+
+    def tutar_ok(i):
+        return i >= 1 and b[i] is not None and b[i - 1] is not None and benzer(i, b[i] - b[i - 1])
+    for i in range(1, n):
+        if tutar_ok(i) or (i + 1 < n and tutar_ok(i + 1)):
+            continue
+        if b[i - 1] is None or a[i] is None:
+            continue
+        adaylar = [round(b[i - 1] + e * a[i], 2) for e in (1, -1)]
+        if i + 1 < n and b[i + 1] is not None:
+            uyan = [c for c in adaylar if benzer(i + 1, b[i + 1] - c)]
+        elif b[i] is None:
+            uyan = [adaylar[1] if L[i]["tutar"] < 0 else adaylar[0]]
+        else:
+            uyan = []
+        if len(uyan) == 1:
+            b[i] = uyan[0]; L[i]["bakiye"] = uyan[0]; L[i]["ocr_duzeltildi"] = True
+    for i in range(1, n):
+        if b[i] is not None and b[i - 1] is not None:
+            t = round(b[i] - b[i - 1], 2)
+            if abs(t - L[i]["tutar"]) >= 0.005:
+                L[i]["tutar"] = t; L[i]["ocr_duzeltildi"] = True
+    for r in kayitlar[:]:
+        r.pop("_ham_tutar", None)
+        if not r["tutar"]:
+            kayitlar.remove(r)
+
+
 def _tablo_kayitlari(h):
     """Bir belgenin tablolarından hareketler."""
     out, ilk_hh = [], None
@@ -234,15 +296,19 @@ def _tablo_kayitlari(h):
                 acik = (ek + " " + acik).strip()
             if not acik and "aciklama" in hh and hh["aciklama"] + 1 < len(row):
                 acik = str(row[hh["aciklama"] + 1] or "").strip()
+            ocr = h.get("ocr_tablo")
             if "giris" in hh or "cikis" in hh:
                 gi, ci = _sayi(g("giris")) or 0, _sayi(g("cikis")) or 0
                 tutar = abs(gi) - abs(ci)
+            elif ocr:
+                tutar = _ocr_sayi(g("tutar")) or 0
             else:
                 tutar = _sayi(g("tutar")) or 0
-            if not tutar:
+            bakiye = _ocr_sayi(g("bakiye"), isaretli=False) if ocr else _sayi(g("bakiye"))
+            if not tutar and not (ocr and bakiye is not None):
                 continue
             out.append({"tarih": tarih, "saat": saat, "aciklama": re.sub(r"\s+", " ", acik),
-                        "tutar": round(tutar, 2), "bakiye": _sayi(g("bakiye")),
+                        "tutar": round(tutar or 0, 2), "bakiye": bakiye, **({"_ham_tutar": g("tutar")} if ocr else {}),
                         "referans": str(g("referans") or "").strip(),
                         "islem_tipi": str(g("islem_tipi") or "").strip()})
         if out and h.get("tur") not in ("pdf", "pdf_ocr"):
@@ -262,6 +328,8 @@ def _tablo_kayitlari(h):
         if oy["ters"] >= 3 and oy["ters"] > 3 * oy["dogru"]:
             for r in out:
                 r["tutar"] = -r["tutar"]
+    if h.get("ocr_tablo") and out:
+        _ocr_onar(out)
     # aynı satır iki tabloda (sayfa sonu tekrarı) bir kez sayılsın
     tekil, gor = [], set()
     for r in out:
@@ -480,6 +548,10 @@ def ekstre_kayitlari(hamlar):
             uyarilar.append(f"{dosya}: dökümdeki her hareket iki kez yazılmış — mükerrerler çıkarıldı "
                             f"({len(k)} satır → {len(k2)} hareket)")
             k = k2
+        duz = sum(1 for r in k if r.pop("ocr_duzeltildi", False))
+        if duz:
+            uyarilar.append(f"{dosya}: resim ekstre OCR ile okundu; {duz} satırın tutarı bakiye zincirinden düzeltildi — "
+                            f"tutarları ekstreyle karşılaştırın")
         k, kirik = _isaret_dogrula(k)
         if kirik:
             uyarilar.append(f"{dosya}: bakiye zinciri {kirik} yerde tutmuyor — eksik ya da yanlış okunan satır olabilir, kontrol edin")

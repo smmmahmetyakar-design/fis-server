@@ -79,7 +79,159 @@ def pdf_oku(path: Path):
     return pdf_ocr(path)
 
 
+def _pdf_resimleri(path: Path):
+    """PDF'e gömülü sayfa resimleri (taranmış / ekran görüntüsü ekstre). Aynı resim birden çok sayfada
+    gösteriliyorsa (Ziraat: tek uzun resim 3 sayfaya bölünmüş) bir kez döner. Sayfanın yarısından
+    küçük resimler (logo) atlanır."""
+    import pdfplumber
+    from PIL import Image
+    out, gorulen = [], set()
+    with pdfplumber.open(path) as pdf:
+        for sayfa in pdf.pages:
+            alan = float(sayfa.width * sayfa.height) or 1.0
+            for im in sayfa.images:
+                st = im.get("stream")
+                if st is None:
+                    continue
+                kim = getattr(st, "objid", None) or id(st)
+                if kim in gorulen:
+                    continue
+                gw = abs(float(im["x1"]) - float(im["x0"])); gh = abs(float(im["bottom"]) - float(im["top"]))
+                if gw * gh < 0.5 * alan:
+                    continue
+                gorulen.add(kim)
+                try:
+                    filt = str(st.attrs.get("Filter", ""))
+                    if "DCT" in filt or "JPX" in filt:
+                        out.append(Image.open(io.BytesIO(st.get_rawdata())))
+                    else:
+                        out.append(sayfa.crop((im["x0"], im["top"], im["x1"], im["bottom"])).to_image(resolution=300).original)
+                except Exception:
+                    continue
+    return out
+
+
+def ocr_tablo(img):
+    """Resim ekstreden sütun sütun OCR ile hareket tablosu: [["Tarih","Açıklama","Tutar","Bakiye"], ...].
+    Sütun yerleri başlıktan (Date/Tarih, Explanation/Açıklama, Amount/Tutar, Balance/Bakiye) bulunur;
+    her sütun ayrı okunur (tutar/bakiye yalnız rakam), satırlar tarihin yüksekliğine göre birleştirilir:
+    birden çok satırlı açıklama tarihin üstünde ve altında olabilir. Başlık bulunamazsa None."""
+    import re
+    import pytesseract
+    from PIL import Image, ImageOps
+
+    def nrm(s):
+        tr = str.maketrans("ÇĞİÖŞÜçğıöşü", "CGIOSUcgiosu")
+        return re.sub(r"[^A-Z0-9 ]", "", (s or "").translate(tr).upper()).strip()
+
+    def veri(im, cfg, lang):
+        d = pytesseract.image_to_data(im, lang=lang, config=cfg, output_type=pytesseract.Output.DICT)
+        g = {}
+        for i, t in enumerate(d["text"]):
+            if t.strip():
+                g.setdefault((d["block_num"][i], d["par_num"][i], d["line_num"][i]), []).append(
+                    (d["left"][i], d["top"][i] + d["height"][i] / 2, t.strip()))
+        sat = []
+        for ws in g.values():
+            ws.sort()
+            sat.append((sum(w[1] for w in ws) / len(ws), " ".join(w[2] for w in ws), ws))
+        return sorted(sat, key=lambda x: x[0])
+
+    baslik = {"tarih": ("DATE", "TARIH"), "aciklama": ("EXPLANATION", "ACIKLAMA", "DESCRIPTION"),
+              "tutar": ("AMOUNT", "TUTAR"), "bakiye": ("BALANCE", "BAKIYE")}
+    img = img.convert("L")
+    olcek = max(1, min(4, round(2600 / max(1, img.width))))
+    if olcek > 1:
+        img = img.resize((img.width * olcek, img.height * olcek), Image.BICUBIC)
+    img = ImageOps.autocontrast(img, cutoff=1)
+    W, H = img.size
+    yer = {}
+    for _, _, ws in veri(img.crop((0, 0, W, min(H, int(W * 1.2)))), "--psm 6", _ocr_lang()):
+        for x, y, t in ws:
+            n = nrm(t)
+            for k, adlar in baslik.items():
+                if n in adlar and k not in yer:
+                    yer[k] = (x, y)
+    if not {"tarih", "aciklama", "tutar"} <= set(yer):
+        return None
+    y0 = int(max(y for _, y in yer.values()) + 0.012 * W)
+    xa = yer["aciklama"][0] - int(0.006 * W)
+    xt = yer["tutar"][0] - int(0.012 * W)        # tutarlar sağa yaslı, başlığın biraz solundan başlar
+    xb = yer["bakiye"][0] - int(0.012 * W) if "bakiye" in yer else W
+    sut = {"tarih": (0, min(yer["tarih"][0] + int(0.11 * W), xa)), "aciklama": (xa, xt),
+           "tutar": (xt, xb), "bakiye": (xb, W)}
+    oku = {}
+    for k, (a, b) in sut.items():
+        if b - a < 10:
+            continue
+        cfg, lang = "--psm 6", "eng"
+        if k in ("tutar", "bakiye"):
+            cfg += " -c tessedit_char_whitelist=0123456789.,-"
+        elif k == "tarih":
+            cfg += " -c tessedit_char_whitelist=0123456789./"
+        else:
+            lang = _ocr_lang()
+        oku[k] = veri(img.crop((a, y0, b, H)), cfg, lang)
+    tarihler = []
+    for y, t, _ in oku.get("tarih", []):
+        m = re.search(r"(\d{2})[./]?(\d{2})[./]?(\d{4})", t.replace(" ", ""))
+        if m and 1 <= int(m.group(1)) <= 31 and 1 <= int(m.group(2)) <= 12:
+            tarihler.append((y, f"{m.group(1)}.{m.group(2)}.{m.group(3)}"))
+    if not tarihler:
+        return None
+    aralik = sorted(b[0] - a[0] for a, b in zip(tarihler, tarihler[1:]) if b[0] > a[0])
+    satir_h = aralik[len(aralik) // 4] if aralik else 40
+
+    def en_yakin(y):
+        return min(range(len(tarihler)), key=lambda i: abs(tarihler[i][0] - y))
+    acik = [[] for _ in tarihler]
+    for y, t, _ in oku.get("aciklama", []):
+        acik[en_yakin(y)].append((y, t))
+    tut, bak = [""] * len(tarihler), [""] * len(tarihler)
+    for k, hedef in (("tutar", tut), ("bakiye", bak)):
+        for y, t, _ in oku.get(k, []):
+            i = en_yakin(y)
+            if abs(tarihler[i][0] - y) <= satir_h * 0.6 and re.search(r"\d", t) and not hedef[i]:
+                hedef[i] = t.replace(" ", "")
+    tablo = [["Tarih", "Açıklama", "Tutar", "Bakiye"]]
+    for i, (_, tr) in enumerate(tarihler):
+        tablo.append([tr, " ".join(t for _, t in sorted(acik[i])), tut[i], bak[i]])
+    return tablo
+
+
 def pdf_ocr(path: Path):
+    """Taranmış PDF: önce gömülü resimlerden sütunlu hareket tablosu (ekstre), olmazsa her sayfayı OCR.
+    OCR dakikalar sürer: sonuç dosyanın yanında '_ocr_<özet>.json' olarak saklanır, aynı dosya
+    tekrar işlenince yeniden okunmaz ('_' ile başlayan dosyalar belge sayılmaz)."""
+    import hashlib, json
+    try:
+        ozet = hashlib.sha1(Path(path).read_bytes()).hexdigest()[:16]
+        onbellek = Path(path).parent / f"_ocr_{ozet}.json"
+        if onbellek.exists():
+            return json.loads(onbellek.read_text(encoding="utf-8"))
+    except Exception:
+        onbellek = None
+    sonuc = _pdf_ocr_hesapla(path)
+    if onbellek is not None and (sonuc.get("tablolar") or sonuc.get("ham_metin")):
+        try:
+            onbellek.write_text(json.dumps(sonuc, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
+    return sonuc
+
+
+def _pdf_ocr_hesapla(path: Path):
+    try:
+        tablolar = [t for t in (ocr_tablo(im) for im in _pdf_resimleri(path)) if t and len(t) > 1]
+    except Exception:
+        tablolar = []
+    if tablolar:
+        return {"tur": "pdf_ocr", "tablolar": tablolar, "ham_metin": "", "sayfalar": [],
+                "ocr_tablo": True, "uyari": "Resim ekstre OCR ile okundu; tutarlar bakiyeyle denetlendi, kontrol edin."}
+    return _pdf_ocr_sayfa(path)
+
+
+def _pdf_ocr_sayfa(path: Path):
     """Taranmış PDF: her sayfayı görüntüye çevirip OCR."""
     try:
         import pdfplumber
