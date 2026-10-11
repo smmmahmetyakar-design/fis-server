@@ -52,7 +52,7 @@ _HESAP_BASLIK = {"ALACAKLAR", "ALACAKLARI", "ALACAGI", "BORCLAR", "BORCLARI", "B
                  "HESAPLARI", "KARSILIGI", "TAHAKKUK", "KESINTI", "KESINTILERI", "FONLAR", "SGK", "PRIM", "IADE", "IADESI"}
 
 _MASRAF_KELIME = {"KOMISYON", "KOMISYONU", "BSMV", "MASRAF", "MASRAFI", "MASRAFLARI", "UCRET", "UCRETI",
-                  "UCRETLERI", "ISLETIM", "AIDAT", "AIDATI", "KESINTI"}
+                  "UCRETLERI", "ISLETIM", "AIDAT", "AIDATI", "KESINTI", "UC"}
 _DOVIZ_KELIME = {"DOVIZ", "KAMBIYO", "ARBITRAJ", "FX"}
 _VIRMAN_KELIME = {"VIRMAN", "HESAPLARARASI", "HESAPLAR"}
 
@@ -491,6 +491,15 @@ def ekstre_kayitlari(hamlar):
     return tum, uyarilar
 
 
+def _gun(t):
+    """'2026-07-15' -> gün sırası (tarih farkı için)"""
+    try:
+        from datetime import date as _date
+        return _date(int(t[:4]), int(t[5:7]), int(t[8:10])).toordinal()
+    except (ValueError, TypeError):
+        return None
+
+
 # ------------------------------------------------------------------ geçmiş indeksi
 class GecmisBanka:
     """Geçmiş fişlerdeki banka satırlarından (102 + karşı hesap aynı açıklamayla)
@@ -782,6 +791,33 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         m = re.match(r"(\d{2}):(\d{2}):(\d{2})", r.get("saat") or "")
         return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3)) if m else None
 
+    # ---------- kur
+    kur_onbellek = {}
+
+    def kur(dv, tarih):
+        if not dv or not kur_getir:
+            return None
+        if (dv, tarih) not in kur_onbellek:
+            try:
+                kur_onbellek[(dv, tarih)] = kur_getir(dv, tarih)
+            except Exception:
+                kur_onbellek[(dv, tarih)] = None
+        return kur_onbellek[(dv, tarih)]
+
+    def ref_tokenlar(r):
+        """İşlem dosya/referans no ("1303AP600001"): harf + rakam karışık, 8+ karakter."""
+        return {t for t in re.findall(r"[A-Z0-9]{8,}", (r.get("aciklama") or "").upper())
+                if re.search(r"[A-Z]", t) and re.search(r"\d", t)}
+
+    def kur_tutarli(a, b):
+        """Farklı para birimli iki hareketin TL karşılıkları tutuyor mu (açıklamadaki 'KUR 52.2412' ya da TCMB)."""
+        tl, fx = (a, b) if not a["doviz"] else (b, a)
+        if tl["doviz"] or not fx["doviz"]:
+            return False
+        m = re.search(r"KUR\s*(\d+[.,]\d+)", (tl["aciklama"] or "").upper())
+        oran = float(m.group(1).replace(",", ".")) if m else kur(fx["doviz"], fx["tarih"])
+        return bool(oran) and abs(abs(tl["tutar"]) - abs(fx["tutar"]) * oran) <= 0.02 * abs(tl["tutar"])
+
     adaylar_es = []
     for i, r in enumerate(kayitlar):
         doviz_satiri = bool(set(r["kel"]) & _DOVIZ_KELIME)
@@ -798,7 +834,11 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                         or hesap_ipucu(r, s_["banka"]) or hesap_ipucu(s_, r["banka"])):
                     continue
             else:
-                if not (doviz_satiri and set(s_["kel"]) & _DOVIZ_KELIME):
+                # TCMB ihracat zorunlu alışı: "1303AP600001-000000379 TCMB İHRACAT ZORUNLU ALIŞ" (EUR) ↔
+                # "TCMB ALŞ 1303600011-1303AP600001 KUR 52.2412" (TL): ortak dosya no ve kur tutarı
+                if ref_tokenlar(r) & ref_tokenlar(s_) and kur_tutarli(r, s_):
+                    pass
+                elif not (doviz_satiri and set(s_["kel"]) & _DOVIZ_KELIME):
                     continue
                 if fark > 120:
                     continue
@@ -918,6 +958,63 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
             return next(iter(bul)), "virman", None, "Vadeli hesap (hesap numarasından)"
         return sorted(bul)[-1], "virman", "belirsiz", "Hesap numarası mizanda birden çok hesapta: " + ", ".join(sorted(bul))
 
+    # döviz dönüşümünün öbür bacağı (TL hesabı) defterde zaten işlenmişse onun karşı hesabı:
+    # muhasebeci TL tarafını geçici hesaba (198 ...) yazdıysa döviz tarafı oradan kapanır
+    gecmis_fis = defaultdict(list)
+    for x in km.gecmis.get("satirlar", []):
+        gecmis_fis[str(x.get("fisno", ""))].append(x)
+    gecmis_102 = [x for x in km.gecmis.get("satirlar", []) if str(x.get("hesap", "")).startswith("102")
+                  and _gun(str(x.get("fis_tarih") or "")) is not None]
+
+    def defterdeki_bacak(r):
+        if r["es"] is not None:
+            return None
+        refs = ref_tokenlar(r)
+        dovizli = bool(set(r["kel"]) & (_DOVIZ_KELIME | {"TCMB", "IHRACAT"}))
+        if not refs and not dovizli:
+            return None
+        gr = _gun(r["tarih"])
+        k_ = kur(r["doviz"], r["tarih"]) if r["doviz"] else None
+        aday = []
+        for x in gecmis_102:
+            if x["hesap"] == r["banka"] or abs(_gun(x["fis_tarih"]) - gr) > 2:
+                continue
+            xt = float(x.get("borc") or 0) - float(x.get("alacak") or 0)
+            if not xt or (xt > 0) == (r["tutar"] > 0):
+                continue
+            det = str(x.get("detay") or "").upper()
+            x_ref = {t for t in re.findall(r"[A-Z0-9]{8,}", det) if re.search(r"[A-Z]", t) and re.search(r"\d", t)}
+            tutar_ok = (abs(abs(xt) - abs(r["tutar"]) * k_) <= 0.03 * abs(xt)) if k_ else \
+                (not r["doviz"] and abs(abs(xt) - abs(r["tutar"])) < 0.01)
+            # ortak dosya no yetmez: aynı dosyanın masraf satırları da o numarayı taşır — tutar da tutmalı
+            if tutar_ok and ((refs & x_ref) or (dovizli and set(_kelimeler(det)) & _DOVIZ_KELIME)):
+                aday.append(x)
+        if len(aday) != 1:
+            return None
+        x = aday[0]
+        xt = float(x.get("borc") or 0) - float(x.get("alacak") or 0)
+        det = _tarih_onekini_at(str(x.get("detay") or "")).strip()
+        karsi = [y for y in gecmis_fis[str(x.get("fisno", ""))] if y is not x
+                 and _tarih_onekini_at(str(y.get("detay") or "")).strip() == det
+                 and abs(float(y.get("borc") or 0) - float(y.get("alacak") or 0) + xt) < 0.01]
+        if len(karsi) != 1 or karsi[0]["hesap"] == r["banka"]:
+            return None
+        r["_tl_tutar"] = round(abs(xt), 2)
+        return (karsi[0]["hesap"], "gecmis", None,
+                f"Döviz dönüşümünün TL bacağı defterde fiş {x.get('fisno', '')} ile {karsi[0]['hesap']} karşılığıyla işlenmiş")
+
+    # kredi faizi: Logo açıklamayı kestiği için geçmişte faiz ve anapara aynı ("KREDİ NO: 1303… -") görünür;
+    # faiz / gecikme faizi / faiz tahakkuku finansman gideridir (780), kredi hesabı (300) değil
+    faiz_hesabi = next((k for k, a in hesaplar if k in alt and k.startswith("780") and "FAIZ" in norm(a)), "") or \
+        (masraf_hesap if masraf_hesap.startswith("780") else "") or \
+        next((k for k, a in hesaplar if k in alt and k.startswith("780")), "")
+
+    def kredi_faizi_mi(r):
+        n_ = norm(r["aciklama"])
+        iade = r["yon"] == "giris" and bool(re.search(r"\bIADE", n_))      # "TAKSİTİ GECİKME FAİZİ İADESİ"
+        return (r["yon"] == "cikis" or iade) and bool(re.search(r"\bFAIZ", n_)) \
+            and bool(re.search(r"\bKREDI|\bKMH\b|TAKSIT", n_)) and not re.search(r"ANAPARA|ANAP ARA", n_)
+
     def karsi_bul(r):
         """-> (hesap, kaynak, kontrol_nedeni|None, not)"""
         kel, wset = r["kel"], set(r["kel"])
@@ -943,9 +1040,14 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         # 2) aynı anda yapılan transferin komisyon / BSMV satırı
         if r.get("masraf") and masraf_hesap:
             return masraf_hesap, "masraf", None, ""
+        db_ = defterdeki_bacak(r)
+        if db_:
+            return db_
         # 3) geçmiş ve mizan cari adı — güçlüyse (2+ kelime, tek aday) genel kurallardan önce gelir:
         #    firma vergi ödemesini hep 770'e yazıyorsa öyle kalır
         aday = gecmis_mizan(r, masraf_mi)
+        if faiz_hesabi and kredi_faizi_mi(r) and not (aday and aday[0].startswith(("6", "7"))):
+            return faiz_hesabi, "masraf", None, "Kredi faizi — finansman gideri"
         kk = kredi_karti_hesabi(r) if r["yon"] == "cikis" else None
         if kk is not None and not kk[0] and aday:
             # kart hesabı mizanda yok: geçmişteki hesap, ama kontrol edilsin (ortağın kartı olabilir)
@@ -1107,14 +1209,7 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
     # 770+191 / 102) ya da banka fişi daha önce aktarılmış olabilir: aynı banka hesabında, ekstre
     # döneminde, ±3 gün içinde aynı tutarlı 102 satırı (ya da aynı güne ait birkaç faturanın toplamı:
     # tek Amazon kart harcaması = 4 fatura) varsa hareket fişe alınmaz — iki kez kaydolmasın.
-    from datetime import date as _date
     from itertools import combinations
-
-    def _gun(t):
-        try:
-            return _date(int(t[:4]), int(t[5:7]), int(t[8:10])).toordinal()
-        except (ValueError, TypeError):
-            return None
     kapsam = {}
     for r in kayitlar:
         a_, b_ = kapsam.get(r["banka"], (r["tarih"], r["tarih"]))
@@ -1137,19 +1232,36 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
     kayitli = []
     adaylar_k = []
     for r in kayitlar:
-        if r["es"] is not None:
-            continue
         gr = _gun(r["tarih"])
+        hedef, tol = r["tutar"], 0.005
+        if r["doviz"]:
+            # döviz hesabı defterde TL karşılığıyla durur: kurla, %2 pay (muhasebecinin kuru farklı olabilir)
+            k_ = kur(r["doviz"], r["tarih"])
+            if not k_:
+                continue
+            hedef = round(r["tutar"] * k_, 2); tol = max(0.02 * abs(hedef), 1.0)
         for d in defter.get(r["banka"], []):
-            if abs(d["tutar"] - r["tutar"]) < 0.005 and abs(d["gun"] - gr) <= 3:
-                adaylar_k.append((abs(d["gun"] - gr), 0 if _ortak(r, [d]) else 1, id(r), r, d))
+            if abs(d["tutar"] - hedef) < tol and abs(d["gun"] - gr) <= 3:
+                adaylar_k.append((abs(d["gun"] - gr), 0 if _ortak(r, [d]) else 1, abs(d["tutar"] - hedef), id(r), r, d))
     kullanildi = set()
-    for _, _, _, r, d in sorted(adaylar_k, key=lambda z: z[:3]):
+    for _, _, _, _, r, d in sorted(adaylar_k, key=lambda z: z[:4]):
         if r.get("_atla") or id(d) in kullanildi:
             continue
         r["_atla"] = True; kullanildi.add(id(d)); kayitli.append((r, [d]))
+        es_ = r["es"]
+        if es_ is not None:
+            if any(y.get("hesap") == es_["banka"] for y in gecmis_fis[str(d["x"].get("fisno", ""))]):
+                es_["_atla"] = True     # virman / döviz alımının iki bacağı aynı fişte kayıtlı
+                ayni_fis = [e for e in defter.get(es_["banka"], []) if id(e) not in kullanildi
+                            and str(e["x"].get("fisno", "")) == str(d["x"].get("fisno", ""))
+                            and (e["tutar"] > 0) == (es_["tutar"] > 0)]
+                if ayni_fis:
+                    kullanildi.add(id(min(ayni_fis, key=lambda e: abs(abs(e["tutar"]) - abs(d["tutar"])))))
+            else:
+                # yalnız bu bacak işlenmiş (karşısı geçici hesaba): öbür bacak tek başına fişlenir
+                es_["es"] = None; r["es"] = None
     for r in kayitlar:
-        if r.get("_atla") or r["es"] is not None:
+        if r.get("_atla") or r["es"] is not None or r["doviz"]:
             continue
         gr = _gun(r["tarih"])
         havuz = sorted([d for d in defter.get(r["banka"], []) if id(d) not in kullanildi
@@ -1215,18 +1327,6 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                 return re.sub(r"^\s*KONTROL\s*-\s*", "", yeni).strip()
         return f"{hesap_ad(banka) or 'BANKA'} - {gun}"
 
-    # ---------- kur
-    kur_onbellek = {}
-
-    def kur(dv, tarih):
-        if not dv or not kur_getir:
-            return None
-        if (dv, tarih) not in kur_onbellek:
-            try:
-                kur_onbellek[(dv, tarih)] = kur_getir(dv, tarih)
-            except Exception:
-                kur_onbellek[(dv, tarih)] = None
-        return kur_onbellek[(dv, tarih)]
 
     # ---------- fişler: (banka, tarih) başına bir fiş
     def satir(fisno, tarih, fis_ac, hesap, borc, alacak, detay, kaynak, rol, r=None, dv=None, kur_=None,
@@ -1307,7 +1407,10 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         ozet[kaynak or "eşleşmedi"] += 1
         tutar = abs(r["tutar"])
         kur_, dv_t = None, None
-        if r["doviz"]:
+        if r["doviz"] and r.get("_tl_tutar"):
+            # TL bacağı defterde işlenmiş döviz dönüşümü: aynı TL tutarla kapansın (geçici hesapta kuruş kalmasın)
+            dv_t = tutar; tutar = r["_tl_tutar"]; kur_ = round(tutar / dv_t, 6)
+        elif r["doviz"]:
             kur_ = kur(r["doviz"], r["tarih"])
             if kur_:
                 dv_t = tutar; tutar = round(tutar * kur_, 2)
