@@ -46,6 +46,11 @@ _HESAP_GENEL = {"MASRAFLAR", "MASRAF", "KIRALAMA", "ARAC", "OFIS", "EUR", "USD",
                 "AVANSI", "IS", "HUZUR", "HAKKI", "ORTAK", "ORTAKLAR", "PERSONEL", "BORC", "ALACAK",
                 "DIGER", "CESITLI"}
 
+# hesap başlığı kelimeleri ("VERGİ DAİRESİ DİĞER ALACAKLAR"): böyle ad kişi/firma adı değil, eksik kelimeyle eşleşmez
+_HESAP_BASLIK = {"ALACAKLAR", "ALACAKLARI", "ALACAGI", "BORCLAR", "BORCLARI", "BORCU", "VERGI", "VERGISI", "VERGILER",
+                 "DAIRESI", "AVANSLARI", "AVANS", "ODEMELER", "ODEMELERI", "GIDERLERI", "GELIRLERI", "HESABI",
+                 "HESAPLARI", "KARSILIGI", "TAHAKKUK", "KESINTI", "KESINTILERI", "FONLAR", "SGK", "PRIM", "IADE", "IADESI"}
+
 _MASRAF_KELIME = {"KOMISYON", "KOMISYONU", "BSMV", "MASRAF", "MASRAFI", "MASRAFLARI", "UCRET", "UCRETI",
                   "UCRETLERI", "ISLETIM", "AIDAT", "AIDATI", "KESINTI"}
 _DOVIZ_KELIME = {"DOVIZ", "KAMBIYO", "ARBITRAJ", "FX"}
@@ -187,7 +192,7 @@ def _baslik_bul(tablo):
                 hh["aciklama_ek"] = j
             elif "REFERANS" in c or "DEKONT" in c or "FIS NO" in c:
                 hh.setdefault("referans", j)
-            elif "ISLEM TIPI" in c or c == "ISLEM" or c == "ETIKET" or c == "ISLEM TURU":
+            elif "ISLEM TIPI" in c or c == "ISLEM" or c == "ETIKET" or c == "ISLEM TURU" or c == "ISLEM KODU":
                 hh.setdefault("islem_tipi", j)
         if ("tarih" in hh or "tarih_valor" in hh) and ("tutar" in hh or "giris" in hh or "cikis" in hh):
             return i, hh
@@ -237,6 +242,21 @@ def _tablo_kayitlari(h):
                         "islem_tipi": str(g("islem_tipi") or "").strip()})
         if out and h.get("tur") not in ("pdf", "pdf_ocr"):
             break           # Excel: ilk hareket sayfası yeter
+    # Borç/Alacak sütunlu dökümde yön: banka gözünden Borç = çıkan (varsayılan), ama şirket
+    # muhasebesi gözünden hazırlanmış dökümde Borç = GELEN (RK: "EFT-Gelen EFT" Borç'ta).
+    # İşlem kodu / açıklamadaki gelen-giden kelimeleriyle oylanır.
+    if out and ilk_hh and ("giris" in ilk_hh or "cikis" in ilk_hh):
+        oy = Counter()
+        for r in out:
+            n = " " + norm(r.get("islem_tipi", "") + " " + r["aciklama"]) + " "
+            gelen = bool(re.search(r" GELEN | YATAN | YATIRILAN | GELEN\w*| KAPAMA | TAHSILAT ", n)) and "TERS" not in n
+            giden = bool(re.search(r" CIKAN | GIDEN | GONDERILEN | UCRET\w* | BSMV | KOMISYON\w* | MASRAF\w* ", n))
+            if gelen == giden:
+                continue
+            oy["dogru" if (r["tutar"] > 0) == gelen else "ters"] += 1
+        if oy["ters"] >= 3 and oy["ters"] > 3 * oy["dogru"]:
+            for r in out:
+                r["tutar"] = -r["tutar"]
     # aynı satır iki tabloda (sayfa sonu tekrarı) bir kez sayılsın
     tekil, gor = [], set()
     for r in out:
@@ -442,6 +462,19 @@ def ekstre_kayitlari(hamlar):
             elif h.get("ham_metin") or h.get("tablolar"):
                 uyarilar.append(f"{dosya}: hareket satırı bulunamadı — başlık (Tarih / Tutar / Açıklama) tanınmadı")
             continue
+        # bankanın dökümü her hareketi iki (ya da daha çok) kez yazmışsa (RK İş Bankası: 890 satır = 445
+        # hareketin iki kopyası): her farklı satır çift sayıda geçiyorsa yarısı alınır
+        say_ = Counter((r["tarih"], r["saat"], r["tutar"], r["aciklama"], r["bakiye"], r.get("referans", "")) for r in k)
+        if len(k) >= 4 and all(v % 2 == 0 for v in say_.values()):
+            kalan = Counter({im: v // 2 for im, v in say_.items()})
+            k2 = []
+            for r in k:
+                im = (r["tarih"], r["saat"], r["tutar"], r["aciklama"], r["bakiye"], r.get("referans", ""))
+                if kalan[im] > 0:
+                    kalan[im] -= 1; k2.append(r)
+            uyarilar.append(f"{dosya}: dökümdeki her hareket iki kez yazılmış — mükerrerler çıkarıldı "
+                            f"({len(k)} satır → {len(k2)} hareket)")
+            k = k2
         k, kirik = _isaret_dogrula(k)
         if kirik:
             uyarilar.append(f"{dosya}: bakiye zinciri {kirik} yerde tutmuyor — eksik ya da yanlış okunan satır olabilir, kontrol edin")
@@ -861,9 +894,36 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         bul = [k for k, a in hesaplar if k in alt and k.startswith("361") and ("SGK" in norm(a) or "SOSYAL" in norm(a))]
         return bul[0] if bul else ""
 
+    # vadeli hesap no -> 102 hesabı: "HESAP AÇMA İŞLEMİ 1303:0254618 -> 1303:0250804",
+    # "1303 0250804 numaralı hesap kapama"; mizanda her mevduatın kendi 102.03.xxx hesabı var
+    # ("İŞBANKASI BİNEVLER ŞB.0250804")
+    no_102 = defaultdict(set)
+    for k, a in hesaplar:
+        if k in alt and k.startswith("102"):
+            for n_ in re.findall(r"\d{5,}", a or ""):
+                no_102[n_.lstrip("0")].add(k)
+
+    def mevduat_hesabi(r):
+        if not re.search(r"HESAP (ACMA|KAPAMA)|NUMARALI HESAP|VADELI|MEVDUAT|->", norm(r["aciklama"]) + " " + r["aciklama"]):
+            return None
+        bul = set()
+        for n_ in re.findall(r"\d{5,}", r["aciklama"]):
+            bul |= {k for k in no_102.get(n_.lstrip("0"), ()) if k != r["banka"]}
+        if not bul:
+            # mevduatın kendi hesabı mizanda yok (firma artık 198 "VADELİ HESAP HAREKETLERİ"ne yazıyor):
+            # geçmişte başka mevduat numaralı 102'ye yazılmış örnekler aday olmasın
+            r["_mevduat_yok"] = True
+            return None
+        if len(bul) == 1:
+            return next(iter(bul)), "virman", None, "Vadeli hesap (hesap numarasından)"
+        return sorted(bul)[-1], "virman", "belirsiz", "Hesap numarası mizanda birden çok hesapta: " + ", ".join(sorted(bul))
+
     def karsi_bul(r):
         """-> (hesap, kaynak, kontrol_nedeni|None, not)"""
         kel, wset = r["kel"], set(r["kel"])
+        mv = mevduat_hesabi(r)
+        if mv:
+            return mv
         # 1) öğrenilen
         n_ = norm(r["aciklama"])
         masraf_mi = r.get("masraf") or bool(wset & _MASRAF_KELIME)
@@ -893,8 +953,10 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         if aday and aday[2] is None and not (kk is not None and kk[0] and kk[0] != aday[0]):
             return aday[:4]
         # 4) banka masraf / ücret satırı (bir kişiye/cariye giden ödeme değilse: "PERSONEL MASRAF ÖDEMESİ")
-        if wset & _MASRAF_KELIME and r["yon"] == "cikis" and abs(r["tutar"]) < 5000 and not kendisi_mi(r) and masraf_hesap \
-                and not (aday and aday[4] >= 2):
+        ucret_iadesi = r["yon"] == "giris" and abs(r["tutar"]) < 1000 and bool(wset & {"IADE", "IADESI"}) \
+            and bool(wset & _MASRAF_KELIME)          # "Fast ücret iadesi", "İade edilen EFT ücret iadesi"
+        if wset & _MASRAF_KELIME and (r["yon"] == "cikis" or ucret_iadesi) and abs(r["tutar"]) < 5000 \
+                and not kendisi_mi(r) and masraf_hesap and not (aday and aday[4] >= 2):
             return masraf_hesap, "masraf", None, ""
         # 5) kredi kartı borç ödemesi
         kk = kredi_karti_hesabi(r) if r["yon"] == "cikis" else None
@@ -919,17 +981,36 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         kel, wset = r["kel"], set(r["kel"])
         tutar = r["tutar"]
         gec = gecmis.adaylar(kel, r["yon"], r["banka"], tutar, r["tarih"])
-        taban = {}
+        taban, gevsek = {}, set()
         for k, d in gec.items():
             # Logo açıklamayı kestiği için transferin komisyon satırı geçmişte transferle aynı
             # görünür ("ALP ARAYICI GARANTI" -> 770); masraf olmayan satırda masraf hesabı aday değil
-            if k in kodlar and k != r["banka"] and not (k == masraf_hesap and not masraf_mi):
+            # ama açıklamanın TÜM kelimeleri geçmişte masraf hesabına yazılmışsa ("KMH-FAİZ TAHSİLATI",
+            # "TAHAK.KARŞ.KREDİ.MEVD.FAİZİ") kesilmiş açıklama değil, gerçekten o hesap
+            # (Logo açıklamayı keser: geçmişteki kelimeler açıklamanın başı olabilir)
+            ayni_acik = abs(tutar) < 5000 and set(kel) <= d["kelimeler"]
+            bas_kismi = abs(tutar) < 5000 and len(d["kelimeler"]) >= 3 and d["kelimeler"] <= set(kel)
+            tam_ornek = ayni_acik or bas_kismi
+            if k == masraf_hesap and not masraf_mi and not ayni_acik and bas_kismi:
+                gevsek.add(k)       # yalnız kesilmiş açıklamanın başı tuttu: KONTROL'lü
+            if r.get("_mevduat_yok") and k.startswith("102") and re.search(r"\d{5,}", hesap_ad(k) or ""):
+                continue        # başka bir mevduatın kendi 102 hesabı
+            if k in kodlar and k != r["banka"] and not (k == masraf_hesap and not masraf_mi and not tam_ornek):
                 taban[k] = d["taban"]
         mizan_s, bulanik_ = {}, set()
         for k, hk in mizan_adaylari:
             tam = _hepsi_var(hk, wset, kel)
-            if tam or _hepsi_var(hk, wset, kel, bulanik=True):
-                ms = len(hk) + 0.5
+            # yalnız sondaki şube/yer adı eksik ("A101-YENİ MAĞAZACILIK-ELMADAĞ") ya da kısaltılmış
+            # ("FİLE MARKET MAĞ."): baştaki ayırt edici kelimeler (4+ harf) tutmalı
+            eksik_bir = False
+            if not tam and len(hk) >= 3 and not set(hk) & _HESAP_BASLIK:
+                tutmayan = [h_ for h_ in hk if not _w_esler(h_, wset, kel)]
+                if len(tutmayan) == 1 and all(len(h_) >= 4 for h_ in hk if h_ not in tutmayan) \
+                        and _w_esler(hk[0], wset, kel):
+                    t_ = tutmayan[0]
+                    eksik_bir = t_ == hk[-1] or (len(t_) <= 3 and any(w.startswith(t_) for w in kel))
+            if tam or eksik_bir or _hepsi_var(hk, wset, kel, bulanik=True):
+                ms = len(hk) + 0.5 - (1 if eksik_bir else 0)
                 # aynı ad hem 131 hem 331'de olabilir: giden ödeme borcu (3xx), gelen tahsilat
                 # alacağı (1xx) kapatır; geçmişte kullanılmış hesap öne geçer
                 ms += 0.3 if (r["yon"] == "cikis") == k.startswith(("3", "4")) else 0
@@ -986,6 +1067,9 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         elif en in bulanik_ and kaynak == "mizan":
             kontrol = "benzer"
             not_ = f"Hesap adı ({hesap_ad(en)}) açıklamayla bir harf farklı"
+        if en in gevsek and kontrol is None:
+            kontrol = "zayif"
+            not_ = "Geçmişte bu açıklamanın başı banka masraf hesabına yazılmış — masraf mı, kontrol edin"
         coklu = cok_hesapli_ad(r, en)
         if coklu and kontrol is None:
             kontrol = "belirsiz"
@@ -998,7 +1082,8 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
             if r["yon"] != "cikis":
                 continue
             it = norm(r.get("islem_tipi"))
-            if re.search(r"KOMISYON|MASRAF|UCRET", it) and "TRANSFER" not in it:
+            if re.search(r"KOMISYON|MASRAF|UCRET", it) and "TRANSFER" not in it \
+                    and not re.search(r"KART.*(BORC|ODEME)", norm(r["aciklama"])):
                 r["masraf"] = True        # Garanti "Etiket: Faiz / Komisyon"
                 continue
             nr = norm(r["aciklama"])
@@ -1087,6 +1172,35 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         uyarilar.append(f"{len(kayitli)} hareket fiş listesinde zaten kayıtlı (fatura/fiş ile bankaya işlenmiş) — "
                         f"iki kez kaydolmasın diye fişe alınmadı: {ayr}" + (" …" if len(kayitli) > 12 else ""))
 
+    # ekstre dönemi defterde de varsa (ikinci kez yükleme / dönem sonu mutabakatı): defterde olup
+    # ekstrede karşılığı olmayan 102 satırları — çift işlenmiş masraf satırı gibi farklar
+    if len(kayitli) >= 5:
+        fis_ici = defaultdict(list)
+        for h_, ds in defter.items():
+            for d in ds:
+                fis_ici[(h_, str(d["x"].get("fisno", "")))].append(d)
+        artan = []
+        for (h_, _), ds in fis_ici.items():
+            for d in ds:
+                if id(d) in kullanildi:
+                    continue
+                # aynı fişte aynı tutarın tersi de varsa (KMH anapara / KMH kullanımı çifti) fark değil
+                if any(e is not d and abs(e["tutar"] + d["tutar"]) < 0.005 for e in ds):
+                    continue
+                artan.append(d)
+        if artan:
+            def _kisa_detay(x):
+                return re.sub(r"^\d{8,}\s*", "", _tarih_onekini_at(str(x.get("detay") or "")))[:28]
+
+            def _tl2(v):
+                return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            artan.sort(key=lambda d: d["gun"])
+            uyarilar.append(f"Fiş listesinde olup ekstrede karşılığı olmayan {len(artan)} banka satırı var (çift işlenmiş "
+                            f"olabilir, kontrol edin): " + "; ".join(
+                                f"fiş {d['x'].get('fisno', '')} {str(d['x'].get('fis_tarih', ''))[8:10]}.{str(d['x'].get('fis_tarih', ''))[5:7]} "
+                                f"{_tl2(d['tutar'])} {_kisa_detay(d['x'])}"
+                                for d in artan[:12]) + (" …" if len(artan) > 12 else ""))
+
     # ---------- fiş açıklaması (geçmişteki biçimle)
     def fis_aciklamasi(banka, tarih):
         onceki = gecmis.fis_aciklama.get(banka)
@@ -1127,6 +1241,10 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
             s["not"] = not_
         return s
 
+    # firma KMH anapara tahsilatının yanına "KMH KULLANIMI" (102 borç / KMH hesabı alacak) da yazıyor mu
+    kmh_kullanim = any("KMH KULLANIMI" in norm(_tarih_onekini_at(str(x.get("detay") or "")))
+                       and str(x.get("hesap", "")).startswith("102") and float(x.get("borc") or 0) > 0
+                       for x in km.gecmis.get("satirlar", []))
     hareketler = []          # (fiş bankası, tarih, saat, sıra, [satırlar])
     kur_yok, eslesmeyen, ozet = set(), [], Counter()
     for r in kayitlar:
@@ -1176,6 +1294,11 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                 if t_:
                     hesap, kaynak, kontrol = t_, "virman", "belirsiz"
                     not_ = "Kendi hesaplarınız arası transfer (açıklamadaki banka adından) — kontrol edin"
+        if (not hesap or kontrol == "eslesmedi") and r.get("_mevduat_yok"):
+            vh = next((k for k, a in hesaplar if k in alt and not k.startswith("102") and "VADELI" in norm(a)), "")
+            if vh:
+                hesap, kaynak, kontrol = vh, "mizan", "belirsiz"
+                not_ = "Vadeli hesap — hesap numarası mizanda yok; mizandaki vadeli hesap hareketleri hesabı önerildi"
         if not hesap:
             hesap = "198.01.001" if "198.01.001" in kodlar or not kodlar else \
                 next((k for k in sorted(kodlar) if k.startswith("198") and k in alt), "198.01.001")
@@ -1198,6 +1321,12 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                         (r["banka"], 0, tutar, "banka", r["doviz"], kur_, dv_t)]
         hareketler.append((r["banka"], r["tarih"], r.get("saat") or "", r["sira"], r, r["aciklama"], satirlar,
                            (kontrol, not_, kaynak), None))
+        if kmh_kullanim and r["tutar"] < 0 and re.search(r"\bKMH\b.*ANAPARA", norm(r["aciklama"])) \
+                and not hesap.startswith("198"):
+            hareketler.append((r["banka"], r["tarih"], r.get("saat") or "", r["sira"], r, "KMH KULLANIMI",
+                               [(r["banka"], tutar, 0, "banka", None, None, None),
+                                (hesap, 0, tutar, "karsi", None, None, None)],
+                               (None, "KMH kullanımı — geçmiş fişlerdeki gibi anapara tahsilatının karşılığı", "gecmis"), None))
 
     fisler = []
     fis = fis0
