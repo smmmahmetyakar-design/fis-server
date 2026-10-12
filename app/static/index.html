@@ -1014,6 +1014,17 @@ async function isle(){
       body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,kayitli_dahil:$('kayitliDahil').checked,yon,dosyalar})});
     if(!resp.ok){ const e=await resp.text(); toast('İşleme hatası: '+e,false); hideLoading(); $('durum').textContent=''; return; }
     const r=await resp.json();
+    // banka: hiçbir şey fişlenmedi çünkü hepsi fiş listesinde kayıtlı — hatalı aktarımı yeniden yapmak isteyebilir
+    if(apiTip()==='banka' && !(r.satirlar||[]).length && !$('kayitliDahil').checked
+       && (r.uyarilar||[]).some(u=>u.includes('zaten kayıtlı'))){
+      hideLoading(); $('durum').textContent='';
+      if(confirm('Bu ekstredeki hareketlerin hepsi fiş listesinde zaten kayıtlı görünüyor, bu yüzden fiş üretilmedi.\n\n'
+                 +'Önceki aktarım hatalıydı ve ekstreyi YENİDEN fişlemek istiyorsanız Tamam\'a basın.\n'
+                 +'(Logo\'daki eski fişleri silmeyi unutmayın, yoksa iki kez kaydolur.)')){
+        $('kayitliDahil').checked=true;
+        return isle();
+      }
+    }
     satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false; suzgec='hepsi'; bankaSuzgec='hepsi';
     $('duzenleBtn').style.display=satirlar.length?'inline-block':'none';
     render(r);
