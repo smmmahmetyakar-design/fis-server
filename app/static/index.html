@@ -251,6 +251,10 @@
       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#333;align-self:flex-end;margin-bottom:2px">
         <input type="checkbox" id="gecmisEkle" style="width:auto"> Çıktıya geçmiş fişleri de kat
       </label>
+      <label id="kayitliDahilKutu" title="Normalde fiş listesinde zaten bulunan banka hareketleri (daha önce aktarılmış ekstre, faturayla bankaya işlenmiş harcama) çift kayıt olmasın diye atlanır. Hatalı aktarımı yeniden yapmak için işaretleyin."
+             style="display:flex;align-items:center;gap:6px;font-size:13px;color:#333;align-self:flex-end;margin-bottom:2px">
+        <input type="checkbox" id="kayitliDahil" style="width:auto"> Fiş listesinde kayıtlı hareketleri de işle (yeniden işle)
+      </label>
       <button class="btn btn-yesil" onclick="isle()" style="align-self:flex-end">⚙ İşle (Önizle)</button>
       <button class="btn btn-edit" id="duzenleBtn" onclick="duzenleToggle()" style="display:none;align-self:flex-end">✎ Düzenle</button>
       <button class="btn btn-ana" onclick="disaAktar('xlsx')" style="align-self:flex-end">⬇ Excel</button>
@@ -364,6 +368,7 @@ function toast(msg,ok){const t=$('toast');t.textContent=msg;t.className='toast s
 
 function sekmeSec(tip){
   aktifTip=tip;
+  if($('kayitliDahilKutu')){ $('kayitliDahilKutu').style.display = tip==='banka' ? 'flex' : 'none'; $('kayitliDahil').checked=false; }
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tip===tip));
   // fatura_alis/fatura_satis → backend tip "fatura", label de düzgün
   const backTip = tip.startsWith('fatura') ? 'fatura' : tip;
@@ -1006,7 +1011,7 @@ async function isle(){
   try{
     const yon = aktifYon();
     const resp=await fetch(`/api/firma/${firmaKod}/isle/${apiTip()}`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,yon,dosyalar})});
+      body:JSON.stringify({firma_kod:firmaKod,tip:apiTip(),fis_baslangic:parseInt($('fisBas').value)||0,gecmis_ekle:$('gecmisEkle').checked,kayitli_dahil:$('kayitliDahil').checked,yon,dosyalar})});
     if(!resp.ok){ const e=await resp.text(); toast('İşleme hatası: '+e,false); hideLoading(); $('durum').textContent=''; return; }
     const r=await resp.json();
     satirlar=r.satirlar.map(s=>({...s})); duzenleMod=false; suzgec='hepsi'; bankaSuzgec='hepsi';

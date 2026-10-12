@@ -1338,6 +1338,9 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         for d in defter.get(r["banka"], []):
             if abs(d["tutar"] - hedef) < tol and abs(d["gun"] - gr) <= 3:
                 adaylar_k.append((abs(d["gun"] - gr), 0 if _ortak(r, [d]) else 1, abs(d["tutar"] - hedef), id(r), r, d))
+    kayitli_dahil = bool(getattr(km, "banka_kayitli_dahil", False))
+    if kayitli_dahil:
+        adaylar_k = []          # kullanıcı "kayıtlı hareketleri de işle" dedi (hatalı aktarımı yeniden yapıyor)
     kullanildi = set()
     for _, _, _, _, r, d in sorted(adaylar_k, key=lambda z: z[:4]):
         if r.get("_atla") or id(d) in kullanildi:
@@ -1356,7 +1359,7 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                 # yalnız bu bacak işlenmiş (karşısı geçici hesaba): öbür bacak tek başına fişlenir
                 es_["es"] = None; r["es"] = None
     for r in kayitlar:
-        if r.get("_atla") or r["es"] is not None or r["doviz"]:
+        if kayitli_dahil or r.get("_atla") or r["es"] is not None or r["doviz"]:
             continue
         gr = _gun(r["tarih"])
         havuz = sorted([d for d in defter.get(r["banka"], []) if id(d) not in kullanildi
@@ -1377,7 +1380,9 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
         ayr = "; ".join(f"{r['tarih'][8:10]}.{r['tarih'][5:7]} {_tl(r['tutar'])} {r['aciklama'][:30]} → fiş "
                         + "+".join(str(d["x"].get("fisno", "")) for d in ds) for r, ds in sorted(kayitli, key=lambda z: (z[0]["tarih"], z[0].get("saat") or ""))[:12])
         uyarilar.append(f"{len(kayitli)} hareket fiş listesinde zaten kayıtlı (fatura/fiş ile bankaya işlenmiş) — "
-                        f"iki kez kaydolmasın diye fişe alınmadı: {ayr}" + (" …" if len(kayitli) > 12 else ""))
+                        f"iki kez kaydolmasın diye fişe alınmadı: {ayr}" + (" …" if len(kayitli) > 12 else "")
+                        + ". Önceki aktarım hatalıysa ve yeniden fişlemek istiyorsanız 'Fiş listesinde kayıtlı "
+                          "hareketleri de işle' kutusunu işaretleyip tekrar İşle'ye basın")
 
     # ekstre dönemi defterde de varsa (ikinci kez yükleme / dönem sonu mutabakatı): defterde olup
     # ekstrede karşılığı olmayan 102 satırları — çift işlenmiş masraf satırı gibi farklar

@@ -853,6 +853,7 @@ class IsleBody(BaseModel):
     dosyalar: list[str] | None = None
     fis_baslangic: int = 0         # 0 ise otomatik (son+1)
     gecmis_ekle: bool = False      # çıktıya geçmiş fişleri de kat
+    kayitli_dahil: bool = False    # banka: fiş listesinde zaten kayıtlı hareketleri de fişle (hatalı aktarımı yeniden yapmak)
     yon: str = "alis"              # fatura için: alis | satis
 
 
@@ -867,6 +868,7 @@ def isle(kod: str, tip: str, body: IsleBody):
         # kendi hesapları arası virmanı tanımak için firma unvanı (mizan başlığı, yoksa firma adı)
         from app.banka import mizan_unvani
         km.firma_unvan = mizan_unvani(d / "mizan.xlsx")
+        km.banka_kayitli_dahil = bool(body.kayitli_dahil)
         km.firma_adi = _read_json(d / "meta.json", {}).get("ad", "")
 
     dosyalar = body.dosyalar if body.dosyalar is not None else \
