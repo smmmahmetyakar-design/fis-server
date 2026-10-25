@@ -1,0 +1,61 @@
+# FATURA FİŞİ KURALLARI — firma ayarı (isteğe bağlı)
+#
+# Bu dosya yoksa yalnız genel kurallar çalışır (RET/iptal fatura fişe girmez, KDV hesabının
+# oranı, tevkifat kodu → 360 hesabı, cari unvan kontrolü, iade yönü). Buradaki kurallar
+# geçmiş fişlerden ve yapay zekâdan önce gelir; yalnız kullanıcının bir kalem için birebir
+# öğrettiği hesap bunların önündedir.
+#
+# Yazım:
+#   * Hesap kodlarını TIRNAK içinde yazın: "600.04"  (tırnaksız 600.10 → 600.1 olabilir)
+#   * anahtar: kalem açıklamasında aranan düzenli ifade. Açıklama Türkçe BÜYÜK harfe
+#     çevrilir; İ/I farkı için [İI] yazın.  |  "ya da" demektir.  \b kelime sınırı.
+#   * Kurallar yukarıdan aşağı denenir, ilk eşleşen geçerlidir: özel kuralı genelden önce yazın
+#     (ör. "TAŞ TOZU NAKLİYESİ" nakliye sayılsın istiyorsanız nakliye kuralı taş tozundan önce).
+
+alis:
+  kalem:
+    # hizmet kalemleri → gider alt hesabı
+    - {anahtar: 'HAFR[İI]YAT|KAZI', hesap: "740.01.001"}
+    - {anahtar: 'NAKL[İI]YE|TAŞIMA', hesap: "740.01.002"}
+    # hesap yazılmazsa yalnız tür denetlenir: hizmet kalemi stoğa (15x) yazılırsa KONTROL
+    - {anahtar: 'BAKIM ONARIM|H[İI]ZMET', tur: hizmet}
+    # mal kalemleri → stok alt hesabı (özelden genele)
+    - {anahtar: 'TAŞ ?TOZU', hesap: "153.01.002"}
+    - {anahtar: 'KUM\b|MICIR|ÇAKIL', hesap: "153.01.001"}
+
+  # Hiçbir kurala uymayan kalem (silinirse mevcut işleyiş: geçmiş fiş / öğrenme / yapay zekâ)
+  # diger_kalem: {hesap: "770.01.001", uyari: "Kurala uymayan alış kalemi — hesabı kontrol edin"}
+
+  # Tevkifatlı alışta KDV satırı (yazılmazsa normal 191 hesabı). Tek hesap ya da oran bazında:
+  # tevkifat_kdv: "191.03.001"
+  # tevkifat_kdv: {"9/10": "191.03.001", "2/10": "191.03.002"}
+
+  # Tevkifat kodu → 360 hesap adında aranacak kelime (genel listeye ektir;
+  # genel liste: 606 İŞGÜCÜ/PERSONEL, 612 TEMİZLİK, 624 TAŞIMA/NAKLİYE, 603 BAKIM/ONARIM …)
+  # tevkifat_360:
+  #   "606": "İŞGÜCÜ"
+
+satis:
+  kalem:
+    - {anahtar: 'NAKL[İI]YE|TAŞIMA', hesap: "600.01"}
+    - {anahtar: 'HAFR[İI]YAT|K[İI]RA', hesap: "600.02"}
+    - {anahtar: 'KUM\b|MICIR|TAŞ', hesap: "600.03"}
+  # diger_kalem: {hesap: "600.03", uyari: "Yedek parça / malzeme satışı — alışı stokta mı, SMM (621) kaydı gerekir mi kontrol edin"}
+
+  # Tevkifat oranına göre satış (600) ve kalan KDV (391) hesabı. Tanımlı olmayan oranda,
+  # başka orana ayrılmış hesap kullanılmaz: KDV normal 391'e yazılır, satır KONTROL alır.
+  # tevkifat:
+  #   "2/10": {satis: "600.04", kdv: "391.04.01"}
+  #   "9/10": {kdv: "391.01.01"}
+
+iade:
+  # Alıştan iade (satış listesindeki İADE faturası): satıcı carisi borç, KDV hesaplanan KDV.
+  #   asil  → iade, malın/hizmetin ilk alındığı hesaptan düşülür (geçmiş fişlerden ya da kalem kuralından)
+  #   kod   → hep bu hesaba (ör. "679.01.001")
+  alis_iadesi: asil
+  # Satıştan iade (alış listesindeki İADE faturası): alıcı carisi alacak. Boşsa mizandaki 610 alt hesabı.
+  # satis_iadesi: "610.01"
+
+# Fatura unvanı ile cari hesap adı farklı yazılıyorsa aynı sayılacak adlar
+# cari_esdeger:
+#   - [TTNET, TÜRK TELEKOM]

@@ -19,7 +19,7 @@ from pathlib import Path
 from app import yapay_zeka
 from app.kurallar import norm
 
-OKUYUCU_SURUM = 6   # 2: fatura kalem açıklamaları (gider seçimi için) · 3: toplu PDF'i faturalara bölme · 4: kalem tutarları · 5: kalem KDV oranı · 6: tevkifat / çok oranlı özet
+OKUYUCU_SURUM = 7   # 2: fatura kalem açıklamaları (gider seçimi için) · 3: toplu PDF'i faturalara bölme · 4: kalem tutarları · 5: kalem KDV oranı · 6: tevkifat / çok oranlı özet · 7: RET/İPTAL damgası, tevkifat kodu, "Açıklama:" etiket satırları
 YONLER = ("alis", "satis")
 
 _kilit = threading.RLock()
@@ -96,7 +96,9 @@ def _sayfalar(p: Path) -> list:
             t = s.extract_text() or ""
             tablolar = [[[("" if c is None else str(c)) for c in row] for row in tb]
                         for tb in (s.extract_tables() or [])]
-            out.append({"ham_metin": t, "tablolar": tablolar})
+            # Reddedilen / iptal faturada entegratör sayfaya iri harfle "RET" / "İPTAL" basar
+            iri = "".join(c.get("text", "") for c in (s.chars or []) if (c.get("size") or 0) > 30)
+            out.append({"ham_metin": t, "tablolar": tablolar, "damga": _damga(iri)})
     if not any(s["ham_metin"].strip() for s in out):
         # taranmış PDF: sayfa sayfa OCR (toplu taranmış PDF'te her sayfa ayrı fatura olabilir)
         try:
@@ -114,6 +116,38 @@ def _sayfalar(p: Path) -> list:
 
 
 # ------------------------------------------------------------------ düzenli ifade okuma
+def _damga(iri_metin: str) -> str:
+    """Sayfadaki iri harfli damga: 'RET' (reddedilen) / 'IPTAL' / ''."""
+    kel = set(norm(iri_metin).split())
+    if kel & {"RET", "REDDEDILDI", "REDDEDILMISTIR"}:
+        return "RET"
+    if kel & {"IPTAL", "IPTALEDILDI", "IPTALEDILMISTIR"}:
+        return "IPTAL"
+    return ""
+
+
+# "Tevkifat Sebebi: 624 - Yük Taşımacılığı" · "KDV Tevkifat (606-İşgücü temin hizmetleri)" · "Tevkifat Kodu: 612"
+_TEVKIFAT_KOD_RE = re.compile(
+    r"(?:Tevkifat\s*(?:Sebebi|Kodu|Kod)\s*:?\s*|Tevkifat[^\n(]{0,40}\(\s*|\(\s*)(6[0-4]\d|8[0-2]\d)\s*[-–:)]",
+    re.IGNORECASE)
+
+
+_ETTN_RE = re.compile(r"ETTN\s*:?\s*([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})")
+
+
+def _ettn(metin: str) -> str:
+    m = _ETTN_RE.search(str(metin or ""))
+    return m.group(1).lower() if m else ""
+
+
+def _tevkifat_kodu(metin: str) -> str:
+    m = _TEVKIFAT_KOD_RE.search(str(metin or "").replace("\n", " "))
+    return m.group(1) if m else ""
+
+
+_ETIKET_RE = re.compile(r"[^:]{0,25}:\s*")      # "Açıklama:" gibi kalem altı etiket satırı
+
+
 def _kalemleri_duzelt(ham_kalemler, ek_vergi):
     """Eski ayrıştırıcı çok oranlı faturada matrahın TAMAMINI ilk orana yazar
     (diğer oranlarda matrah 0). KDV tutarlarından oran bazında matrah türetilir;
@@ -177,7 +211,7 @@ def _kalem_aciklamalari(tablolar: list) -> list:
             for r in tb[ri + 1:]:
                 if j < len(r):
                     v = re.sub(r"\s+", " ", str(r[j] or "")).strip()
-                    if len(v) > 2 and not re.fullmatch(r"[\d.,%\s]+(TL)?", v):
+                    if len(v) > 2 and not re.fullmatch(r"[\d.,%\s]+(TL)?", v) and not _ETIKET_RE.fullmatch(v):
                         out.append(v[:120])
             break
     tekil = []
@@ -214,6 +248,8 @@ def _kalem_detaylari(tablolar: list) -> list:
                 if len(v) <= 2 or re.fullmatch(r"[\d.,%\s]+(TL)?", v):
                     continue
                 tutar = _sayi(r[t]) if t is not None and t < len(r) else None
+                if tutar is None and _ETIKET_RE.fullmatch(v):
+                    continue        # kalemin altındaki "Açıklama:" satırı kalem değil
                 oran = _sayi(r[o]) if o is not None and o < len(r) else None
                 k_ = {"a": v[:120], "t": round(tutar, 2) if tutar is not None else None}
                 if oran is not None:
@@ -248,7 +284,9 @@ def _sayfa_oku(sayfa: dict, dosya: str, yon: str) -> dict | None:
         "yon": yon, "dosya": dosya, "kaynak": "pdf", "yz": [],
         "kalem_aciklamalari": _kalem_aciklamalari(sayfa.get("tablolar")),
         "kalem_detay": _kalem_detaylari(sayfa.get("tablolar")),
+        "durum": sayfa.get("damga") or "",
     }
+    f["tevkifat_kod"] = _tevkifat_kodu(metin) if f["tevkifat"] > 0 or re.search(r"(?i)tevkifat", metin) else ""
     f["eksik"] = _eksikler(f, metin)
     return f
 
@@ -260,32 +298,41 @@ def _dosya_oku(p: Path, yon: str) -> tuple:
     sayfalar = _sayfalar(p)
     if len(sayfalar) > 1:
         tek_tek = [_sayfa_oku(s, p.name, yon) for s in sayfalar]
+        # Aynı numara iki farklı faturada olabilir (e-Arşiv numarası her düzenleyicide baştan
+        # başlar): fatura kimliği numara + ETTN'dir.
+        ettnler = [_ettn(s["ham_metin"]) for s in sayfalar]
+        kimlik = [(f["fatura_no"], ettnler[i]) for i, f in enumerate(tek_tek) if f]
         nolar = [f["fatura_no"] for f in tek_tek if f]
-        if all(tek_tek) and all(nolar) and len(set(nolar)) == len(nolar) \
+        if all(tek_tek) and all(nolar) and len(set(kimlik)) == len(kimlik) \
                 and all(f["toplam"] > 0 for f in tek_tek):
             for i, f in enumerate(tek_tek):
                 f["sayfa"] = i + 1
             return tek_tek, [s["ham_metin"] for s in sayfalar]
         # Toplu PDF (ör. tarayıcıdan tek dosyada gelen faturalar), bazı faturalar birden
-        # çok sayfa: fatura numarası değişen sayfada yeni fatura başlar, numarasız sayfa
-        # önceki faturanın devamıdır.
+        # çok sayfa: fatura numarası (ya da ETTN'si) değişen sayfada yeni fatura başlar,
+        # numarasız sayfa önceki faturanın devamıdır.
         from app.sunucu_klasor import fatura_nolari
         gruplar = []
         for i, s_ in enumerate(sayfalar):
             f_ = tek_tek[i]
             no = (f_ or {}).get("fatura_no") or next(iter(fatura_nolari(s_["ham_metin"], ocr=bool(s_.get("ocr")))), "")
-            if no and (not gruplar or gruplar[-1]["no"] != no):
-                gruplar.append({"no": no, "ilk": i, "sayfalar": [s_]})
+            ettn = ettnler[i]
+            yeni = no and (not gruplar or gruplar[-1]["no"] != no
+                           or (ettn and gruplar[-1]["ettn"] and ettn != gruplar[-1]["ettn"]))
+            if yeni:
+                gruplar.append({"no": no, "ettn": ettn, "ilk": i, "sayfalar": [s_]})
             elif gruplar:
                 gruplar[-1]["sayfalar"].append(s_)
+                gruplar[-1]["ettn"] = gruplar[-1]["ettn"] or ettn
             else:
-                gruplar.append({"no": "", "ilk": i, "sayfalar": [s_]})
+                gruplar.append({"no": "", "ettn": ettn, "ilk": i, "sayfalar": [s_]})
         numarali = [g for g in gruplar if g["no"]]
-        if len(numarali) > 1 and len({g["no"] for g in numarali}) == len(numarali):
+        if len(numarali) > 1 and len({(g["no"], g["ettn"]) for g in numarali}) == len(numarali):
             out = []
             for g in gruplar:
                 birlesik = {"ham_metin": "\n".join(x["ham_metin"] for x in g["sayfalar"]),
-                            "tablolar": [t for x in g["sayfalar"] for t in x["tablolar"]]}
+                            "tablolar": [t for x in g["sayfalar"] for t in x["tablolar"]],
+                            "damga": next((x["damga"] for x in g["sayfalar"] if x.get("damga")), "")}
                 f = _sayfa_oku(birlesik, p.name, yon)
                 if f:
                     if not f.get("fatura_no") and g["no"]:
@@ -296,7 +343,8 @@ def _dosya_oku(p: Path, yon: str) -> tuple:
             if len(out) > 1:
                 return out, [s_["ham_metin"] for s_ in sayfalar]
     birlesik = {"ham_metin": "\n".join(s["ham_metin"] for s in sayfalar),
-                "tablolar": [t for s in sayfalar for t in s["tablolar"]]}
+                "tablolar": [t for s in sayfalar for t in s["tablolar"]],
+                "damga": next((s["damga"] for s in sayfalar if s.get("damga")), "")}
     f = _sayfa_oku(birlesik, p.name, yon)
     return ([f] if f else []), [birlesik["ham_metin"]]
 
@@ -386,7 +434,8 @@ def liste(k: Path, yon: str) -> list:
             "hata": kayit.get("hata", ""),
             "yz_notlar": kayit.get("yz_notlar", []),
             "faturalar": [{"fatura_no": f["fatura_no"], "tarih": f["tarih"], "cari_ad": f["cari_ad"],
-                           "toplam": f["toplam"], "eksik": f.get("eksik", []), "yz": f.get("yz", [])}
+                           "toplam": f["toplam"], "eksik": f.get("eksik", []), "yz": f.get("yz", []),
+                           "ret": f.get("durum", "")}
                           for f in fl],
         })
     return out

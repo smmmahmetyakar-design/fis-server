@@ -508,6 +508,10 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                         # GİB formatında bu sütun yazıyla tutarı içerir (örn. "Yalnız …TL")
                         sut["cari_ad"] = j
                         sut["_cari_aciklamadan"] = True
+                    elif "UYGULAMA YANIT" in c and "ACIKLAMA" not in c:
+                        sut["yanit"] = j                        # e-Fatura alıcı yanıtı: KABUL / RED
+                    elif "IPTAL" in c and "DURUM" in c:
+                        sut.setdefault("iptal", j)              # e-Arşiv İptal/İtiraz Durumu, Harici İptal Durumu
                     elif c == "SENARYO":
                         sut["senaryo"] = j
                     elif c in ("TUR", "FATURA TURU"):
@@ -762,6 +766,15 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                 if tevkifat > 0:
                     tur = "TEVKIFAT"
 
+                # Reddedilen (Uygulama Yanıtı RED) / iptal edilen fatura fişe girmez
+                durum = ""
+                yanit_ = norm(str(g(row, "yanit") or ""))
+                iptal_ = norm(str(g(row, "iptal") or ""))
+                if yanit_ in ("RED", "REDDEDILDI", "REDDEDILMISTIR", "RET") or yanit_.startswith("RED "):
+                    durum = "RED"
+                elif ("IPTAL" in iptal_ and "RED" not in iptal_) or iptal_ in ("EVET", "TRUE", "1"):
+                    durum = "IPTAL"      # "İptal talebi reddedildi" iptal sayılmaz
+
                 faturalar.append({
                     "fatura_no": str(fno).strip(),
                     "tarih": tarih,
@@ -774,6 +787,7 @@ def _elogo_fatura_satirlari(hamlar, yon="alis", teshis=None):
                     "ek_vergi": round(ek_vergi, 2),
                     "yon": yon, "dosya": h.get("dosya", ""),
                     "eksik": eksik, "kaynak": "liste",
+                    "durum": durum,
                 })
     return faturalar
 
@@ -1451,6 +1465,9 @@ _PDF_VERGI_SATIRI_RE = re.compile(
     re.IGNORECASE | re.MULTILINE)
 
 
+STOP_UNVAN = {"SIRKETI", "SIRKET", "LIMITED", "LTD", "STI", "A", "S", "AS", "ANONIM", "VE", "TIC", "SAN"}
+
+
 def _pdf_alici_adi_bul(metin: str) -> str:
     """SATIŞ faturasında 'SAYIN'/'ALICI' etiketinin altındaki (veya aynı
     satırındaki) alıcı unvanını çıkarır."""
@@ -1515,6 +1532,7 @@ def _pdf_tekil_fatura_ayikla(ham, yon="alis"):
     if yon == "satis":
         gonderici = _pdf_alici_adi_bul(metin)
     if not gonderici:
+        onceki = ""
         for s in satirlar_all0[:20]:
             if not s or s.lower() in ("e-fatura", "e-fatura."):
                 continue
@@ -1526,6 +1544,7 @@ def _pdf_tekil_fatura_ayikla(ham, yon="alis"):
                 continue
             eslesmeler = list(_PDF_UNVAN_RE.finditer(s))
             if not eslesmeler:
+                onceki = s
                 continue
             bitis = eslesmeler[0].end()
             for sonraki in eslesmeler[1:]:
@@ -1534,6 +1553,10 @@ def _pdf_tekil_fatura_ayikla(ham, yon="alis"):
                 else:
                     break
             gonderici = s[:bitis].strip()
+            # Unvan iki satıra bölünmüş: "ÖRNEK KİMYA TEKSTİL … LİMİTED" / "ŞİRKETİ" — ek tek başına
+            # kalmışsa önceki satır unvanın başıdır
+            if onceki and not (set(norm(gonderici).split()) - STOP_UNVAN):
+                gonderici = f"{onceki} {gonderici}"
             break
     if not gonderici:
         aday = []
@@ -1765,22 +1788,43 @@ def _liste_pdf_birlestir(liste, pdfler):
     * Listede olmayan PDF faturaları eklenir.
     * Liste tam ama PDF'le tutar uyuşmuyorsa uyarı verilir (liste esas alınır).
     Döner: (faturalar, uyarilar)"""
+    from app.fatura_kural import ayni_taraf_genel
     uyarilar = []
+    # e-Arşiv numaraları (GIB2026000000036) her düzenleyicide baştan başlar: aynı numaralı
+    # PDF başka firmanın faturası olabilir. Numara + taraf adı birlikte eşleştirilir.
     pdf_idx = {}
     for p in pdfler:
         a = _fno_anahtar(p.get("fatura_no"))
-        if a and a not in pdf_idx:
-            pdf_idx[a] = p
+        if a:
+            pdf_idx.setdefault(a, []).append(p)
     kullanilan, tamamlanan, tutar_farki, kdv_haric, tevkifat_pdf = set(), [], [], [], []
+    baska_taraf = []
     for f in liste:
         a = _fno_anahtar(f["fatura_no"])
-        p = pdf_idx.get(a)
-        if not p:
+        adaylar = [p for p in pdf_idx.get(a, []) if id(p) not in kullanilan]
+        if not adaylar:
             continue
-        kullanilan.add(a)
+        f_ad = "" if "cari" in (f.get("eksik") or []) else f.get("cari_ad", "")
+        uyan = [p for p in adaylar if ayni_taraf_genel(f_ad, p.get("cari_ad", "")) is True]
+        belirsiz = [p for p in adaylar if ayni_taraf_genel(f_ad, p.get("cari_ad", "")) is None]
+        # ad tutmasa da (PDF'te unvan yanlış okunmuş olabilir) tutar birebir aynıysa aynı faturadır
+        l_top_ = float(f.get("toplam") or 0)
+        ayni_tutar = [p for p in adaylar if l_top_ and (
+            abs(float(p.get("toplam") or 0) - l_top_) <= 0.05
+            or abs(float(p.get("toplam") or 0) + float(p.get("tevkifat") or 0) - l_top_) <= 0.05)]
+        p = (uyan or belirsiz or ayni_tutar or [None])[0]
+        if not p:
+            baska_taraf.append(f"{f['fatura_no']} ({f_ad[:20]} ≠ PDF {adaylar[0].get('cari_ad', '')[:20]})")
+            continue
+        kullanilan.add(id(p))
         f["pdf"] = p.get("dosya", "")
         f["pdf_sayfa"] = p.get("sayfa", 0)
         f["pdf_yer"] = p.get("pdf_yer") or "alan"
+        # PDF'teki RET / İPTAL damgası ve tevkifat kodu listede olmayabilir
+        if p.get("durum") and not f.get("durum"):
+            f["durum"] = p["durum"]
+        if p.get("tevkifat_kod") and not f.get("tevkifat_kod"):
+            f["tevkifat_kod"] = p["tevkifat_kod"]
         # fatura kalemlerinin açıklamaları (gider hesabı seçimi için) yalnız PDF'te var
         if p.get("kalem_aciklamalari") and not f.get("kalem_aciklamalari"):
             f["kalem_aciklamalari"] = p["kalem_aciklamalari"]
@@ -1862,9 +1906,12 @@ def _liste_pdf_birlestir(liste, pdfler):
     # listede olmayan PDF faturaları
     eklenen, eklenemeyen = [], []
     gorulen = set()
+    liste_anahtar = {_fno_anahtar(f["fatura_no"]) for f in liste}
     for p in pdfler:
         a = _fno_anahtar(p.get("fatura_no"))
-        if a and (a in kullanilan or a in gorulen):
+        # numarası listede olan PDF eklenmez (başka tarafın aynı numaralı faturası olsa bile —
+        # unvanı yanlış okunmuş PDF çift kayıt üretmesin)
+        if id(p) in kullanilan or (a and (a in liste_anahtar or a in gorulen)):
             continue
         gorulen.add(a)
         if p.get("sunucudan"):
@@ -1875,8 +1922,13 @@ def _liste_pdf_birlestir(liste, pdfler):
         if not p.get("cari_ad"):
             p["cari_ad"] = p.get("fatura_no") or p.get("dosya", "")
         liste.append(p)
-        eklenen.append(p.get("fatura_no") or p.get("dosya", ""))
+        if not p.get("durum"):         # RET / iptal PDF'i ayrıca "fişe alınmadı" diye bildirilir
+            eklenen.append(p.get("fatura_no") or p.get("dosya", ""))
 
+    if baska_taraf:
+        uyarilar.append(f"{len(baska_taraf)} faturanın numarasıyla eşleşen PDF başka firmanın faturası "
+                        f"(e-Arşiv numaraları her düzenleyicide baştan başlar) — PDF kullanılmadı: "
+                        f"{_kisa_liste(baska_taraf, 3)}")
     if tamamlanan:
         uyarilar.append(f"{len(tamamlanan)} faturanın listede eksik bilgisi PDF'ten tamamlandı")
     if kdv_haric:
@@ -2089,15 +2141,23 @@ def liste_pdf_karsilastir(liste: list, pdfler: list, tolerans: float = 0.05) -> 
 
 
 def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
-                gider_ogrenme=None, gider_onerici=None, kalem_onerici=None):
+                gider_ogrenme=None, gider_onerici=None, kalem_onerici=None, kurallar=None):
     """
     Fatura listesi -> muhasebe fişi.
     ALIŞ: gider(7xx) + 191(indirilecek KDV) borç / 320(satıcı) alacak
     SATIŞ: 120(alıcı) borç / 600(satış) + 391(hesaplanan KDV) alacak
     TEVKIFAT: KDV'nin sorumlu kısmı ayrı hesaba (191.03/391.03)
     FAKTORING (TEMELFATURA + Ek Vergi): 780 BSMV borç, KDV yok
+    İADE: alıştan iade (satış listesinde) 320 borç / asıl alış hesabı + 391 alacak;
+          satıştan iade (alış listesinde) 610 + 191 borç / 120 alacak
+    kurallar: fatura_kural.Kurallar (firma kural dosyası + genel kurallar); None → yalnız genel
     """
+    from app import fatura_kural
+    if kurallar is None:
+        kurallar = fatura_kural.Kurallar({}, km.hesaplar)
     uyarilar = []
+    for h_ in kurallar.hatalar:
+        uyarilar.append(f"Fatura kuralları: {h_}")
     hes_list = [{"kod": k, "ad": a} for k, a in km.hesaplar]
     # tekrar edenleri kaldır
     seen = set(); hes_uniq = []
@@ -2111,15 +2171,20 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
     # Aynı fatura birden çok listede olabilir (ör. ay klasöründe hem İVD hem entegratör listesi):
     # bir kez işlenir; KDV dağılımı olan kayıt tercih edilir.
     if faturalar:
+        # e-Arşiv numarası her düzenleyicide baştan başlar: aynı numara + FARKLI taraf ayrı faturadır
         tekil, cift_liste = {}, []
         for f in faturalar:
             a = _fno_anahtar(f["fatura_no"]) or id(f)
-            if a in tekil:
+            f_ad = "" if "cari" in (f.get("eksik") or []) else f.get("cari_ad", "")
+            anahtar = next((k for k in tekil if k[0] == a and fatura_kural.ayni_taraf_genel(
+                f_ad, "" if "cari" in (tekil[k].get("eksik") or []) else tekil[k].get("cari_ad", "")) is not False),
+                None)
+            if anahtar is not None:
                 cift_liste.append(f["fatura_no"])
-                if "kdv" in (tekil[a].get("eksik") or []) and "kdv" not in (f.get("eksik") or []):
-                    tekil[a] = f
+                if "kdv" in (tekil[anahtar].get("eksik") or []) and "kdv" not in (f.get("eksik") or []):
+                    tekil[anahtar] = f
             else:
-                tekil[a] = f
+                tekil[(a, len(tekil))] = f
         if cift_liste:
             faturalar = list(tekil.values())
             uyarilar.append(f"{len(cift_liste)} fatura birden çok listede var, bir kez işlendi: {_kisa_liste(cift_liste)}")
@@ -2157,6 +2222,16 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         if f.get("uyari"):
             uyarilar.append(f["uyari"])
 
+    # Reddedilen (alıcı RED yanıtı / PDF'te RET damgası) ve iptal edilen fatura fişe girmez
+    reddedilen = [f for f in faturalar if f.get("durum") in ("RED", "RET", "IPTAL")]
+    if reddedilen:
+        faturalar = [f for f in faturalar if f.get("durum") not in ("RED", "RET", "IPTAL")]
+        uyarilar.insert(0, f"{len(reddedilen)} fatura reddedilmiş ya da iptal edilmiş — fişe alınmadı: "
+                           + _kisa_liste([f"{f['fatura_no']} ({'iptal' if f['durum'] == 'IPTAL' else 'RET'})"
+                                          for f in reddedilen]))
+        if not faturalar:
+            return [], uyarilar
+
     # Çift kayıt: geçmiş fişlerde (fiş listesi / muavin) açıklamasında bu fatura
     # numarası geçiyorsa fatura daha önce muhasebeleşmiştir.
     try:
@@ -2179,18 +2254,27 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                                f"aktarmadan önce çıkar: {_kisa_liste(cift)}")
 
     alt_kodlar = alt_hesap_kodlari(km.hesaplar)
-    vars_gider = next((k for onek in (("740", "770", "760", "730", "150", "153") if yon == "alis"
-                                      else ("600", "601", "602"))
-                       for k, _ in km.hesaplar if k in alt_kodlar and (k == onek or k.startswith(onek + "."))),
-                      "")
-    if not vars_gider and yon == "alis":   # tercihli gruplarda yoksa herhangi bir 7xx gider alt hesabı
-        vars_gider = next((k for k, _ in km.hesaplar if k in alt_kodlar and k[:1] == "7" and not k.startswith("79")), "")
+
+    def _vars_gider(y):
+        v = next((k for onek in (("740", "770", "760", "730", "150", "153") if y == "alis"
+                                 else ("600", "601", "602"))
+                  for k, _ in km.hesaplar if k in alt_kodlar and (k == onek or k.startswith(onek + "."))),
+                 "")
+        if not v and y == "alis":   # tercihli gruplarda yoksa herhangi bir 7xx gider alt hesabı
+            v = next((k for k, _ in km.hesaplar if k in alt_kodlar and k[:1] == "7" and not k.startswith("79")), "")
+        return v
+    ters_yon = "satis" if yon == "alis" else "alis"
+    vars_gider_yon = {yon: _vars_gider(yon), ters_yon: _vars_gider(ters_yon)}
+    vars_gider = vars_gider_yon[yon]
     gider_bekleyen = set()
     kalem_bekleyen = set()
     kdv_eksik = {}      # "%20 için 191" -> {fatura no}
     fark_yazilan, fark_dengesiz, yeni_hesap = [], [], {}
     tevkifatli, tevkifat_tahminli, tevkifat_tutarsiz = [], [], []
     tevkifat_hesapsiz, tevkifat_kdvden, tevk_hesap_belirsiz = set(), set(), set()
+    # kural sonuçları (uyarılar için)
+    kural_bolunen, kural_tur_celiski, kural_diger = [], [], {}
+    kdv_oran_duzeltilen, tevk_kural, tevk_uyumsuz, cari_ad_uyumsuz_l, iade_l = [], [], [], [], []
     # bu firmanın geçmiş kayıtlarında (fiş listesi / muavin) gider-gelir tarafında kullanılmış hesaplar
     kullanilan_gider = {str(r.get("hesap", "")).strip() for r in km.gecmis.get("satirlar", [])
                         if float((r.get("borc") if yon == "alis" else r.get("alacak")) or 0) > 0}
@@ -2212,23 +2296,35 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 and not ({"kdv", "tutar"} & set(f.get("eksik") or [])):
             tevk = _tevkifat_tahmin(f["kalemler"], toplam, f.get("ek_vergi") or 0)
             tevk_tahmin = tevk > 0
+        # tevkifat oranı (2/10 … 9/10): tevkifatın ait olduğu oranın KDV'sine göre
+        t_oran, satis_tevk_kdv_orani, satis_tevk_hesap = None, None, ""
+        if tevk > 0:
+            kdvli_ = [k for k in f.get("kalemler") or [] if k.get("oran") and (k.get("kdv") or 0) > 0]
+            t_oran = (fatura_kural.tevkifat_orani(tevk, sum(k["kdv"] for k in kdvli_))
+                      or next((r for k in kdvli_ for r in [fatura_kural.tevkifat_orani(tevk, k["kdv"])] if r), None))
 
-        if f.get("tur") == "IADE":
-            uyarilar.append(f"{cari_ad[:40]} ({fatura_no}): IADE faturasi - borc/alacak yonu kontrol edilmeli")
+        # İADE: kayıt yönü (borç/alacak tarafları ve KDV) listenin yönüdür; cari ile asıl hesap
+        # karşı yönden gelir. Alıştan iade (satış listesinde): satıcının 320 carisi borç, malın
+        # alındığı hesap alacak, KDV 391. Satıştan iade (alış listesinde): 610 + 191 borç,
+        # müşterinin 120 carisi alacak.
+        iade = f.get("tur") == "IADE"
+        hy = ters_yon if iade else yon        # cari ve asıl (gider/gelir) hesabın yönü
+        satis_iadesi = iade and yon == "alis"
+        alis_iadesi = iade and yon == "satis"
 
         # FATURA HESAPLARI: firma kuralı yerine geçmiş fişler referans alınır.
         # Aynı cari daha önce hangi 320/120 ve hangi gider/gelir hesabıyla
         # kullanılmışsa onu tercih ederiz. Geçmişte kayıt yoksa varsayılana düşeriz.
-        gecmis_es = km.fatura_gecmis_eslestir(cari_ad, yon)
+        gecmis_es = km.fatura_gecmis_eslestir(cari_ad, hy)
         cari_kod = gecmis_es.get("cari", "")
         gider_kod = gecmis_es.get("ana", "")
         cari_kaynak = gecmis_es.get("kaynak", "")
-        gecmis_kdv = gecmis_es.get("kdv", [])
+        gecmis_kdv = [] if iade else gecmis_es.get("kdv", [])
 
         # Geçmiş fişlerde bu cari hiç geçmemişse (yeni tedarikçi/müşteri veya
         # cari adı ilk kez okunuyor) mizan hesap adlarıyla da dene — bugünkü
         # eslestir() düzeltmesiyle aynı mekanizma (kurallar.py).
-        cari_onek = ("320", "329", "331", "335", "336") if yon == "alis" else ("120", "121")
+        cari_onek = ("320", "329", "331", "335", "336") if hy == "alis" else ("120", "121")
         # Kullanıcının bu cari için düzelttiği/onayladığı hesap her şeyden önce gelir
         cari_ogr = km.ogrenme.get(norm(cari_ad)) if getattr(km, "ogrenme", None) else None
         if cari_ogr and cari_ogr in alt_kodlar and cari_ogr.startswith(cari_onek):
@@ -2243,6 +2339,22 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         vars_cari = "198.01.001"
         if not cari_kod or not cari_kod.startswith(cari_onek):
             cari_kod = vars_cari
+        iade_ters_cari = False
+        if iade and cari_kod == vars_cari:
+            # Karşılıklı çalışılan firma: iadenin beklenen tarafında (120/320) hesabı yok ama
+            # öbür tarafta var — 198'e atmak yerine o kullanılır, KONTROL ile
+            es2 = km.fatura_gecmis_eslestir(cari_ad, yon).get("cari", "")
+            if es2 and es2 in alt_kodlar:
+                cari_kod, iade_ters_cari = es2, True
+
+        # Cari hesabın mizan adı fatura unvanını tutmuyorsa (ör. geçmişte başka firmanın
+        # carisine yazılmış) KONTROL. Kullanıcının bu cari için öğrettiği hesap denetlenmez.
+        cari_ad_uyumsuz = False
+        if cari_kod != vars_cari and cari_kaynak != "ogrenme" and "cari" not in (f.get("eksik") or []):
+            ad_h = km.hesap_adi(cari_kod)
+            if ad_h and kurallar.ayni_taraf(cari_ad, ad_h) is False:
+                cari_ad_uyumsuz = True
+                cari_ad_uyumsuz_l.append(f"{fatura_no} {cari_ad[:25]} → {cari_kod} {ad_h[:25]}")
 
         # GİDER / GELİR HESABI — öncelik sırası:
         #   1) kullanıcının bu cari için yaptığı düzeltme (gider öğrenmesi)
@@ -2251,9 +2363,21 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         #   4) varsayılan ALT hesap (ana hesap "740" değil — ona kayıt atılamaz)
         gider_kaynak, gider_not = "", ""
         yasak_onek = ("320", "329", "331", "335", "336", "120", "121", "100", "102", "191", "391")
-        ogr = (gider_ogrenme or {}).get(f"{yon}|{norm(cari_ad)}")
-        kalem_es = _kalem_ogrenmesi(f, gider_ogrenme, yon, alt_kodlar)
-        if kalem_es and not kalem_es["benzer"]:
+        sabit_iade = ""          # iadede firma kuralı/610 hesabı: kalemlere bölünmez
+        if satis_iadesi:
+            sabit_iade = kurallar.satis_iadesi_hesabi()
+        elif alis_iadesi and kurallar.iade.get("alis_iadesi") not in ("", "asil"):
+            sabit_iade = kurallar.iade["alis_iadesi"]
+        ogr = None if satis_iadesi else (gider_ogrenme or {}).get(f"{hy}|{norm(cari_ad)}")
+        kalem_es = None if satis_iadesi else _kalem_ogrenmesi(f, gider_ogrenme, hy, alt_kodlar)
+        if sabit_iade:
+            gider_kod, gider_kaynak = sabit_iade, "kural"
+            gider_not = "Satıştan iade" if satis_iadesi else "Alıştan iade (kural dosyasındaki hesap)"
+        elif satis_iadesi:
+            # 610 hesabı yok: satışın kendi hesabı ters kayıtla (borç) — kontrol
+            gider_kod = gider_kod if gider_kod in alt_kodlar else vars_gider_yon[hy]
+            gider_kaynak = "tahmin"
+        elif kalem_es and not kalem_es["benzer"]:
             # kullanıcının bu kalem açıklaması için seçtiği hesap (cariden bağımsız, en özel bilgi)
             gider_kod, gider_kaynak, gider_not = kalem_es["kod"], "ogrenme_kalem", kalem_es["not"]
         elif ogr and ogr in alt_kodlar:
@@ -2268,14 +2392,14 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             # Cari adı okunamamış ve kalem açıklaması da yoksa modele verilecek bilgi yok
             # (yalnız fatura no) — sormak boşuna Ollama'yı meşgul eder.
             bilgi_var = bool(f.get("kalem_aciklamalari")) or "cari" not in f.get("eksik", [])
-            if gider_onerici and bilgi_var:
+            if gider_onerici and bilgi_var and not iade:     # öneri motoru listenin yönüne göre kurulu
                 oneri = gider_onerici(cari_ad, f.get("kalem_aciklamalari") or [], yon)
                 if oneri and oneri.get("kod") in alt_kodlar:
                     gider_kod, gider_kaynak, gider_not = oneri["kod"], "yz", oneri.get("gerekce", "")
                 elif oneri and oneri.get("bekliyor"):
                     gider_bekleyen.add(cari_ad)
             if not gider_kod:
-                gider_kod, gider_kaynak = vars_gider, "tahmin"
+                gider_kod, gider_kaynak = vars_gider_yon[hy], "tahmin"
 
         # Belge kaynağı rozeti: yapay zekâ ile tamamlanan > PDF'ten gelen/tamamlanan
         belge_rozet = ("yz" if f.get("yz") else
@@ -2284,18 +2408,52 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         # Kalem başına hesap: öğrenilmiş (birebir / benzer) ya da yapay zekâ önerisi
         kalem_hesap_detay = [dict(k) for k in (f.get("kalem_detay") or [])[:12]] or \
             [{"a": a, "t": None} for a in (f.get("kalem_aciklamalari") or [])[:12]]
-        if kalem_hesap_detay:
-            onek_ = f"kalem|{yon}|"
+        # Satıştan iade ya da kural dosyasında sabit hesaplı iade: tüm tutar tek hesaba
+        if sabit_iade or satis_iadesi:
+            kalem_hesap_detay = [dict(k, k=gider_kod, kk="kural" if sabit_iade else "fatura")
+                                 for k in kalem_hesap_detay]
+        elif kalem_hesap_detay:
+            onek_ = f"kalem|{hy}|"
             ogrenilen_ = {k[len(onek_):]: v for k, v in (gider_ogrenme or {}).items()
                           if k.startswith(onek_) and v in alt_kodlar}
             eksik_ = False
             for k in kalem_hesap_detay:
                 o_ = _kalem_ogrenilmis(k.get("a", ""), ogrenilen_) if ogrenilen_ else None
+                if o_ and not o_[1]:
+                    # kullanıcının bu kalem için birebir öğrettiği hesap her şeyden önce gelir
+                    k["k"], k["kk"] = o_[0], "ogrenme"
+                    continue
+                # firma kural dosyası: kalem açıklaması → hesap (benzer öğrenmeden, geçmişten,
+                # yapay zekâdan önce). Yalnız tür veren kural ("tur: hizmet") hesabı seçmez, denetler.
+                kr = kurallar.kalem_kurali(hy, k.get("a", ""))
+                if kr:
+                    if kr.get("tur"):
+                        k["tur"] = kr["tur"]
+                    if kr.get("diger") and kr.get("not"):
+                        kural_diger.setdefault(kr["not"], []).append(fatura_no)
+                    if kr.get("hesap"):
+                        k["k"], k["kk"] = kr["hesap"], "kural"
+                        k["g"] = kr.get("not") or f"Kalem kuralı: {fatura_kural.anahtar_okunur(kr['anahtar'])}"
+                        continue
                 if o_:
-                    k["k"], k["kk"] = o_[0], ("benzer" if o_[1] else "ogrenme")
+                    k["k"], k["kk"] = o_[0], "benzer"
                 else:
                     eksik_ = True
-            if eksik_ and kalem_onerici:
+            # Kalem kuralları faturanın tamamını kapsıyorsa fatura hesabı da kuraldan gelir
+            # (kalem tutarları okunamadıysa ya da tek hesapsa bölmeye gerek kalmaz).
+            kural_k = [k for k in kalem_hesap_detay if k.get("kk") == "kural"]
+            if kural_k and gider_kaynak not in ("ogrenme_kalem",):
+                tutarli_ = [k for k in kalem_hesap_detay if k.get("t") is not None]
+                mat_top_ = round(sum(float(x.get("matrah") or 0) for x in f.get("kalemler") or []), 2)
+                kapsar = (not tutarli_) or abs(sum(k["t"] for k in tutarli_) - mat_top_) <= 0.05 + 0.01 * len(tutarli_)
+                hepsi_kural = all(k.get("kk") in ("kural", "ogrenme") for k in kalem_hesap_detay)
+                if kapsar and hepsi_kural and len({k["k"] for k in kalem_hesap_detay}) == 1:
+                    gider_kod, gider_kaynak = kalem_hesap_detay[0]["k"], "kural"
+                    gider_not = kalem_hesap_detay[0].get("g", "")
+                elif kapsar and gider_kaynak in ("tahmin", "yz", ""):
+                    en_ = max(kural_k, key=lambda k: k.get("t") or 0)
+                    gider_kod, gider_kaynak, gider_not = en_["k"], "kural", en_.get("g", "")
+            if eksik_ and kalem_onerici and not iade:
                 yz_ = kalem_onerici(cari_ad, [k.get("a", "") for k in kalem_hesap_detay], yon)
                 if yz_ and yz_.get("bekliyor"):
                     kalem_bekleyen.add(fatura_no)
@@ -2312,7 +2470,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             # (karışık fatura: kiralama + malzeme) bölünür; fatura hesabıyla aynı olanlar onaylı sayılır.
             karisik = len({k["k"] for k in kalem_hesap_detay if k.get("kk") == "yz"}) > 1
             for k in kalem_hesap_detay:
-                if k.get("kk") in ("ogrenme", "benzer"):
+                if k.get("kk") in ("ogrenme", "benzer", "kural"):
                     continue
                 if k.get("kk") == "yz" and (not fatura_guvenilir or (karisik and k["k"] != gider_kod)):
                     continue
@@ -2324,9 +2482,17 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         def gider_bolumleri(oran, matrah):
             """Bir KDV oranının matrahını kalem hesaplarına böler: [(kod, tutar, açıklamalar, kaynak)].
             Kalem tutarları o oranın matrahını tutmuyorsa (fatura altı iskonto vb.) bölünmez."""
-            tek = [(gider_kod or vars_gider, matrah, None, None)]
+            vg = vars_gider_yon[hy]
+            # Tevkifatlı satış: tevkifatın ait olduğu oranın matrahı kural dosyasındaki
+            # tevkifatlı satış hesabına (ör. 600.04 "%20 tevkifatlı satışlar")
+            if satis_tevk_hesap and oran == satis_tevk_kdv_orani:
+                return [(satis_tevk_hesap, matrah, None, "kural")]
+            tek = [(gider_kod or vg, matrah, None, None)]
+            # "Açıklama:" gibi tutarsız ara satırlar bölmeyi engellemesin: tutarlı kalemler
+            # o oranın matrahını tutuyorsa yeter
             det = [k for k in kalem_hesap_detay if k.get("t") is not None and k.get("k")]
-            if not det or len(det) != len(kalem_hesap_detay):
+            if not det or (len(det) != len(kalem_hesap_detay)
+                           and any(k.get("t") is not None and not k.get("k") for k in kalem_hesap_detay)):
                 return tek
             if any("o" in k for k in det):
                 det = [k for k in det if k.get("o") == oran]
@@ -2338,25 +2504,73 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             for k in det:
                 g = gruplar.setdefault(k["k"], {"t": 0.0, "a": [], "kk": set()})
                 g["t"] += k["t"]; g["a"].append(k["a"]); g["kk"].add(k.get("kk", ""))
-            if len(gruplar) == 1 and next(iter(gruplar)) == (gider_kod or vars_gider):
-                return [(gider_kod or vars_gider, matrah, [k["a"] for k in det], None)]
+            if len(gruplar) == 1 and next(iter(gruplar)) == (gider_kod or vg):
+                return [(gider_kod or vg, matrah, [k["a"] for k in det], None)]
             out, kalan = [], round(matrah, 2)
             sirali = sorted(gruplar.items(), key=lambda x: -x[1]["t"])
             for i, (kod, g) in enumerate(sirali):
                 tutar = kalan if i == len(sirali) - 1 else round(g["t"], 2)
                 kalan = round(kalan - tutar, 2)
                 kaynak_ = ("yz" if "yz" in g["kk"] else "ogrenme_kalem_benzer" if "benzer" in g["kk"]
-                           else "ogrenme_kalem" if g["kk"] <= {"ogrenme"} else None)
+                           else "ogrenme_kalem" if g["kk"] <= {"ogrenme"}
+                           else "kural" if "kural" in g["kk"] else None)
                 out.append((kod, tutar, g["a"], kaynak_))
+            if len(out) > 1 and any(x[3] == "kural" for x in out):
+                kural_bolunen.append(fatura_no)
             return out
+
+        def tur_celiskisi(hesap, aciklamalar):
+            """Alışta kalem türü (kural dosyası: mal/hizmet) ile hesap grubu (15x stok / gider)
+            çelişiyor mu? Döner: çelişen kalem açıklaması ya da ''."""
+            if hy != "alis" or not hesap or iade:
+                return ""
+            grup = "mal" if hesap.startswith("15") else "hizmet"
+            for k in kalem_hesap_detay:
+                if aciklamalar is not None and k.get("a") not in aciklamalar:
+                    continue
+                if k.get("tur") and k["tur"] != grup:
+                    return k.get("a", "")
+            return ""
 
         def gider_yaz(oran, matrah, detay_ek=""):
             """Gider (alış) / gelir (satış) satır(lar)ı — kalem hesaplarına bölünmüş olabilir."""
             for kod, tutar, aciklamalar, kaynak_ in gider_bolumleri(oran, matrah):
                 if yon == "alis":
-                    fisler.append(sat(kod, tutar, 0, detay_ek, rol="gider", kaynak_=kaynak_, kalemler=aciklamalar))
+                    s_ = sat(kod, tutar, 0, detay_ek, rol="gider", kaynak_=kaynak_, kalemler=aciklamalar)
                 else:
-                    fisler.append(sat(kod, 0, tutar, detay_ek, rol="gider", kaynak_=kaynak_, kalemler=aciklamalar))
+                    s_ = sat(kod, 0, tutar, detay_ek, rol="gider", kaynak_=kaynak_, kalemler=aciklamalar)
+                ek_k, not_ = [], ""
+                # kalem türü (mal/hizmet) ile hesap grubu (stok/gider) çelişiyor mu
+                cel = tur_celiskisi(kod, aciklamalar)
+                if cel:
+                    ek_k.append("kalem_turu")
+                    not_ = (f"'{cel[:40]}' {'hizmet' if kod.startswith('15') else 'mal'} kalemi — "
+                            f"{'stoğa' if kod.startswith('15') else 'gidere'} yazıldı")
+                    kural_tur_celiski.append(fatura_no)
+                elif aciklamalar is None and kaynak_ != "kural":
+                    # bölünemedi (kalem tutarları faturayı tutmuyor) ama kural başka hesap diyor
+                    fark_ = [k for k in kalem_hesap_detay if k.get("kk") == "kural" and k.get("k") != kod]
+                    if fark_:
+                        ek_k.append("kalem_kurali")
+                        not_ = (f"Kalem kuralı: '{fark_[0].get('a', '')[:35]}' → {fark_[0]['k']} "
+                                f"(kalem tutarları faturayı tutmadığı için bölünmedi)")
+                # tevkifata ayrılmış satış hesabı tevkifatsız kaleme / başka orana yazılmasın
+                if yon == "satis" and not iade and kod.startswith("6"):
+                    tevk_oranli = (tevk > 0 and oran == satis_tevk_kdv_orani)
+                    ayrilmis = (kurallar.baska_orana_ayrilmis(kod, t_oran if tevk_oranli else None, "satis")
+                                if tevk_oranli else kurallar.tevkifata_ayrilmis(kod, "satis"))
+                    # hesap adında başka bir tevkifat oranı yazıyor (ör. "2/10 TEVKİFATLI SATIŞLAR"a 9/10)
+                    ad_orani_farkli = tevk_oranli and not kurallar.satis_391_uyar(kod, t_oran)
+                    if ayrilmis or ad_orani_farkli or (not tevk_oranli and "TEVK" in norm(km.hesap_adi(kod))):
+                        ek_k.append("tevkifat_tur")
+                        not_ = not_ or ("Tevkifatlı satış hesabı tevkifatsız kaleme yazıldı" if not tevk_oranli
+                                        else f"Hesap başka tevkifat oranına ayrılmış ({fatura_kural.oran_metin(t_oran)} tevkifat)")
+                        tevk_uyumsuz.append(f"{fatura_no} ({kod})")
+                if ek_k:
+                    s_["kontrol"] = list(dict.fromkeys((s_.get("kontrol") or []) + ek_k))
+                    if not_:
+                        s_["not"] = not_
+                fisler.append(s_)
 
         def sat(hesap, borc, alacak, detay_ek="", rol=None, kaynak_=None, kalemler=None):
             # Açıklama alanları SADECE firma adı (KDV oranı, "(faktoring)" gibi ekler yok).
@@ -2400,7 +2614,8 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 if kaynak_ and kaynak_ != gider_kaynak:
                     s["not"] = {"yz": "Kalem bazında yapay zekâ önerisi",
                                 "ogrenme_kalem": "Kalem öğrenmesi",
-                                "ogrenme_kalem_benzer": "Benzer kalem öğrenmesi"}.get(kaynak_, "")
+                                "ogrenme_kalem_benzer": "Benzer kalem öğrenmesi",
+                                "kural": "Firma kuralı (kalem açıklamasına göre)"}.get(kaynak_, "")
                     if not s["not"]:
                         del s["not"]
                 elif gider_not:
@@ -2428,6 +2643,12 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                     kontrol.append("cari")
                 if belge_rozet == "yz":
                     kontrol.append("belge")
+                if cari_ad_uyumsuz and hesap == cari_kod:
+                    kontrol.append("cari_ad")
+                    s["not"] = f"Cari hesap adı ({km.hesap_adi(hesap)[:40]}) fatura unvanını tutmuyor"
+            if iade and s["rol"] in ("gider", "cari") and (s.get("kaynak") == "tahmin" or hesap == vars_cari
+                                                           or (s["rol"] == "cari" and iade_ters_cari)):
+                kontrol.append("iade")
             # (kullanıcı cariyi onayladıysa aynı geçmiş kaydından gelen gider de onaylı sayılır)
             if gecmis_es.get("zayif") and cari_kaynak != "ogrenme" and \
                     ((s["rol"] == "gider" and gider_kaynak == "gecmis") or s["rol"] == "cari"):
@@ -2437,19 +2658,40 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             return s
 
         def gecmis_kdv_sec(oran, yon):
+            # Firma kuralı: tevkifatlı alışta KDV sorumlu sıfatıyla KDV hesabına (ör. 191.03.003)
+            if yon == "alis" and tevk > 0 and not iade:
+                h_ = kurallar.alis_tevkifat_kdv_hesabi(t_oran)
+                if h_:
+                    return h_
+            # Satıştan iade: adında İADE geçen 191 hesabı (ör. "SAT.İADE ED.VE VAZGEÇİLEN KDV")
+            if satis_iadesi:
+                h_ = kurallar.satis_iadesi_kdv()
+                if h_:
+                    return h_
             # Kullanıcı bu oranın KDV satırını bir kez düzelttiyse o hesap (firma geneli)
             ogr = (gider_ogrenme or {}).get(f"kdv|{yon}|{oran}")
             if ogr and ogr in alt_kodlar:
                 return ogr
-            # Geçmişte aynı cari için kullanılan KDV hesabını öncele.
-            if gecmis_kdv:
+            # Geçmişte aynı cari için kullanılan KDV hesabını öncele — tevkifat / sorumlu KDV
+            # hesapları normal KDV satırına yazılmaz (onlar tevkifat satırında seçilir).
+            kdv_adaylari = [k for k in gecmis_kdv
+                            if not any(x in norm(km.hesap_adi(k)) for x in ("TEVK", "SORUMLU"))]
+            if kdv_adaylari:
                 # Birden fazla KDV hesabı varsa mizan adında oranı tutan hesabı ara.
-                for kod in gecmis_kdv:
+                for kod in kdv_adaylari:
                     ad = km.hesap_adi(kod)
                     nad = norm(ad).replace(" ", "")
                     if re.search(rf"%{str(oran)}(?!\d)", nad) or re.search(rf"(?<!\d){str(oran)}(?!\d)", nad):
                         return kod
-                return gecmis_kdv[0]
+                # Hesabın adı başka bir oran yazıyorsa (ör. %10 KDV'yi "%20 İNDİRİLECEK KDV"ye)
+                # kullanılmaz: mizanda oranı tutan hesap aranır.
+                if fatura_kural.kdv_orani_uyar(km.hesap_adi(kdv_adaylari[0]), oran):
+                    return kdv_adaylari[0]
+                dogru = _kdv_hesabi_ad([{"kod": k, "ad": a} for k, a in km.hesaplar], oran, yon)
+                if dogru:
+                    kdv_oran_duzeltilen.append(f"{fatura_no} %{oran} → {dogru}")
+                    return dogru
+                return kdv_adaylari[0]
             return _kdv_hesabi_ad([{"kod": k, "ad": a} for k, a in km.hesaplar], oran, yon)
 
         def tevkifat_hesap_sec(yon):
@@ -2489,9 +2731,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         # gider/gelir yaz. Kullanıcı Düzenle'de KDV'yi ayırabilir.
         if not f["kalemler"] and toplam > 0:
             if yon == "alis":
-                fisler.append(sat(gider_kod or vars_gider, toplam, 0, rol="gider"))
+                fisler.append(sat(gider_kod or vars_gider_yon[hy], toplam, 0, rol="gider"))
             else:
-                fisler.append(sat(gider_kod or vars_gider, 0, toplam, rol="gider"))
+                fisler.append(sat(gider_kod or vars_gider_yon[hy], 0, toplam, rol="gider"))
         # Tevkifatlı SATIŞ: tevkifat, ait olduğu oranın KDV'sinden düşülür; kalan KDV tek satırda
         # tevkifat hesabına (391.04.02 gibi) ALACAK yazılır — ayrı borç satırı yok.
         satis_net_oran = None
@@ -2501,6 +2743,17 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             aday = (eslesen or sorted(kdvli, key=lambda k: -k["kdv"]))[:1]
             if aday and aday[0]["kdv"] + 0.01 >= tevk:
                 satis_net_oran = aday[0]["oran"]
+                t_oran = fatura_kural.tevkifat_orani(tevk, aday[0]["kdv"])
+                satis_tevk_kdv_orani = satis_net_oran
+                if not iade:
+                    satis_tevk_hesap = kurallar.satis_tevkifat_ayari(t_oran).get("satis") or ""
+                if satis_tevk_hesap:
+                    # önizlemedeki kalem hesabı da tevkifatlı satış hesabını göstersin
+                    tek_oran_ = len({x["oran"] for x in f["kalemler"]}) == 1
+                    for k in kalem_hesap_detay:
+                        if k.get("o") == satis_net_oran or ("o" not in k and tek_oran_):
+                            k["k"], k["kk"] = satis_tevk_hesap, "kural"
+                            k["g"] = f"Tevkifatlı satış ({fatura_kural.oran_metin(t_oran)})"
         for k in f["kalemler"]:
             oran = k["oran"]
             matrah = k["matrah"]; kdv = k["kdv"]
@@ -2522,13 +2775,41 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 if oran == satis_net_oran:
                     satis_net_oran = ("yazildi", oran)
                     t_kod = tevkifat_hesap_sec("satis")
+                    t_durum = ""
+                    # Kural: tevkifat oranının 391 hesabı (kural dosyası > adında oran yazan hesap).
+                    # Başka orana ayrılmış hesap (ör. 2/10 için açılmış 391.04.02'ye 9/10) kullanılmaz.
+                    cfg_ = kurallar.satis_tevkifat_ayari(t_oran)
+                    if cfg_.get("kdv"):
+                        if t_kod != cfg_["kdv"]:
+                            t_kod, t_durum = cfg_["kdv"], "kural"
+                    elif t_kod and (kurallar.baska_orana_ayrilmis(t_kod, t_oran, "kdv")
+                                    or not kurallar.satis_391_uyar(t_kod, t_oran)):
+                        alt_ = kurallar.satis_391_bul(t_oran)
+                        if alt_:
+                            t_kod, t_durum = alt_, "kural"
+                        else:
+                            # normal hesaplanan KDV hesabı (tevkifat adlı hesaplar hariç)
+                            t_kod = (kdv_kod if kdv_kod and "TEVK" not in norm(km.hesap_adi(kdv_kod))
+                                     else _kdv_hesabi_ad(hes_list, oran, "satis")) or kdv_kod
+                            t_durum = "uyumsuz"
                     if not t_kod:
                         t_kod = kdv_kod          # ayrı tevkifat hesabı yok: net KDV normal 391'e
                         if kdv_kod:
                             tevkifat_kdvden.add(fatura_no)
                         else:
                             tevkifat_hesapsiz.add(fatura_no)
-                    fisler.append(sat(t_kod, 0, round(kdv - tevk, 2), f" (%{oran} KDV − tevkifat)", rol="tevkifat"))
+                    s_t = sat(t_kod, 0, round(kdv - tevk, 2), f" (%{oran} KDV − tevkifat)", rol="tevkifat")
+                    if t_durum == "kural":
+                        tevk_kural.append(fatura_no)
+                        s_t["kontrol"] = [x for x in (s_t.get("kontrol") or []) if x != "tevkifat_hesap"]
+                        if not s_t["kontrol"]:
+                            del s_t["kontrol"]
+                    elif t_durum == "uyumsuz":
+                        s_t["kontrol"] = list(dict.fromkeys((s_t.get("kontrol") or []) + ["tevkifat_tur"]))
+                        s_t["not"] = (f"{fatura_kural.oran_metin(t_oran)} tevkifatlı satış için ayrı 391 hesabı yok — "
+                                      f"kalan KDV normal hesaplanan KDV'ye yazıldı")
+                        tevk_uyumsuz.append(f"{fatura_no} ({fatura_kural.oran_metin(t_oran)} → {t_kod})")
+                    fisler.append(s_t)
                 else:
                     fisler.append(sat(kdv_kod, 0, kdv, f" (%{oran} KDV)"))
 
@@ -2557,7 +2838,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         fark = round(toplam_dahil - yazilan, 2)
         if fark > 0.01:
             ek_k = gecmis_es.get("ek", "")
-            fark_kod = ek_k if ek_k and ek_k in alt_kodlar else (gider_kod or vars_gider)
+            fark_kod = ek_k if ek_k and ek_k in alt_kodlar else (gider_kod or vars_gider_yon[hy])
             fisler.append(sat(fark_kod, fark, 0) if yon == "alis" else sat(fark_kod, 0, fark))
             fark_yazilan.append(f"{fatura_no} ({fark:,.2f} → {fark_kod or 'boş'})")
         elif fark < -0.01:
@@ -2574,9 +2855,26 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         if tevk > 0:
             tevk_kod = tevkifat_hesap_sec(yon)
             if yon == "alis":
+                # Kural: 360 hesabı tevkifat koduna (606 işgücü, 612 temizlik …) ve oranına uymalı
+                kod_ = str(f.get("tevkifat_kod") or "").strip()
+                yeni_, t_durum = kurallar.tevkifat_360(tevk_kod, kod_, t_oran)
+                if t_durum == "kural":
+                    tevk_kod = yeni_
+                    tevk_kural.append(fatura_no)
                 if not tevk_kod:
                     tevkifat_hesapsiz.add(fatura_no)
-                fisler.append(sat(tevk_kod, 0, tevk, " (KDV tevkifatı)", rol="tevkifat"))
+                s_t = sat(tevk_kod, 0, tevk, " (KDV tevkifatı)", rol="tevkifat")
+                if t_durum == "kural" and s_t.get("kontrol"):
+                    s_t["kontrol"] = [x for x in s_t["kontrol"] if x != "tevkifat_hesap"]
+                    if not s_t["kontrol"]:
+                        del s_t["kontrol"]
+                elif t_durum == "uyumsuz":
+                    ne_ = f"{kod_} kodlu" if kod_ else f"{fatura_kural.oran_metin(t_oran)}"
+                    s_t["kontrol"] = list(dict.fromkeys((s_t.get("kontrol") or []) + ["tevkifat_tur"]))
+                    s_t["not"] = (f"{ne_} tevkifat bu hesabın adına uymuyor ({km.hesap_adi(tevk_kod)[:35]}) "
+                                  f"— mizanda uygun 360 hesabı yok")
+                    tevk_uyumsuz.append(f"{fatura_no} ({ne_} → {tevk_kod})")
+                fisler.append(s_t)
             elif satis_net:
                 pass        # tevkifat KDV satırından düşüldü, kalan KDV tevkifat hesabında
             else:
@@ -2603,10 +2901,42 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             fisler.append(sat(cari_kod or "198.01.001", cari_tutar, 0))
 
         # Bu firmanın geçmişinde hiç kullanılmamış gider hesabı (yapay zekâ/varsayılan seçtiyse)
-        if gider_kaynak in ("yz", "tahmin") and kullanilan_gider and gider_kod and gider_kod not in kullanilan_gider:
+        if gider_kaynak in ("yz", "tahmin") and kullanilan_gider and gider_kod and gider_kod not in kullanilan_gider \
+                and not iade:
             yeni_hesap.setdefault(gider_kod, []).append(fatura_no)
+        if iade:
+            iade_l.append(f"{fatura_no} {cari_ad[:22]}: {cari_kod} / {gider_kod or '?'}")
 
         fis += 1
+
+    # ---- kural sonuçları
+    if iade_l:
+        if yon == "satis":
+            uyarilar.append(f"{len(iade_l)} alıştan iade faturası: satıcı carisi borç, malın/hizmetin alındığı hesap ve "
+                            f"hesaplanan KDV alacak yazıldı (cari / hesap): {_kisa_liste(iade_l, 4)}")
+        else:
+            uyarilar.append(f"{len(iade_l)} satıştan iade faturası: satıştan iadeler ve KDV borç, alıcı carisi alacak "
+                            f"yazıldı (cari / hesap): {_kisa_liste(iade_l, 4)}")
+    if kural_bolunen:
+        uyarilar.append(f"{len(set(kural_bolunen))} fatura kalem kurallarına göre birden çok hesaba bölündü: "
+                        f"{_kisa_liste(sorted(set(kural_bolunen)), 4)}")
+    if kural_tur_celiski:
+        uyarilar.insert(0, f"{len(set(kural_tur_celiski))} faturada kalem türü ile hesap uyuşmuyor (hizmet stoğa / mal "
+                           f"gidere) — KONTROL işaretli gider satırlarını düzelt: {_kisa_liste(sorted(set(kural_tur_celiski)), 4)}")
+    for not_, nolar in kural_diger.items():
+        uyarilar.append(f"{len(set(nolar))} faturada kurala uymayan kalem: {not_} — {_kisa_liste(sorted(set(nolar)), 4)}")
+    if kdv_oran_duzeltilen:
+        uyarilar.append(f"{len(kdv_oran_duzeltilen)} KDV satırında carinin geçmişteki KDV hesabı başka oranlıydı; "
+                        f"oranı tutan hesap yazıldı: {_kisa_liste(kdv_oran_duzeltilen, 4)}")
+    if tevk_kural:
+        uyarilar.append(f"{len(set(tevk_kural))} faturada tevkifat hesabı tevkifat koduna/oranına göre seçildi: "
+                        f"{_kisa_liste(sorted(set(tevk_kural)), 4)}")
+    if tevk_uyumsuz:
+        uyarilar.insert(0, f"{len(tevk_uyumsuz)} tevkifat satırında hesap tevkifat türüne uymuyor ve mizanda uygun hesap "
+                           f"yok — hesabı açıp düzeltin ya da onaylayın: {_kisa_liste(tevk_uyumsuz, 4)}")
+    if cari_ad_uyumsuz_l:
+        uyarilar.insert(0, f"{len(cari_ad_uyumsuz_l)} faturada cari hesabın adı fatura unvanını tutmuyor (yanlış cari "
+                           f"olabilir) — KONTROL: {_kisa_liste(cari_ad_uyumsuz_l, 3)}")
 
     kontrollu = sorted({s["evrak_no"] or s["fisno"] for s in fisler if s.get("kontrol")})
     if kontrollu:
@@ -2933,12 +3263,13 @@ def isle_fis(kalemler, km, fis0=1, karsi_hesap="198.01.001"):
 
 
 def isle(tip, hamlar, km, fis0, yon="alis", pdf_faturalar=None, gider_ogrenme=None, gider_onerici=None,
-         kalem_onerici=None):
+         kalem_onerici=None, kurallar=None):
     if tip == "banka":
         return isle_banka(hamlar, km, fis0)
     if tip == "fatura":
         return isle_fatura(hamlar, km, fis0, yon=yon, pdf_faturalar=pdf_faturalar,
-                           gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici, kalem_onerici=kalem_onerici)
+                           gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici, kalem_onerici=kalem_onerici,
+                           kurallar=kurallar)
     if tip == "cek":
         return isle_cek(hamlar, km, fis0)
     if tip == "fis":

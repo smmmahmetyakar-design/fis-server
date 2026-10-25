@@ -161,6 +161,13 @@
   .gerekce{font-size:10.5px;color:#6a5a8a;margin-top:2px;line-height:1.3;max-width:260px}
   .kaynak.belge-pdf{background:#e0ecf7;color:#24456b}
   .kaynak.belge-yz{background:#e7defa;color:#4b2f86}
+  .kural-alani{margin-top:12px}
+  .kural-alani>summary{cursor:pointer;padding:7px 10px;border:1px solid var(--kenar);border-radius:6px;background:#fafbfc;font-size:13px;list-style-position:inside}
+  .kural-alani textarea{width:100%;min-height:260px;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.45;padding:8px;border:1px solid var(--kenar);border-radius:6px;box-sizing:border-box;resize:vertical}
+  .kural-alani .kural-hata{color:#8a2c22}
+  .kalem-kod.kk-kural{color:#7a3e00}
+  .kaynak.kural{background:#fde3c4;color:#7a3e00}
+  .durum.ret{background:#f6d5d1;color:#8a2c22}
   .grp-a td{background:#fff}
   .grp-b td{background:#faf8f3}
 </style>
@@ -241,6 +248,19 @@
       <div id="yzDurum" class="yz-durum"></div>
       <div id="yzSinav" class="yz-sinav"></div>
       <div id="faturaPdfListe" style="margin-top:8px"></div>
+      <details id="kuralAlani" class="kural-alani">
+        <summary><b>Fatura kuralları (bu firma)</b> <span id="kuralOzet" class="hint">yükleniyor…</span></summary>
+        <div class="hint" style="margin:6px 0">Kalem açıklamasına göre hesap (mal → 153 alt hesabı, hizmet → 740, satış → 600 alt hesabı),
+          tevkifat oranına göre satış/KDV hesabı, iade hesapları. Geçmiş fişlerden ve yapay zekâdan önce gelir.
+          Dosya yoksa yalnız genel kurallar çalışır (RET/iptal fatura alınmaz, KDV hesabı oranı, tevkifat kodu → 360, cari unvan kontrolü, iade yönü).</div>
+        <textarea id="kuralMetin" spellcheck="false" placeholder="Kural yok. 'Örnek şablon' ile başlayabilirsiniz."></textarea>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+          <button class="btn btn-ana btn-kucuk" onclick="kuralKaydet()">Kaydet</button>
+          <button class="btn btn-kucuk" onclick="kuralOrnek()">Örnek şablon</button>
+          <button class="btn btn-kucuk" onclick="kuralKaldir()" title="Kural dosyasını sil — yalnız genel kurallar kalır">Kaldır</button>
+        </div>
+        <div id="kuralHata" class="hint" style="margin-top:6px"></div>
+      </details>
     </div>
   </div>
 
@@ -589,7 +609,7 @@ async function firmaDurum(){
   if(gorunen.length){
     bl.innerHTML=eskiNot+gorunen.map(f=>`<div class="dosya-satir"><span style="flex:1">📎 ${f}</span><button class="btn btn-x" onclick="belgeSil('${f.replace(/'/g,"")}')">🗑</button></div>`).join('');
   }else bl.innerHTML='<div class="hint">Bu sayfada henüz belge yüklenmedi.</div>'+eskiNot;
-  if(aktifTip.startsWith('fatura')) faturaPdfListele();
+  if(aktifTip.startsWith('fatura')){ faturaPdfListele(); kuralGoster(); }
   donemSatirCiz();
   loadCiktilar();
   // fiş no önerisi
@@ -687,7 +707,7 @@ async function faturaPdfListele(){
       const yzNot=x.yz&&x.yz.length?`<div class="yz-not">yapay zekâ: ${x.yz.map(e=>EKSIK_AD[e]||e).join(', ')}</div>`:'';
       const durum=f.faturalar.length>1&&!x.eksik.length&&f.durum!=='okunamadi'?(x.yz.length?'yz_tamamladi':'tam'):f.durum;
       h+=`<tr>
-        <td>${esc(x.fatura_no)||'<i>?</i>'}${ilk?`<div class="dosya-adi">${esc(f.dosya)}${fl.length>1?` · ${fl.length} fatura`:''}</div>`:''}</td>
+        <td>${esc(x.fatura_no)||'<i>?</i>'}${x.ret?` <span class="durum ret" title="${x.ret==='IPTAL'?'İptal edilmiş':'Reddedilmiş'} fatura — fişe alınmaz">${x.ret==='IPTAL'?'İPTAL':'RET'}</span>`:''}${ilk?`<div class="dosya-adi">${esc(f.dosya)}${fl.length>1?` · ${fl.length} fatura`:''}</div>`:''}</td>
         <td>${x.tarih?esc(x.tarih.split('-').reverse().join('.')):'<i>?</i>'}</td>
         <td>${esc(x.cari_ad)||'<i>?</i>'}${yzNot}</td>
         <td class="sayi">${x.toplam?nf(x.toplam):''}</td>
@@ -752,6 +772,42 @@ async function sinavBaslat(){
   sinavGoster(true);
 }
 
+// ---- firma fatura kuralları (data/<firma>/fatura_kurallari.yaml)
+let kuralOrnekMetin='';
+async function kuralGoster(){
+  if(!firmaKod){ $('kuralOzet').textContent=''; return; }
+  const firma=firmaKod;
+  let v; try{ v=await (await fetch(`/api/firma/${firma}/fatura-kurallari`)).json(); }catch(e){ return; }
+  if(firma!==firmaKod) return;
+  kuralOrnekMetin=v.ornek||'';
+  $('kuralMetin').value=v.metin||'';
+  kuralDurumYaz(v);
+}
+function kuralDurumYaz(v){
+  const o=v.ozet||{};
+  $('kuralOzet').innerHTML=v.var
+    ? `— açık: alış ${o.alis_kalem||0} · satış ${o.satis_kalem||0} kalem kuralı${o.satis_tevkifat?` · ${o.satis_tevkifat} tevkifat oranı`:''}${(v.hatalar||[]).length?` · <span class="kural-hata">${v.hatalar.length} sorun</span>`:''}`
+    : '— yok (yalnız genel kurallar)';
+  $('kuralHata').innerHTML=(v.hatalar||[]).length?'<ul class="uyari-liste kural-hata">'+v.hatalar.map(h=>`<li>${esc(h)}</li>`).join('')+'</ul>':'';
+}
+async function kuralKaydet(){
+  if(!firmaKod) return;
+  const r=await fetch(`/api/firma/${firmaKod}/fatura-kurallari`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({metin:$('kuralMetin').value})});
+  const v=await r.json().catch(()=>({}));
+  if(!r.ok){ $('kuralHata').innerHTML=`<span class="kural-hata">Kaydedilmedi: ${esc(v.detail||r.status)}</span>`; return; }
+  kuralDurumYaz(v);
+  if(!(v.hatalar||[]).length) $('kuralHata').textContent='Kaydedildi. Yeniden İşle\'ye basınca uygulanır.';
+}
+function kuralOrnek(){
+  if($('kuralMetin').value.trim() && !confirm('Kutudaki kuralların yerine örnek şablon yazılsın mı?')) return;
+  $('kuralMetin').value=kuralOrnekMetin;
+  $('kuralAlani').open=true;
+}
+async function kuralKaldir(){
+  if(!firmaKod || !confirm('Bu firmanın fatura kuralları silinsin mi? (yalnız genel kurallar kalır)')) return;
+  $('kuralMetin').value='';
+  await kuralKaydet();
+}
 async function faturaPdfSil(dosya){
   if(!confirm('Bu PDF silinsin mi?\n'+dosya)) return;
   await fetch(`/api/firma/${firmaKod}/fatura-pdf/${aktifYon()}/${encodeURIComponent(dosya)}`,{method:'DELETE'});
@@ -1038,8 +1094,14 @@ function totals(){
   return {b,al,dengeli:Math.abs(b-al)<0.01};
 }
 const KAYNAK_AD={yz:'yapay zekâ', tahmin:'varsayılan', ogrenme:'öğrenilen', gecmis:'geçmiş fiş', ogrenme_kalem:'öğrenilen (kalem)', ogrenme_kalem_benzer:'benzer kalem',
-  masraf:'banka masrafı', vergi:'vergi ödemesi', sgk:'SGK', kredi_karti:'kredi kartı', virman:'virman / döviz', mizan:'hesap adı', banka:'banka'};
+  masraf:'banka masrafı', vergi:'vergi ödemesi', sgk:'SGK', kredi_karti:'kredi kartı', virman:'virman / döviz', mizan:'hesap adı', banka:'banka',
+  kural:'firma kuralı'};
 const KONTROL_AD={belirsiz:'geçmişte aynı açıklama birden çok hesaba yazılmış', zayif:'açıklamanın yalnız bir kelimesi tuttu',
+  kalem_turu:'kalem türü hesapla uyuşmuyor (hizmet kalemi stoğa / mal kalemi gidere yazıldı)',
+  kalem_kurali:'kalem kuralı başka hesap diyor, kalem tutarları faturayı tutmadığı için bölünmedi',
+  cari_ad:'cari hesabın adı fatura unvanını tutmuyor — yanlış cari olabilir',
+  tevkifat_tur:'tevkifat hesabı faturanın tevkifat koduna/oranına uymuyor (mizanda uygun hesap yok)',
+  iade:'iade faturası — cari / hesap kontrol edilmeli',
   eslesmedi:'karşı hesap bulunamadı (198)', benzer:'hesap adı bir harf farklı', vergi:'vergi/SGK hesabı kesin değil',
   gider:'gider hesabı yapay zekâ/varsayılan', cari:'cari bulunamadı (198)', kdv:'KDV hesabı yok',
   belge:'fatura bilgisi yapay zekâ ile okundu', benzer_ad:'geçmişte unvanın yalnız bir kısmı tuttu',
@@ -1137,10 +1199,10 @@ function render(r){
   const fatHucre=(s,ilk)=>{
     if(!fatSut) return '';
     if(!ilk) return '<td class="l fat-ic"></td>';
-    const KK={ogrenme:'öğrenilen',benzer:'benzer kalemden öğrenilen — kontrol edin',yz:'yapay zekâ önerisi',bekliyor:'yapay zekâ hazırlıyor',fatura:'faturanın hesabı (öğrenilen/geçmiş)'};
+    const KK={ogrenme:'öğrenilen',benzer:'benzer kalemden öğrenilen — kontrol edin',yz:'yapay zekâ önerisi',bekliyor:'yapay zekâ hazırlıyor',fatura:'faturanın hesabı (öğrenilen/geçmiş)',kural:'firma kuralı'};
     const det=(s.fatura_kalem_detay&&s.fatura_kalem_detay.length)?s.fatura_kalem_detay:(s.fatura_kalemleri||[]).map(a=>({a,t:null}));
     const kal=det.map(k=>({k, metin:k.a+(k.t!=null?` (${nf(k.t)})`:'')}));
-    const kodHTML=k=>k.k?`<span class="kalem-kod kk-${k.kk||''}" title="${esc((hesapAd(k.k)||'')+' — '+(KK[k.kk]||'')+(k.g&&k.kk==='yz'?': '+k.g:'')+(k.yk?' · yapay zekâ önerisi: '+k.yk+' '+(hesapAd(k.yk)||''):''))}">(${esc(k.k)})</span> `
+    const kodHTML=k=>k.k?`<span class="kalem-kod kk-${k.kk||''}" title="${esc((hesapAd(k.k)||'')+' — '+(KK[k.kk]||'')+(k.g&&(k.kk==='yz'||k.kk==='kural')?': '+k.g:'')+(k.yk?' · yapay zekâ önerisi: '+k.yk+' '+(hesapAd(k.yk)||''):''))}">(${esc(k.k)})</span> `
       :(k.kk==='bekliyor'?'<span class="kalem-kod kk-bekliyor" title="yapay zekâ hazırlıyor">(…)</span> ':'');
     const dag=(s.kdv_dagilim||[]).filter(k=>k.matrah||k.kdv);
     const kalHTML=kal.length?`<div class="fat-kalem" title="${esc(kal.map(x=>(x.k.k?'('+x.k.k+') ':'')+x.metin).join('\n'))}">${kal.slice(0,6).map(x=>`<div>• ${kodHTML(x.k)}${esc(x.metin)}</div>`).join('')}${kal.length>6?`<div class="hint">+${kal.length-6} kalem</div>`:''}</div>`:`<div class="hint">${s.pdf?'PDF\'te kalem açıklaması okunamadı':'kalem açıklaması için PDF yok'}</div>`;

@@ -30,7 +30,7 @@ from app.kurallar import KuralMotoru, norm, kural_excel_oku, mizan_hesaplar
 from app.belge_oku import belge_oku
 from app import isleyici
 from app import sunucu_klasor as sk
-from app import fatura_pdf, yapay_zeka, gider_yz
+from app import fatura_pdf, yapay_zeka, gider_yz, fatura_kural
 
 DATA_DIR = Path(os.environ.get("FIS_DATA", "/data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -627,6 +627,49 @@ def fatura_pdf_yz(kod: str, yon: str, fname: str):
     return {"ok": True}
 
 
+# ----------------------------------------------------------------- fatura kuralları (firma)
+class KuralMetinBody(BaseModel):
+    metin: str = ""
+
+
+def _kural_ozeti(k) -> dict:
+    return {"alis_kalem": len(k.kalem["alis"]), "satis_kalem": len(k.kalem["satis"]),
+            "satis_tevkifat": len(k.satis_tevkifat), "alis_tevkifat_kdv": len(k.alis_tevkifat_kdv)}
+
+
+@app.get("/api/firma/{kod}/fatura-kurallari")
+def fatura_kurallari_oku(kod: str):
+    """Firmanın fatura fişi kuralları (yoksa boş) + örnek şablon + dosyadaki sorunlar."""
+    d = firma_dir(kod)
+    p = d / fatura_kural.DOSYA_ADI
+    metin = p.read_text(encoding="utf-8") if p.exists() else ""
+    hes = mizan_hesaplar(d / "mizan.xlsx") if (d / "mizan.xlsx").exists() else []
+    k = fatura_kural.firma_kurallari(d, hes)
+    return {"var": p.exists(), "metin": metin, "ornek": fatura_kural.ornek_metin(),
+            "hatalar": k.hatalar, "ozet": _kural_ozeti(k),
+            "zaman": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds") if p.exists() else ""}
+
+
+@app.post("/api/firma/{kod}/fatura-kurallari")
+def fatura_kurallari_yaz(kod: str, body: KuralMetinBody):
+    """Kural dosyasını doğrulayıp kaydeder. YAML okunamıyorsa kaydetmez; hesap kodu
+    mizanda yoksa kaydeder ama o satırı kullanmaz (hatalar listesinde döner)."""
+    d = firma_dir(kod)
+    hes = mizan_hesaplar(d / "mizan.xlsx") if (d / "mizan.xlsx").exists() else []
+    k, hatalar = fatura_kural.dogrula(body.metin, hes)
+    if k is None:
+        raise HTTPException(400, hatalar[0] if hatalar else "Kural dosyası okunamadı")
+    p = d / fatura_kural.DOSYA_ADI
+    if not body.metin.strip():
+        if p.exists():
+            p.unlink()
+        return {"ok": True, "var": False, "hatalar": [], "ozet": _kural_ozeti(k)}
+    if p.exists():                       # bir önceki sürüm yedeği
+        shutil.copy2(p, d / (fatura_kural.DOSYA_ADI + ".yedek"))
+    p.write_text(body.metin, encoding="utf-8")
+    return {"ok": True, "var": True, "hatalar": hatalar, "ozet": _kural_ozeti(k)}
+
+
 @app.post("/api/firma/{kod}/yz-sinav/{yon}")
 def yz_sinav_baslat(kod: str, yon: str):
     """Yapay zekâ sınavı: muavindeki carileri tek tek saklayıp gider hesabını sorar,
@@ -911,9 +954,10 @@ def isle(kod: str, tip: str, body: IsleBody):
         ornekler_ = gider_yz.ogrenilen_kalem_ornekleri(gider_ogrenme, body.yon) + gider_yz.gecmis_ornekler(gecmis_s, body.yon)
         gider_onerici = gider_yz.onerici(d, km.hesaplar, alt_, body.yon, kullanim_, ornekler_)
         kalem_onerici = gider_yz.kalem_onerici(d, km.hesaplar, alt_, body.yon, kullanim_, ornekler_)
+    kurallar_ = fatura_kural.firma_kurallari(d, km.hesaplar) if tip == "fatura" else None
     fisler, uyarilar = isleyici.isle(tip, tum_ham, km, fis_bas, yon=body.yon, pdf_faturalar=pdf_faturalar,
                                      gider_ogrenme=gider_ogrenme, gider_onerici=gider_onerici,
-                                     kalem_onerici=kalem_onerici)
+                                     kalem_onerici=kalem_onerici, kurallar=kurallar_)
     if sunucu_pdf_not:
         uyarilar.append(sunucu_pdf_not)
     if yz_bekleyen:
