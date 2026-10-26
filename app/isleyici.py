@@ -2369,11 +2369,14 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         elif alis_iadesi and kurallar.iade.get("alis_iadesi") not in ("", "asil"):
             sabit_iade = kurallar.iade["alis_iadesi"]
         ogr = None if satis_iadesi else (gider_ogrenme or {}).get(f"{hy}|{norm(cari_ad)}")
-        kayit_hesabi = ""
-        if f.get("kayitli_fis") and not iade and hasattr(km, "fatura_kayit_hesabi"):
-            kayit_hesabi = km.fatura_kayit_hesabi(f["kayitli_fis"], _fno_anahtar(f.get("fatura_no")), hy)
-            if kayit_hesabi not in alt_kodlar:
-                kayit_hesabi = ""
+        kayit_hesabi, kayit_satir = "", []
+        if f.get("kayitli_fis") and not iade and hasattr(km, "fatura_kayit_satirlari"):
+            kayit_satir = [x for x in km.fatura_kayit_satirlari(f["kayitli_fis"], _fno_anahtar(f.get("fatura_no")), hy)
+                           if x[0] in alt_kodlar]
+            top_ = {}
+            for h_, t_ in kayit_satir:
+                top_[h_] = top_.get(h_, 0) + t_
+            kayit_hesabi = max(top_, key=top_.get) if top_ else ""
         # carinin geçmişi birden çok gelir/gider hesabına dağılmışsa (aynı müşteriye hem ticari mal
         # 600.05 hem hafriyat 600.06): carinin en sık hesabı kesin değil — kalem bazında seçilmeli
         dag_ = gecmis_es.get("ana_dagilim") or {}
@@ -2435,6 +2438,17 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                           if k.startswith(onek_) and v in alt_kodlar}
             eksik_ = False
             for k in kalem_hesap_detay:
+                if kayit_satir:
+                    # fatura fiş listesinde kayıtlı: kalem, kayıttaki aynı tutarlı satırın hesabına
+                    # (tek hesaplıysa o hesaba) — öğrenmeden de önce: kayıt kesin bilgidir
+                    h_ = None
+                    if k.get("t") is not None:
+                        h_ = next((h for h, t in kayit_satir if abs(t - k["t"]) < 0.05), None)
+                    if h_ is None and len({h for h, _ in kayit_satir}) == 1:
+                        h_ = kayit_satir[0][0]
+                    if h_:
+                        k["k"], k["kk"] = h_, "kayit"
+                        continue
                 o_ = _kalem_ogrenilmis(k.get("a", ""), ogrenilen_) if ogrenilen_ else None
                 if o_ and not o_[1]:
                     # kullanıcının bu kalem için birebir öğrettiği hesap her şeyden önce gelir
@@ -2487,7 +2501,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             # (karışık fatura: kiralama + malzeme) bölünür; fatura hesabıyla aynı olanlar onaylı sayılır.
             karisik = len({k["k"] for k in kalem_hesap_detay if k.get("kk") == "yz"}) > 1
             for k in kalem_hesap_detay:
-                if k.get("kk") in ("ogrenme", "benzer", "kural"):
+                if k.get("kk") in ("ogrenme", "benzer", "kural", "kayit"):
                     continue
                 if k.get("kk") == "yz" and (not fatura_guvenilir or (karisik and k["k"] != gider_kod)):
                     continue
@@ -2529,6 +2543,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 tutar = kalan if i == len(sirali) - 1 else round(g["t"], 2)
                 kalan = round(kalan - tutar, 2)
                 kaynak_ = ("yz" if "yz" in g["kk"] else "ogrenme_kalem_benzer" if "benzer" in g["kk"]
+                           else "gecmis" if g["kk"] <= {"kayit"}
                            else "ogrenme_kalem" if g["kk"] <= {"ogrenme"}
                            else "kural" if "kural" in g["kk"] else None)
                 out.append((kod, tutar, g["a"], kaynak_))

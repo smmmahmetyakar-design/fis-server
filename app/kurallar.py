@@ -862,16 +862,22 @@ class KuralMotoru:
         return None if ad_var else kayitlar[0][0]
 
     def fatura_kayit_hesabi(self, fisno: str, fatura_no: str, yon: str = "alis") -> str:
-        """Fatura geçmişte kayıtlıysa o fişte (fatura numarasının geçtiği satırlarda, yoksa fişin
-        tamamında) kullanılan gelir/gider hesabı — en büyük tutarlı olan. Aynı cari hem mal hem
+        top = {}
+        for kod, v in self.fatura_kayit_satirlari(fisno, fatura_no, yon):
+            top[kod] = top.get(kod, 0) + v
+        return max(top, key=top.get) if top else ""
+
+    def fatura_kayit_satirlari(self, fisno: str, fatura_no: str, yon: str = "alis") -> list:
+        """-> [(hesap, tutar)]: fatura geçmişte kayıtlıysa o fişte (fatura numarasının geçtiği
+        satırlarda, yoksa fişin tamamında) kullanılan gelir/gider satırları. Aynı cari hem mal hem
         hizmet faturası kesiyorsa (600.05 / 600.06) carinin genel alışkanlığından daha kesindir."""
         if not fisno:
-            return ""
+            return []
         mizan_kodlari = {k for k, _ in self.hesaplar}
         satirlar = [r for r in self.gecmis.get("satirlar", []) if str(r.get("fisno", "")) == str(fisno)]
         ilgili = [r for r in satirlar if fatura_no and fatura_no in
                   (str(r.get("detay", "")) + " " + str(r.get("fis_aciklama", ""))).upper()] or satirlar
-        top = {}
+        out = []
         for r in ilgili:
             kod = str(r.get("hesap", "")).strip()
             if kod not in mizan_kodlari:
@@ -885,8 +891,8 @@ class KuralMotoru:
                     continue
                 v = float(r.get("borc", 0) or 0)
             if v > 0:
-                top[kod] = top.get(kod, 0) + v
-        return max(top, key=top.get) if top else ""
+                out.append((kod, round(v, 2)))
+        return out
 
     def son_fis_no(self):
         """Geçmiş fişlerdeki en yüksek fiş numarası."""

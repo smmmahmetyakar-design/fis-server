@@ -58,6 +58,24 @@ def test_karisik_musteri():
     assert "600.05 (1)" in yeni[0].get("not", ""), yeni
 
 
+def test_kayitli_fatura_ogrenmeden_once():
+    """Kalem 'BALANS TAŞ' bir kez 600.06'ya öğretilmiş; ama fatura fiş listesinde 600.05 ile kayıtlı:
+    kayıt kesindir, öğrenme onu ezmez. Kayıtlı olmayan yeni faturada öğrenme geçerli."""
+    from app.kurallar import norm
+    d = Path(tempfile.mkdtemp()); km = _km(d)
+    satirlar = [["XYZ2026000000004", "05.07.2026", "KAPPA PLASTİK LTD", "TICARI", "SATIS", 120, 20, 20, 100],
+                ["XYZ2026000000009", "06.07.2026", "KAPPA PLASTİK LTD", "TICARI", "SATIS", 240, 40, 40, 200]]
+    pdfler = [{"fatura_no": no, "cari_ad": "KAPPA PLASTİK LTD", "dosya": f"{no}.pdf", "kalem_aciklamalari": ["BALANS TAŞ"],
+               "kalem_detay": [{"a": "BALANS TAŞ", "t": t}]} for no, t in (("XYZ2026000000004", 100.0),
+                                                                          ("XYZ2026000000009", 200.0))]
+    ogr = {f"kalem|satis|{norm('BALANS TAŞ')}": "600.06"}
+    fisler, uy = isleyici.isle_fatura([{"dosya": "liste.xlsx", "tablolar": [[BASLIK] + satirlar]}], km, 10,
+                                      yon="satis", pdf_faturalar=pdfler, gider_ogrenme=ogr)
+    assert [s["hesap"] for s in _gelir(fisler, "XYZ2026000000004")] == ["600.05"], _gelir(fisler, "XYZ2026000000004")
+    assert [s["hesap"] for s in _gelir(fisler, "XYZ2026000000009")] == ["600.06"], _gelir(fisler, "XYZ2026000000009")
+
+
 if __name__ == "__main__":
     test_karisik_musteri()
-    print("1/1 kontrol gecti")
+    test_kayitli_fatura_ogrenmeden_once()
+    print("2/2 kontrol gecti")
