@@ -782,6 +782,27 @@ def ogrenme_yaz(path: Path, data: dict):
 
 
 # ----------------------------------------------------------------- eşleştirme
+def _fis_basi_ana(satirlar, uygun, taraf):
+    """Her fişin (faturanın) asıl gelir/gider hesabı = o fişte uygun hesaplardan en büyük tutarlı olan;
+    -> {hesap: kaç faturada asıl hesap}. Satır saymak, her faturada bulunan ikinci hesabı (ÖİV gibi)
+    'karışık' gösterirdi."""
+    fis = {}
+    for r in satirlar:
+        kod = str(r.get("hesap", "")).strip()
+        v = float(r.get(taraf, 0) or 0)
+        if kod and v > 0 and uygun(kod):
+            # bir fişte birden çok fatura olabilir (günlük satış fişi): fatura no varsa ona göre
+            m = KuralMotoru._FATURA_NO_RE.search(str(r.get("detay", "")).upper())
+            anahtar = m.group(1) if m else (str(r.get("fisno", "")), str(r.get("detay", ""))[:40])
+            d = fis.setdefault(anahtar, {})
+            d[kod] = d.get(kod, 0) + v
+    dag = {}
+    for d in fis.values():
+        k = max(d, key=d.get)
+        dag[k] = dag.get(k, 0) + 1
+    return dag
+
+
 class KuralMotoru:
     """
     Bir firma + belge tipi (banka/fatura/cek) için hesap eşleştirme yapar.
@@ -839,6 +860,33 @@ class KuralMotoru:
             ad_var = ad_var or len(kw) >= 2
         # açıklamada firma adı hiç yoksa (yalnızca numara yazılmışsa) numaraya güven
         return None if ad_var else kayitlar[0][0]
+
+    def fatura_kayit_hesabi(self, fisno: str, fatura_no: str, yon: str = "alis") -> str:
+        """Fatura geçmişte kayıtlıysa o fişte (fatura numarasının geçtiği satırlarda, yoksa fişin
+        tamamında) kullanılan gelir/gider hesabı — en büyük tutarlı olan. Aynı cari hem mal hem
+        hizmet faturası kesiyorsa (600.05 / 600.06) carinin genel alışkanlığından daha kesindir."""
+        if not fisno:
+            return ""
+        mizan_kodlari = {k for k, _ in self.hesaplar}
+        satirlar = [r for r in self.gecmis.get("satirlar", []) if str(r.get("fisno", "")) == str(fisno)]
+        ilgili = [r for r in satirlar if fatura_no and fatura_no in
+                  (str(r.get("detay", "")) + " " + str(r.get("fis_aciklama", ""))).upper()] or satirlar
+        top = {}
+        for r in ilgili:
+            kod = str(r.get("hesap", "")).strip()
+            if kod not in mizan_kodlari:
+                continue
+            if yon == "satis":
+                if not kod.startswith(("600", "601", "602")):
+                    continue
+                v = float(r.get("alacak", 0) or 0)
+            else:
+                if kod.startswith(("1", "3")) and not kod.startswith(("15", "25", "26")) or kod.startswith(("689",)):
+                    continue
+                v = float(r.get("borc", 0) or 0)
+            if v > 0:
+                top[kod] = top.get(kod, 0) + v
+        return max(top, key=top.get) if top else ""
 
     def son_fis_no(self):
         """Geçmiş fişlerdeki en yüksek fiş numarası."""
@@ -945,6 +993,7 @@ class KuralMotoru:
                                           "370", "380", "391")))
             sira = tutar_sirasi(satirlar, ana)
             sonuc["ana"] = sira[0] if sira else ""
+            sonuc["ana_dagilim"] = _fis_basi_ana(satirlar, lambda k: ana(k) and k in mizan_kodlari, "borc")
             # ikinci gider hesabı (ör. Turkcell'de 689 ÖİV) — faturadaki ek vergi buraya
             sonuc["ek"] = sira[1] if len(sira) > 1 else ""
             sonuc["kdv"] = list(dict.fromkeys(k for k in (str(r.get("hesap", "")).strip() for r in satirlar)
@@ -957,6 +1006,8 @@ class KuralMotoru:
         else:
             sonuc["cari"] = say_sec(satirlar, lambda k: k.startswith(("120", "121")), borc_mu=True)
             sonuc["ana"] = say_sec(satirlar, lambda k: k.startswith(("600", "601", "602", "603", "610", "611", "612")), borc_mu=False)
+            sonuc["ana_dagilim"] = _fis_basi_ana(satirlar, lambda k: k.startswith(("600", "601", "602"))
+                                                 and k in mizan_kodlari, "alacak")
             # tevkifatlı satış: 391'in BORCUNA yazılan hesap tevkifat hesabıdır (KDV alacakta)
             # (iade faturasında normal KDV hesabı da borçlanır: yalnız hiç alacağa yazılmamış olan sayılır)
             k391 = [(str(r.get("hesap", "")).strip(), float(r.get("borc", 0) or 0), float(r.get("alacak", 0) or 0))

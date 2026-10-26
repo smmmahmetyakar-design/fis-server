@@ -2369,6 +2369,19 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
         elif alis_iadesi and kurallar.iade.get("alis_iadesi") not in ("", "asil"):
             sabit_iade = kurallar.iade["alis_iadesi"]
         ogr = None if satis_iadesi else (gider_ogrenme or {}).get(f"{hy}|{norm(cari_ad)}")
+        kayit_hesabi = ""
+        if f.get("kayitli_fis") and not iade and hasattr(km, "fatura_kayit_hesabi"):
+            kayit_hesabi = km.fatura_kayit_hesabi(f["kayitli_fis"], _fno_anahtar(f.get("fatura_no")), hy)
+            if kayit_hesabi not in alt_kodlar:
+                kayit_hesabi = ""
+        # carinin geçmişi birden çok gelir/gider hesabına dağılmışsa (aynı müşteriye hem ticari mal
+        # 600.05 hem hafriyat 600.06): carinin en sık hesabı kesin değil — kalem bazında seçilmeli
+        dag_ = gecmis_es.get("ana_dagilim") or {}
+        karisik_hesap = ""
+        if len(dag_) > 1:
+            sira_ = sorted(dag_.items(), key=lambda x: -x[1])
+            if gider_kod in dag_:       # geçmişin seçtiği hesap dışında bir hesap da kullanılmış
+                karisik_hesap = ", ".join(f"{k} ({n})" for k, n in sira_[:4])
         kalem_es = None if satis_iadesi else _kalem_ogrenmesi(f, gider_ogrenme, hy, alt_kodlar)
         if sabit_iade:
             gider_kod, gider_kaynak = sabit_iade, "kural"
@@ -2377,6 +2390,10 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             # 610 hesabı yok: satışın kendi hesabı ters kayıtla (borç) — kontrol
             gider_kod = gider_kod if gider_kod in alt_kodlar else vars_gider_yon[hy]
             gider_kaynak = "tahmin"
+        elif kayit_hesabi:
+            # fatura fiş listesinde zaten kayıtlı: o fişteki hesap (carinin genel alışkanlığı değil)
+            gider_kod, gider_kaynak = kayit_hesabi, "gecmis"
+            gider_not = f"Bu fatura fiş {f.get('kayitli_fis')} ile kayıtlı — hesap o fişten"
         elif kalem_es and not kalem_es["benzer"]:
             # kullanıcının bu kalem açıklaması için seçtiği hesap (cariden bağımsız, en özel bilgi)
             gider_kod, gider_kaynak, gider_not = kalem_es["kod"], "ogrenme_kalem", kalem_es["not"]
@@ -2653,6 +2670,10 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
             if gecmis_es.get("zayif") and cari_kaynak != "ogrenme" and \
                     ((s["rol"] == "gider" and gider_kaynak == "gecmis") or s["rol"] == "cari"):
                 kontrol.append("benzer_ad")
+            if s["rol"] == "gider" and karisik_hesap and s.get("kaynak") == "gecmis" and not kayit_hesabi:
+                kontrol.append("gider_karisik")
+                s["not"] = (f"Bu cari geçmişte birden çok hesaba yazılmış: {karisik_hesap} — kaleme göre doğru "
+                            f"hesabı seçin; düzeltme kalem açıklamasına öğrenilir")
             if kontrol:
                 s["kontrol"] = kontrol
             return s
