@@ -3104,16 +3104,17 @@ def isle_cek(hamlar, km, fis0):
         kime_temiz = _isim_temizle(kime)
 
         # -- GİRİŞ FİŞİ (alım tarihinde) --
-        giris_detay = f"{alim_fmt}-{banka}-{vade_fmt}VDLİ-{kimden_temiz}" if alim_fmt and banka else kimden
+        # Luca'daki kayıt biçimi: "23758-KUVEYT TURK-30.08.2026VDLİ-TOPRAKBEY" (fiş açıklaması = detay)
+        giris_detay = _cek_aciklama(cek_no, banka, vade_fmt, kimden_temiz) or kimden
         kimden_hesap, kimden_kaynak = km.eslestir(kimden)
         if not kimden_hesap:
             kimden_hesap = "198.01.001"
             uyarilar.append(f"GİRİŞ {kimden[:25]}: hesap eşleşmedi")
 
         fisno = f"{fis:05d}"
-        fisler.append(_sat(fisno, alim_tarih, "ÇEK GİRİŞİ", CEK_HESAP, tutar, 0,
+        fisler.append(_sat(fisno, alim_tarih, giris_detay or "ÇEK GİRİŞİ", CEK_HESAP, tutar, 0,
             evrak_no=cek_no, detay=giris_detay, kaynak="cek"))
-        fisler.append(_sat(fisno, alim_tarih, "ÇEK GİRİŞİ", kimden_hesap, 0, tutar,
+        fisler.append(_sat(fisno, alim_tarih, giris_detay or "ÇEK GİRİŞİ", kimden_hesap, 0, tutar,
             evrak_no=cek_no, detay=giris_detay, kaynak=kimden_kaynak))
         fis += 1
 
@@ -3123,7 +3124,7 @@ def isle_cek(hamlar, km, fis0):
             if not cikis_tarih:
                 cikis_tarih = alim_tarih  # çıkış tarihi yoksa alım tarihi kullan
 
-            cikis_detay = f"{_tarih_gg(cikis_tarih)}-{banka}-{vade_fmt}VDLİ-{kimden_temiz}-{kime_temiz}" if banka else f"{kimden_temiz}-{kime_temiz}"
+            cikis_detay = _cek_aciklama(cek_no, banka, vade_fmt, kime_temiz) or kime
 
             # Özel durumlar: FİRMA ORTAĞINA ÇIKIŞ / ORTAKTAN GİRİŞ
             kime_arama = kime
@@ -3138,13 +3139,34 @@ def isle_cek(hamlar, km, fis0):
                 uyarilar.append(f"ÇIKIŞ {kime[:25]}: hesap eşleşmedi")
 
             fisno = f"{fis:05d}"
-            fisler.append(_sat(fisno, cikis_tarih, "ÇEK ÇIKIŞI", kime_hesap, tutar, 0,
+            fisler.append(_sat(fisno, cikis_tarih, cikis_detay or "ÇEK ÇIKIŞI", kime_hesap, tutar, 0,
                 evrak_no=cek_no, detay=cikis_detay, kaynak=kime_kaynak))
-            fisler.append(_sat(fisno, cikis_tarih, "ÇEK ÇIKIŞI", CEK_HESAP, 0, tutar,
+            fisler.append(_sat(fisno, cikis_tarih, cikis_detay or "ÇEK ÇIKIŞI", CEK_HESAP, 0, tutar,
                 evrak_no=cek_no, detay=cikis_detay, kaynak="cek"))
             fis += 1
 
     return fisler, uyarilar
+
+
+def _cek_aciklama(cek_no, banka, vade_gg, kisi):
+    """'ÇEKNO-BANKA-VADEVDLİ-KİŞİ'; boş parçalar atlanır (vade yoksa VDLİ yazılmaz)."""
+    parca = [str(cek_no or "").strip(), str(banka or "").strip(), f"{vade_gg}VDLİ" if vade_gg else "",
+             str(kisi or "").strip()]
+    if not any(parca[:3]):
+        return ""
+    return "-".join(x for x in parca if x)
+
+
+def _cek_no_temiz(v):
+    """Excel'den sayı gelen çek no: 23758.0 -> '23758'."""
+    if v is None:
+        return ""
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    s = str(v).strip()
+    if re.fullmatch(r"\d+\.0+", s):
+        s = s.split(".")[0]
+    return s
 
 
 def _tarih_gg(tarih_str):
@@ -3200,7 +3222,8 @@ def _cek_listesi_oku(hamlar):
                     elif cn.strip() in ("BANKA", "BANKA "): harita["banka"] = ci
                     elif "SUBE" in cn: harita["sube"] = ci
                     elif "VADE" in cn: harita["vade"] = ci
-                    elif "CEK NO" in cn or "CEK NUMARASI" in cn or "SENET NO" in cn: harita["cek_no"] = ci
+                    elif ("CEK NO" in cn or "CEKNO" in cn or "CEK NUMARA" in cn or "SENET NO" in cn
+                          or "SERI NO" in cn or cn in ("CEK", "SERI", "NUMARA")): harita["cek_no"] = ci
                     elif "TUTAR" in cn or "BEDEL" in cn: harita["tutar"] = ci
                     elif "KIME" in cn or "VERILDI" in cn: harita["kime"] = ci
                     elif "CIKIS" in cn and "TARIH" in cn: harita["cikis_tarih"] = ci
@@ -3230,7 +3253,7 @@ def _cek_listesi_oku(hamlar):
                     "banka": str(g(row, "banka") or "").strip().upper(),
                     "sube": str(g(row, "sube") or "").strip(),
                     "vade": _tarih_iso(g(row, "vade")),
-                    "cek_no": str(g(row, "cek_no") or "").strip(),
+                    "cek_no": _cek_no_temiz(g(row, "cek_no")),
                     "tutar": tutar,
                     "kime": str(g(row, "kime") or "").strip(),
                     "cikis_tarih": _tarih_iso(g(row, "cikis_tarih")),
