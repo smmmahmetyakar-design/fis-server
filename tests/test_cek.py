@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import isleyici  # noqa: E402
 from app.kurallar import KuralMotoru  # noqa: E402
 
-MIZAN = [("101.01.001", "TL ÇEKLER"), ("120.01.001", "KAPPA PLASTİK LTD"), ("320.01.001", "OMEGA DEMİR AŞ")]
+MIZAN = [("101.01.001", "TL ÇEKLER"), ("600.05", "TİCARİ MAL SATIŞI"), ("120.01.001", "KAPPA PLASTİK LTD"), ("320.01.001", "OMEGA DEMİR AŞ")]
 BASLIK = ["NO", "ALIM TARİH", "KİMDEN ALINDI", "BANKA", "ŞUBE", "VADE", "ÇEK NO", "TUTARI", "KİME VERİLDİ",
           "ÇIKIŞ TARİH"]
 
@@ -22,7 +22,13 @@ def _km(d: Path) -> KuralMotoru:
     for k, a in MIZAN:
         ws.append([k, a])
     wb.save(d / "mizan.xlsx")
-    return KuralMotoru(d / "mizan.xlsx", None, d / "ogr.json", None)
+    # geçmişte KAPPA adı satış faturası fişinde 600.05 satırının detayında geçiyor
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Fiş Aktarım Şablonu"
+    ws.append(["FİŞ NO", "FİŞ TARİHİ", "FİŞ AÇIKLAMA", "HESAP KODU", "DETAY AÇIKLAMA", "BORÇ", "ALACAK"])
+    for i in range(3):
+        ws.append([str(i), "01.03.2026", "SATIŞ", "600.05", "KAPPA PLASTİK LTD", 0, 100])
+    wb.save(d / "gecmis.xlsx")
+    return KuralMotoru(d / "mizan.xlsx", None, d / "ogr.json", d / "gecmis.xlsx")
 
 
 def test_cek_no_aciklamada():
@@ -38,6 +44,9 @@ def test_cek_no_aciklamada():
     giris, cikis = g[:2], g[2:]
     assert all(s["detay"] == "23758-KUVEYT TURK-30.08.2026VDLİ-KAPPAPLASTİKLTD" for s in giris), giris
     assert all(s["fis_aciklama"] == s["detay"] for s in g), g
+    # çeki veren müşteri: 600 değil cari hesap alacak
+    assert [(s["hesap"], s["borc"], s["alacak"]) for s in giris] == [("101.01.001", 350000, 0),
+                                                                      ("120.01.001", 0, 350000)], giris
     assert all(s["detay"] == "23758-KUVEYT TURK-30.08.2026VDLİ-KAPPAPLASTİKLTD-OMEGA DEMİR AŞ" for s in cikis), cikis
     assert [(s["hesap"], s["borc"], s["alacak"]) for s in cikis] == [("320.01.001", 350000, 0),
                                                                       ("101.01.001", 0, 350000)], cikis

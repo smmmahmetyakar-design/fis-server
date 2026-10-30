@@ -3031,6 +3031,13 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
 
 
 # ----------------------------------------------------------------- ÇEK
+# çek giriş/çıkışında karşı hesap: cari, ortak, personel, avans, faktoring, banka/tahsil hesapları
+_CEK_KARSI_ONEK = ("101.02", "101.03", "102", "103", "108", "120", "121", "126", "127", "128", "131", "132",
+                   "133", "135", "136", "138", "159", "195", "196", "198", "300", "303", "304", "320", "321",
+                   "326", "329", "331", "332", "333", "335", "336", "340", "350", "420", "421", "426", "429",
+                   "431", "432", "433", "436", "440")
+
+
 def isle_cek(hamlar, km, fis0):
     """
     Çek listesi -> muhasebe fişi.
@@ -3072,7 +3079,7 @@ def isle_cek(hamlar, km, fis0):
         fis = fis0
         for k in sorted(kayitlar, key=lambda x: x["tarih"] or ""):
             fisno = f"{fis:05d}"
-            cari, kaynak = km.eslestir(k["aciklama"])
+            cari, kaynak = km.eslestir(k["aciklama"], onekler=_CEK_KARSI_ONEK)
             tutar = abs(k["tutar"])
             if tutar == 0: continue
             fisler.append(_sat(fisno, k["tarih"], "ÇEK GİRİŞİ", CEK_HESAP, tutar, 0,
@@ -3106,7 +3113,9 @@ def isle_cek(hamlar, km, fis0):
         # -- GİRİŞ FİŞİ (alım tarihinde) --
         # Luca'daki kayıt biçimi: "23758-KUVEYT TURK-30.08.2026VDLİ-TOPRAKBEY" (fiş açıklaması = detay)
         giris_detay = _cek_aciklama(cek_no, banka, vade_fmt, kimden_temiz) or kimden
-        kimden_hesap, kimden_kaynak = km.eslestir(kimden)
+        # karşı hesap yalnız cari/bilanço hesabı olur: geçmişte aynı ad satış faturası detayında geçtiği için
+        # 600'e (ya da 391'e) gitmesin
+        kimden_hesap, kimden_kaynak = km.eslestir(kimden, onekler=_CEK_KARSI_ONEK)
         if not kimden_hesap:
             kimden_hesap = "198.01.001"
             uyarilar.append(f"GİRİŞ {kimden[:25]}: hesap eşleşmedi")
@@ -3135,7 +3144,7 @@ def isle_cek(hamlar, km, fis0):
             elif "FAKTORİNG" in kime_upper or "FAKTORING" in kime_upper:
                 kime_arama = kime  # faktoring şirketi adıyla ara
 
-            kime_hesap, kime_kaynak = km.eslestir(kime_arama)
+            kime_hesap, kime_kaynak = km.eslestir(kime_arama, onekler=_CEK_KARSI_ONEK)
             if not kime_hesap:
                 kime_hesap = "198.01.001"
                 uyarilar.append(f"ÇIKIŞ {kime[:25]}: hesap eşleşmedi")
