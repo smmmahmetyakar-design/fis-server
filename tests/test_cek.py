@@ -38,7 +38,7 @@ def test_cek_no_aciklamada():
     giris, cikis = g[:2], g[2:]
     assert all(s["detay"] == "23758-KUVEYT TURK-30.08.2026VDLİ-KAPPAPLASTİKLTD" for s in giris), giris
     assert all(s["fis_aciklama"] == s["detay"] for s in g), g
-    assert all(s["detay"] == "23758-KUVEYT TURK-30.08.2026VDLİ-OMEGADEMİRAŞ" for s in cikis), cikis
+    assert all(s["detay"] == "23758-KUVEYT TURK-30.08.2026VDLİ-KAPPAPLASTİKLTD-OMEGA DEMİR AŞ" for s in cikis), cikis
     assert [(s["hesap"], s["borc"], s["alacak"]) for s in cikis] == [("320.01.001", 350000, 0),
                                                                       ("101.01.001", 0, 350000)], cikis
     k = [s for s in fisler if s["evrak_no"] == "5341489"]

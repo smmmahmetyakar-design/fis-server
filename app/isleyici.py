@@ -3124,7 +3124,9 @@ def isle_cek(hamlar, km, fis0):
             if not cikis_tarih:
                 cikis_tarih = alim_tarih  # çıkış tarihi yoksa alım tarihi kullan
 
-            cikis_detay = _cek_aciklama(cek_no, banka, vade_fmt, kime_temiz) or kime
+            # verilen çek: "8008968-GARANTİ-24.09.2026VDLİ-HYKYOK-VOLKAN AVCI" (alınan yer boşluksuz, verilen yer olduğu gibi)
+            kime_ad = " ".join(str(kime).upper().split())
+            cikis_detay = _cek_aciklama(cek_no, banka, vade_fmt, "-".join(x for x in (kimden_temiz, kime_ad) if x)) or kime
 
             # Özel durumlar: FİRMA ORTAĞINA ÇIKIŞ / ORTAKTAN GİRİŞ
             kime_arama = kime
