@@ -52,7 +52,7 @@ _HESAP_BASLIK = {"ALACAKLAR", "ALACAKLARI", "ALACAGI", "BORCLAR", "BORCLARI", "B
                  "HESAPLARI", "KARSILIGI", "TAHAKKUK", "KESINTI", "KESINTILERI", "FONLAR", "SGK", "PRIM", "IADE", "IADESI"}
 
 _MASRAF_KELIME = {"KOMISYON", "KOMISYONU", "BSMV", "MASRAF", "MASRAFI", "MASRAFLARI", "UCRET", "UCRETI",
-                  "UCRETLERI", "ISLETIM", "AIDAT", "AIDATI", "KESINTI", "UC"}
+                  "UCRETLERI", "ISLETIM", "AIDAT", "AIDATI", "KESINTI", "UC", "KMV"}   # KMV: kambiyo muamele vergisi
 _DOVIZ_KELIME = {"DOVIZ", "KAMBIYO", "ARBITRAJ", "FX"}
 _VIRMAN_KELIME = {"VIRMAN", "HESAPLARARASI", "HESAPLAR"}
 
@@ -179,23 +179,26 @@ def _baslik_bul(tablo):
             if not c:
                 continue
             if c in ("TARIH SAAT", "TARIH", "ISLEM TARIHI", "ISLEM TARIHI SAAT", "TARIH VE SAAT") or \
-                    (c.startswith("TARIH") and "ARALIGI" not in c) or c in ("ISLEM ZAMANI", "ZAMAN"):
+                    (c.startswith("TARIH") and "ARALIGI" not in c) or c in ("ISLEM ZAMANI", "ZAMAN") or \
+                    c in ("DATE", "TRANSACTION DATE", "DATE TIME"):           # İngilizce ekstre (Ziraat vb.)
                 hh.setdefault("tarih", j)
-            elif c in ("VALOR", "VALOR TARIHI"):
+            elif c in ("VALOR", "VALOR TARIHI", "VALUE DATE"):
                 hh.setdefault("tarih_valor", j)
-            elif "BAKIYE" in c and "ONCEKI" not in c:
+            elif ("BAKIYE" in c and "ONCEKI" not in c) or c == "BALANCE":
                 hh.setdefault("bakiye", j)
-            elif ("GELIR" in c and "TUTAR" in c) or c in ("GIREN", "GELEN", "YATAN", "ALACAK TUTARI", "ALACAK"):
+            elif ("GELIR" in c and "TUTAR" in c) or c in ("GIREN", "GELEN", "YATAN", "ALACAK TUTARI", "ALACAK", "CREDIT"):
                 hh["giris"] = j
-            elif ("GIDER" in c and "TUTAR" in c) or c in ("CIKAN", "GIDEN", "CEKILEN", "BORC TUTARI", "BORC"):
+            elif ("GIDER" in c and "TUTAR" in c) or c in ("CIKAN", "GIDEN", "CEKILEN", "BORC TUTARI", "BORC", "DEBIT"):
                 hh["cikis"] = j
-            elif "ISLEM TUTARI" in c or "TUTAR TL" in c or c == "TUTAR" or c == "MIKTAR" or c.startswith("TUTAR"):
+            elif "ISLEM TUTARI" in c or "TUTAR TL" in c or c == "TUTAR" or c == "MIKTAR" or c.startswith("TUTAR") or \
+                    c in ("AMOUNT", "TRANSACTION AMOUNT"):
                 hh.setdefault("tutar", j)
-            elif "ACIKLAMA" in c or c in ("ISLEM ACIKLAMASI", "DETAY"):
+            elif "ACIKLAMA" in c or c in ("ISLEM ACIKLAMASI", "DETAY", "EXPLANATION", "DESCRIPTION"):
                 hh.setdefault("aciklama", j)
             elif ("GONDER" in c or "UNVAN" in c or "KARSI TARAF" in c) and "aciklama" not in hh:
                 hh["aciklama_ek"] = j
-            elif "REFERANS" in c or "DEKONT" in c or "FIS NO" in c:
+            elif "REFERANS" in c or "DEKONT" in c or "FIS NO" in c or c in ("INVOICE NO", "INVOICE NO.", "REFERENCE",
+                                                                               "RECEIPT NO", "RECEIPT NO."):
                 hh.setdefault("referans", j)
             elif "ISLEM TIPI" in c or c == "ISLEM" or c == "ETIKET" or c == "ISLEM TURU" or c == "ISLEM KODU":
                 hh.setdefault("islem_tipi", j)
@@ -1268,6 +1271,9 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
             kontrol = "zayif"
             not_ = "Geçmişte bu açıklamanın başı banka masraf hesabına yazılmış — masraf mı, kontrol edin"
         coklu = cok_hesapli_ad(r, en)
+        # ad mizanda birkaç hesapta (331 / 500 / 501 ortak) ama geçmişte bu yönde hep aynı hesaba yazılmış: kesin
+        if coklu and kaynak == "gecmis" and gec[en]["adet"] >= 3 and pay >= 0.9 and len(sirali) == 1:
+            coklu = None
         if coklu and kontrol is None:
             kontrol = "belirsiz"
             not_ = f"Bu ad mizanda {len(coklu)} hesapta var ({', '.join(coklu[:5])}) — doğru hesabı seçin"
@@ -1498,6 +1504,32 @@ def isle_banka(hamlar, km, fis0, banka_hesabi_bul=None, kur_getir=None):
                 if t_:
                     hesap, kaynak, kontrol = t_, "virman", "belirsiz"
                     not_ = "Kendi hesaplarınız arası transfer (açıklamadaki banka adından) — kontrol edin"
+        if (not hesap or kontrol == "eslesmedi") and not r["doviz"] and set(r["kel"]) & _DOVIZ_KELIME:
+            dv_ = next((d_ for a_, d_ in (("USD", "USD"), ("EUR", "EUR"), ("GBP", "GBP"), ("CHF", "CHF"))
+                        if re.search(rf"\b{a_}\b", norm(r["aciklama"]))), None)
+            fxh = [k for k, a in hesaplar if dv_ and k in alt and k.startswith("102") and k != r["banka"]
+                   and re.search(rf"\b{dv_}\b|{'EURO' if dv_ == 'EUR' else 'DOLAR' if dv_ == 'USD' else '#'}", norm(a))]
+            if len(fxh) == 1:
+                hesap, kaynak, kontrol = fxh[0], "virman", "belirsiz"
+                not_ = f"Döviz alım/satımı — {dv_} hesabının ekstresi yüklenmedi; döviz tutarını ve hesabı kontrol edin"
+            elif dv_:
+                kontrol = "eslesmedi"
+                not_ = (f"Döviz alım/satımı — mizanda {dv_} banka hesabı yok (102'de {dv_} hesabı açıp seçin)"
+                        if not fxh else f"Döviz alım/satımı — mizanda birden çok {dv_} hesabı var: {', '.join(fxh[:4])}")
+        if (not hesap or kontrol == "eslesmedi") and "ATM" in set(r["kel"]):
+            # ATM'ye yatan / çekilen nakit: geçmişte bu firmanın ATM işlemleri (hangi yönde olursa olsun)
+            # hangi hesaba yazılmışsa (kasa ya da ortak) o önerilir
+            say = defaultdict(int)
+            for o in gecmis.ornekler:
+                if "ATM" in o["kel"] and o["hesap"] in kodlar and not o["hesap"].startswith("102"):
+                    say[o["hesap"]] += 1
+            if say:
+                hesap = max(say, key=say.get); kaynak = "gecmis"; kontrol = "zayif"
+                not_ = f"ATM nakit işlemi — geçmişte ATM işlemleri {hesap} hesabına yazılmış ({say[hesap]} kez); kontrol edin"
+            elif any(k == "100" or k.startswith("100.") for k in alt):
+                hesap = next(k for k in sorted(alt) if k.startswith("100.")) if any(k.startswith("100.") for k in alt) else "100"
+                kaynak, kontrol = "mizan", "zayif"
+                not_ = "ATM nakit işlemi — kasa önerildi; ortak/personel ise düzeltin"
         if (not hesap or kontrol == "eslesmedi") and r.get("_mevduat_yok"):
             vh = next((k for k, a in hesaplar if k in alt and not k.startswith("102") and "VADELI" in norm(a)), "")
             if vh:

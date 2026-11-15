@@ -15,6 +15,25 @@ def _ext(name: str) -> str:
     return Path(name).suffix.lower()
 
 
+def _stil_onar(raw: bytes) -> bytes:
+    """xlsx içindeki styles.xml'de openpyxl'in okuyamadığı boş <fill/> öğelerini 'none' dolguya çevirir."""
+    import re
+    import warnings
+    import zipfile
+    zin = zipfile.ZipFile(io.BytesIO(raw))
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for n in zin.namelist():
+            d = zin.read(n)
+            if n.lower().endswith("styles.xml"):
+                s = d.decode("utf-8-sig", errors="replace")
+                s = re.sub(r"<((?:\w+:)?)fill\s*/>", r'<\1fill><\1patternFill patternType="none"/></\1fill>', s)
+                d = s.encode("utf-8")
+            z.writestr(n, d)
+    warnings.filterwarnings("ignore", message="Workbook contains no default style")
+    return out.getvalue()
+
+
 def excel_oku(path: Path):
     import openpyxl
     # openpyxl dosya YOLUNDAKİ uzantıya bakar: '.xls' uzantılı ama içeriği
@@ -22,7 +41,12 @@ def excel_oku(path: Path):
     # uzantıdan bağımsız, doğrudan içeriğe göre okur.
     with open(path, "rb") as f:
         raw = f.read()
-    wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True)
+    except (TypeError, ValueError, KeyError, IndexError):
+        # Bazı banka dışa aktarımlarının (ör. Ziraat İngilizce ekstre) stil dosyası bozuk: boş <fill/>
+        # openpyxl'i düşürür. Stil dosyasını onarıp yeniden dene.
+        wb = openpyxl.load_workbook(io.BytesIO(_stil_onar(raw)), data_only=True)
     tablolar = []
     for sn in wb.sheetnames:
         ws = wb[sn]
@@ -146,19 +170,30 @@ def ocr_tablo(img):
     img = ImageOps.autocontrast(img, cutoff=1)
     W, H = img.size
     yer = {}
-    for _, _, ws in veri(img.crop((0, 0, W, min(H, int(W * 1.2)))), "--psm 6", _ocr_lang()):
-        for x, y, t in ws:
-            n = nrm(t)
-            for k, adlar in baslik.items():
-                if n in adlar and k not in yer:
-                    yer[k] = (x, y)
+    ust = img.crop((0, 0, W, min(H, int(W * 1.2))))
+    # iki satırlı başlık ("Transaction / Amount") psm 6'da bozulur: dağınık metin kipiyle (psm 11) yeniden dene
+    for cfg in ("--psm 6", "--psm 11"):
+        for _, _, ws in veri(ust, cfg, _ocr_lang()):
+            for x, y, t in ws:
+                n = nrm(t)
+                for k, adlar in baslik.items():
+                    if n in adlar and k not in yer:
+                        yer[k] = (x, y)
+                if n in ("INVOICE", "FIS", "DEKONT", "REFERANS", "REFERENCE") and "ara" not in yer:
+                    yer["ara"] = (x, y)
+        if {"tarih", "aciklama", "tutar"} <= set(yer):
+            break
     if not {"tarih", "aciklama", "tutar"} <= set(yer):
         return None
+    ara = yer.pop("ara", None)
     y0 = int(max(y for _, y in yer.values()) + 0.012 * W)
     xa = yer["aciklama"][0] - int(0.006 * W)
     xt = yer["tutar"][0] - int(0.012 * W)        # tutarlar sağa yaslı, başlığın biraz solundan başlar
     xb = yer["bakiye"][0] - int(0.012 * W) if "bakiye" in yer else W
-    sut = {"tarih": (0, min(yer["tarih"][0] + int(0.11 * W), xa)), "aciklama": (xa, xt),
+    t_son = min(yer["tarih"][0] + int(0.11 * W), xa)
+    if ara and yer["tarih"][0] < ara[0] < xa:
+        t_son = min(t_son, ara[0] - int(0.004 * W))      # tarih ile açıklama arasında fiş/dekont no sütunu
+    sut = {"tarih": (0, t_son), "aciklama": (xa, xt),
            "tutar": (xt, xb), "bakiye": (xb, W)}
     oku = {}
     for k, (a, b) in sut.items():
