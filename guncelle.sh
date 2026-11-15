@@ -31,16 +31,38 @@ if [ "$1" != "--yeni-surum" ]; then
   fi
 fi
 
+calistir() {
+  sudo docker run -d --name fis-otomasyon --restart unless-stopped \
+    -p 8091:8091 -v /srv/apps/fis-server/data:/data \
+    -v /srv/veri/firmalar:/firmalar:ro \
+    --add-host=host.docker.internal:host-gateway \
+    -e OLLAMA_URL="$OLLAMA_URL" -e OLLAMA_MODEL="$OLLAMA_MODEL" -e FATURA_PDF_YZ="$FATURA_PDF_YZ" \
+    fis-otomasyon
+}
+
+# Önce yeni imaj kurulur; kurulum (ör. internet kesintisi) başarısız olursa çalışan eski sürüm
+# durdurulmaz — araç kapalı kalmasın. Ağ hatasına karşı 3 deneme.
+echo "== Docker imajı kuruluyor =="
+kuruldu=0
+for deneme in 1 2 3; do
+  if sudo docker build -t fis-otomasyon .; then kuruldu=1; break; fi
+  echo "== Kurulum başarısız (deneme $deneme/3), 20 sn sonra tekrar denenecek =="
+  sleep 20
+done
+if [ "$kuruldu" != 1 ]; then
+  echo "!! Docker imajı kurulamadı (internet bağlantısını kontrol edin). Eski sürüm çalışmaya devam ediyor."
+  # container yoksa (önceki yarım kalmış güncellemede silinmiş olabilir) eski imajla yeniden aç
+  if ! sudo docker start fis-otomasyon 2>/dev/null; then
+    calistir || true
+  fi
+  sudo docker ps | grep fis-otomasyon || echo "!! Araç açılamadı"
+  exit 1
+fi
+
 echo "== Docker container yeniden başlatılıyor =="
 sudo docker stop fis-otomasyon 2>/dev/null || true
 sudo docker rm fis-otomasyon 2>/dev/null || true
-sudo docker build -t fis-otomasyon .
-sudo docker run -d --name fis-otomasyon --restart unless-stopped \
-  -p 8091:8091 -v /srv/apps/fis-server/data:/data \
-  -v /srv/veri/firmalar:/firmalar:ro \
-  --add-host=host.docker.internal:host-gateway \
-  -e OLLAMA_URL="$OLLAMA_URL" -e OLLAMA_MODEL="$OLLAMA_MODEL" -e FATURA_PDF_YZ="$FATURA_PDF_YZ" \
-  fis-otomasyon
+calistir
 
 echo "== Bitti =="
 sudo docker ps | grep fis-otomasyon

@@ -11,7 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /srv
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# yavaş / kopan bağlantıda (files.pythonhosted.org 'Read timed out') hemen düşmesin
+RUN pip install --no-cache-dir --default-timeout=120 --retries 10 -r requirements.txt
 
 COPY app ./app
 
