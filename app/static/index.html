@@ -1218,9 +1218,9 @@ function render(r){
     return `<td class="l fat-ic">${kalHTML}${tutar}${tevk}</td>`;
   };
   const ilkSatir=new Set(); { const g=new Set(); gosterilecek.forEach(x=>{ if(!g.has(x.fisno)){ g.add(x.fisno); ilkSatir.add(x._idx); } }); }
-  // faturada her fatura (fiş no + evrak no) bitişinde kalın ayırıcı çizgi
+  // her muhasebe fişinin bitişinde kalın ayırıcı çizgi (faturada fiş no + evrak no, banka/çekte fiş no)
   const grupSon=new Set();
-  if(fatSut){ const anahtar=x=>`${x.fisno}|${x.evrak_no||''}`;
+  { const anahtar=fatSut?(x=>`${x.fisno}|${x.evrak_no||''}`):(x=>`${x.fisno}`);
     gosterilecek.forEach((x,k)=>{ const y=gosterilecek[k+1]; if(!y || anahtar(y)!==anahtar(x)) grupSon.add(x._idx); }); }
   const satirSinif=s=>`${s.hesap?'':'warn'}${s.kontrol&&s.kontrol.length?' kontrol-satir':''}${grupSon.has(s._idx)?' grup-son':''}`;
   h+=gosterilecek.map(s=>{
@@ -1498,7 +1498,7 @@ function fisRender(){
         <td><button class="btn btn-x" onclick="fisSil(${r._i})" title="Sil">🗑</button></td>
       </tr>`;
     });
-    html+=`<tr class="${cls}"><td colspan="3"></td><td class="l"><button class="btn" style="background:#e8e2d2;color:#5a5238;padding:2px 10px;font-size:11px" onclick="fisKalemEkle('${g}')">+ kalem</button></td>`;
+    html+=`<tr class="${cls} grup-son"><td colspan="3"></td><td class="l"><button class="btn" style="background:#e8e2d2;color:#5a5238;padding:2px 10px;font-size:11px" onclick="fisKalemEkle('${g}')">+ kalem</button></td>`;
     if(gr.length>1) html+=`<td colspan="3" style="font-size:11px;color:#666">${gr.length} kalem</td><td style="font-weight:600">${nf(gT)}</td><td colspan="2"></td>`;
     else html+=`<td colspan="6"></td>`;
     html+=`</tr>`;
@@ -1537,9 +1537,10 @@ function fisOnizleRender(r){
   let h='';
   if(dz) h+='<datalist id="fisHesapDL2">'+hesaplar.map(x=>`<option value="${x.kod}">${x.kod} — ${x.ad}</option>`).join('')+'</datalist>';
   h+=`<table style="font-size:12px"><thead><tr><th>Fiş No</th><th>Tarih</th><th class="l">Hesap</th><th>Borç</th><th>Alacak</th><th class="l">Açıklama</th></tr></thead><tbody>`;
+  const fisSon=i=>{ const y=fisOnizleSatir[i+1]; return !y || `${y.fisno}`!==`${fisOnizleSatir[i].fisno}`; };
   h+=fisOnizleSatir.map((s,i)=>{
     if(dz){
-      return `<tr>
+      return `<tr class="${fisSon(i)?'grup-son':''}">
         <td><input value="${s.fisno||''}" onchange="fisEdit(${i},'fisno',this.value)" style="width:100px"></td>
         <td><input value="${s.fis_tarih||''}" onchange="fisEdit(${i},'fis_tarih',this.value)" style="width:96px"></td>
         <td class="l"><input list="fisHesapDL2" value="${s.hesap||''}" onchange="fisEdit(${i},'hesap',this.value)" style="width:150px"></td>
@@ -1548,7 +1549,7 @@ function fisOnizleRender(r){
         <td class="l"><input value="${(s.detay||'').replace(/"/g,'&quot;')}" onchange="fisEdit(${i},'detay',this.value)" style="width:100%"></td>
       </tr>`;
     }
-    return `<tr class="${s.hesap?'':'warn'}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.detay||''}</td></tr>`;
+    return `<tr class="${s.hesap?'':'warn'}${fisSon(i)?' grup-son':''}"><td>${s.fisno}</td><td>${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l">${s.detay||''}</td></tr>`;
   }).join('');
   const dengeli=Math.abs(t.b-t.al)<0.01;
   h+=`</tbody><tfoot><tr class="tot"><td colspan="3" class="l">TOPLAM</td><td>${nf(t.b)}</td><td>${nf(t.al)}</td><td class="l">${dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td></tr></tfoot></table>`;
