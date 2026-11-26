@@ -8,3 +8,4 @@ pytesseract==0.3.13
 Pillow==11.0.0
 xlrd==2.0.1
 PyYAML==6.0.2
+lxml==5.3.0

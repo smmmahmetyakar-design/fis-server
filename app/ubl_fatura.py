@@ -72,15 +72,124 @@ def ubl_mu(data: bytes) -> bool:
 
 
 def html_gorunum(data: bytes) -> bytes | None:
-    """ZIP içinde GİB'in ürettiği HTML görüntüsü varsa onu döndürür (faturayı açmak için)."""
-    if not _zip_mi(data):
+    """Faturanın okunur görüntüsü (HTML), şu sırayla:
+    1) ZIP içinde GİB/entegratörün ürettiği HTML,
+    2) XML'in içine gömülü XSLT şablonu (e-Fatura'da cac:AdditionalDocumentReference) ile dönüştürme,
+    3) o da yoksa / çalışmazsa XML alanlarından kurulan sade fatura sayfası."""
+    if _zip_mi(data):
+        try:
+            z = zipfile.ZipFile(io.BytesIO(data))
+            ad = next((a for a in z.namelist() if a.lower().endswith((".html", ".htm"))), None)
+            if ad:
+                return z.read(ad)
+        except zipfile.BadZipFile:
+            return None
+    xmller = xmlleri(data)
+    if not xmller:
+        return None
+    xml = xmller[0][1]
+    return xslt_gorunum(xml) or sade_gorunum(xml)
+
+
+def _gomulu_xslt(kok) -> bytes | None:
+    """UBL içindeki gömülü XSLT (base64) şablonu."""
+    import base64
+    for ref in kok.findall("cac:AdditionalDocumentReference", _NS):
+        ek = ref.find("cac:Attachment/cbc:EmbeddedDocumentBinaryObject", _NS)
+        if ek is None or not (ek.text or "").strip():
+            continue
+        ad = (ek.get("filename") or "").lower()
+        tur = (_t(ref, "cbc:DocumentType") + " " + _t(ref, "cbc:DocumentTypeCode")).upper()
+        if ad.endswith((".xslt", ".xsl")) or "XSLT" in tur:
+            try:
+                return base64.b64decode(re.sub(r"\s+", "", ek.text))
+            except ValueError:
+                continue
+    return None
+
+
+def xslt_gorunum(xml_bytes: bytes) -> bytes | None:
+    """Faturaya gömülü XSLT ile HTML üretir (lxml gerekir). Şablon dosya/ağ erişemez."""
+    try:
+        from lxml import etree as LET
+    except ImportError:
         return None
     try:
-        z = zipfile.ZipFile(io.BytesIO(data))
-        ad = next((a for a in z.namelist() if a.lower().endswith((".html", ".htm"))), None)
-        return z.read(ad) if ad else None
-    except zipfile.BadZipFile:
+        kok = ET.fromstring(xml_bytes)
+        sablon = _gomulu_xslt(kok)
+        if not sablon:
+            return None
+        guvenli = LET.XMLParser(resolve_entities=False, no_network=True, huge_tree=True)
+        xslt = LET.XSLT(LET.fromstring(sablon, guvenli),
+                        access_control=LET.XSLTAccessControl.DENY_ALL)
+        sonuc = xslt(LET.fromstring(xml_bytes, guvenli))
+        html = bytes(sonuc)
+        return html if html.strip() else None
+    except Exception:          # bozuk / desteklenmeyen şablon: sade görünüme düşülür
         return None
+
+
+def sade_gorunum(xml_bytes: bytes) -> bytes | None:
+    """Gömülü şablonu olmayan XML için sade fatura sayfası."""
+    from html import escape as e
+    try:
+        kok = ET.fromstring(xml_bytes)
+        h = ayristir(xml_bytes)
+    except Exception:
+        return None
+    para = h["para"]
+
+    def nf(v):
+        return f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+    def taraf(baslik, t):
+        return f"<div class='taraf'><div class='bas'>{baslik}</div><b>{e(t['ad'] or '—')}</b>" \
+               f"{'<div>VKN/TCKN: ' + e(t['vkn']) + '</div>' if t['vkn'] else ''}</div>"
+
+    satir = []
+    for i, ln in enumerate(kok.findall("cac:InvoiceLine", _NS) + kok.findall("cac:CreditNoteLine", _NS), 1):
+        mik = ln.find("cbc:InvoicedQuantity", _NS)
+        if mik is None:
+            mik = ln.find("cbc:CreditedQuantity", _NS)
+        miktar = f"{nf(float(mik.text))} {e(mik.get('unitCode') or '')}" if mik is not None and mik.text else ""
+        oran = ""
+        for st in ln.findall("cac:TaxTotal/cac:TaxSubtotal", _NS):
+            if _t(st, "cac:TaxCategory/cac:TaxScheme/cbc:TaxTypeCode") == KDV_KODU:
+                oran = f"%{_n(st, 'cbc:Percent'):g}"
+        ad = _t(ln, "cac:Item/cbc:Name") or _t(ln, "cac:Item/cbc:Description")
+        satir.append(f"<tr><td>{i}</td><td class='l'>{e(ad)}</td><td>{miktar}</td>"
+                     f"<td>{nf(_n(ln, 'cac:Price/cbc:PriceAmount'))}</td><td>{oran}</td>"
+                     f"<td>{nf(_n(ln, 'cbc:LineExtensionAmount'))}</td></tr>")
+    lmt = kok.find("cac:LegalMonetaryTotal", _NS)
+    top = [("Mal/hizmet toplamı", _n(lmt, "cbc:LineExtensionAmount")),
+           ("Toplam iskonto", _n(lmt, "cbc:AllowanceTotalAmount"))]
+    for k in h["kalemler"]:
+        top.append((f"Hesaplanan KDV (%{k['oran']})", k["kdv"] / (h["kur"] or 1)))
+    if h["tevkifat"]:
+        top.append(("KDV tevkifatı", h["tevkifat"] / (h["kur"] or 1)))
+    top += [("Vergiler dahil toplam", _n(lmt, "cbc:TaxInclusiveAmount")),
+            ("Ödenecek tutar", _n(lmt, "cbc:PayableAmount"))]
+    notlar = "".join(f"<div>{e(n.text)}</div>" for n in kok.findall("cbc:Note", _NS) if (n.text or "").strip())
+    tarih = ".".join(reversed(h["tarih"].split("-"))) if h["tarih"] else ""
+    sayfa = f"""<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><title>{e(h['fatura_no'])}</title>
+<style>body{{font-family:Arial,sans-serif;font-size:13px;color:#222;max-width:900px;margin:20px auto;padding:0 16px}}
+h1{{font-size:18px;margin:0 0 4px}} .ust{{display:flex;gap:16px;margin:14px 0}} .taraf{{flex:1;border:1px solid #ccc;padding:8px;border-radius:4px}}
+.bas{{font-size:11px;color:#777;margin-bottom:3px}} table{{border-collapse:collapse;width:100%;margin-top:10px}}
+td,th{{border:1px solid #ccc;padding:4px 6px;text-align:right}} th{{background:#f2f2f2}} .l{{text-align:left}}
+.top{{width:auto;margin-left:auto}} .top tr:last-child td{{font-weight:bold}} .not{{margin-top:12px;color:#555;font-size:12px}}
+.uyari{{color:#8a6d1a;font-size:12px;margin-top:6px}}</style></head><body>
+<h1>{e(h['profil'] or 'e-FATURA')} · {e(h['fatura_tipi'])}</h1>
+<div>Fatura no: <b>{e(h['fatura_no'])}</b> · Tarih: <b>{tarih}</b>{' · Para birimi: ' + e(para) if para not in ('TRY', 'TL') else ''}</div>
+<div class="hint" style="color:#888;font-size:11px">ETTN: {e(h['uuid'])}</div>
+<div class="ust">{taraf('Satıcı', h['satici'])}{taraf('Alıcı', h['alici'])}</div>
+<table><thead><tr><th>#</th><th class="l">Mal / hizmet</th><th>Miktar</th><th>Birim fiyat</th><th>KDV</th><th>Tutar</th></tr></thead>
+<tbody>{''.join(satir)}</tbody></table>
+<table class="top">{''.join(f"<tr><td class='l'>{e(a)}</td><td>{nf(v)} {e(para)}</td></tr>" for a, v in top if v or a in ('Vergiler dahil toplam', 'Ödenecek tutar'))}</table>
+{f'<div class="not"><b>Notlar</b>{notlar}</div>' if notlar else ''}
+{f'<div class="uyari">{e(h["uyari"])}</div>' if h['uyari'] else ''}
+<div class="not">Bu sayfa e-Fatura XML'inden üretilmiş sade görünümdür (faturada görüntü şablonu yoktu).</div>
+</body></html>"""
+    return sayfa.encode("utf-8")
 
 
 # ------------------------------------------------------------------ yardımcılar
