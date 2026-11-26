@@ -2470,7 +2470,7 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
 
         # Belge kaynağı rozeti: yapay zekâ ile tamamlanan > PDF'ten gelen/tamamlanan
         belge_rozet = ("yz" if f.get("yz") else
-                       "pdf" if (f.get("pdf") or f.get("kaynak") == "pdf") else "")
+                       "pdf" if (f.get("pdf") or f.get("kaynak") in ("pdf", "xml")) else "")
 
         # Kalem başına hesap: öğrenilmiş (birebir / benzer) ya da yapay zekâ önerisi
         kalem_hesap_detay = [dict(k) for k in (f.get("kalem_detay") or [])[:12]] or \
@@ -2673,7 +2673,9 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                 if tevk_tahmin:
                     s["tevkifat_tahmin"] = True
             # faturanın PDF'i (arayüzde açıp bakmak için)
-            pdf_ad = f.get("pdf") or (f.get("dosya", "") if (f.get("kaynak") == "pdf" or f.get("pdf_yer")) else "")
+            # (e-Fatura XML'inden gelen faturada da: ZIP'teki GİB görüntüsü ya da aynı numaralı PDF açılır)
+            pdf_ad = f.get("pdf") or f.get("goruntu") or (
+                f.get("dosya", "") if (f.get("kaynak") in ("pdf", "xml") or f.get("pdf_yer")) else "")
             if pdf_ad:
                 s["pdf"] = pdf_ad
                 s["pdf_yer"] = f.get("pdf_yer") or "alan"     # alan: Fatura PDF'leri · belge: 2. bölüm
