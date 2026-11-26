@@ -122,6 +122,7 @@
   .donem-satir select{width:auto;padding:4px 8px}
   .pdf-liste-detay>summary{cursor:pointer;padding:7px 10px;border:1px solid var(--kenar);border-radius:6px;background:#fafbfc;font-size:13px;list-style-position:inside}
   .pdf-liste-detay[open]>summary{border-bottom-left-radius:0;border-bottom-right-radius:0}
+  .pdf-toplu{display:flex;gap:6px;justify-content:flex-end;margin-top:6px}
   .yz-durum{font-size:12px;margin-top:10px;padding:6px 10px;border-radius:6px;background:#f4f4f4;color:#555}
   .yz-durum.acik{background:#eef3fb;color:#24456b}
   .pdf-tablo{width:100%;border-collapse:collapse;font-size:12.5px}
@@ -397,7 +398,7 @@ function sekmeSec(tip){
   $('faturaPdfAlani').style.display = faturaMod ? '' : 'none';
   $('karsBtn3').style.display = faturaMod ? '' : 'none';
   $('faturaPdfYon').textContent = tip==='fatura_satis' ? 'satış' : 'alış';
-  $('faturaPdfListe').innerHTML=''; $('yzDurum').innerHTML='';
+  $('faturaPdfListe').innerHTML=''; $('yzDurum').innerHTML=''; pdfSecili.clear();
   clearTimeout(pdfIzleZamanlayici);
   satirlar=[]; duzenleMod=false; $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
   if(firmaKod) firmaDurum();
@@ -675,6 +676,7 @@ async function faturaPdfYukle(dosyalar){
 }
 
 let pdfListeAcik=false;
+const pdfSecili=new Set();   // toplu silme için seçilen dosyalar
 async function faturaPdfListele(){
   clearTimeout(pdfIzleZamanlayici);
   if(!firmaKod || !aktifTip.startsWith('fatura')) return;
@@ -691,7 +693,7 @@ async function faturaPdfListele(){
     : `Yapay zekâ kapalı (${esc(yz.hata||'ayarlı değil')}). PDF'ler yine metinden okunur; okunamayan alanları önizlemede elle düzeltebilirsin.`;
   const d=v.dosyalar||[];
   if(!d.length){ $('faturaPdfListe').innerHTML='<div class="hint">Henüz PDF yok.</div>'; return; }
-  let h='<table class="pdf-tablo"><thead><tr><th>Fatura no</th><th>Tarih</th><th>Cari</th><th style="text-align:right">Toplam</th><th>Durum</th><th></th></tr></thead><tbody>';
+  let h='<table class="pdf-tablo"><thead><tr><th style="width:24px"><input type="checkbox" id="pdfTumSec" title="Tümünü seç"></th><th>Fatura no</th><th>Tarih</th><th>Cari</th><th style="text-align:right">Toplam</th><th>Durum</th><th></th></tr></thead><tbody>';
   for(const f of d){
     const fl=f.faturalar.length?f.faturalar:[{fatura_no:'',tarih:'',cari_ad:'',toplam:0,eksik:[],yz:[]}];
     fl.forEach((x,i)=>{
@@ -700,6 +702,7 @@ async function faturaPdfListele(){
       const yzNot=x.yz&&x.yz.length?`<div class="yz-not">yapay zekâ: ${x.yz.map(e=>EKSIK_AD[e]||e).join(', ')}</div>`:'';
       const durum=f.faturalar.length>1&&!x.eksik.length&&f.durum!=='okunamadi'?(x.yz.length?'yz_tamamladi':'tam'):f.durum;
       h+=`<tr>
+        <td>${ilk?`<input type="checkbox" class="pdf-sec" data-dosya="${esc(f.dosya)}" ${pdfSecili.has(f.dosya)?'checked':''}>`:''}</td>
         <td>${esc(x.fatura_no)||'<i>?</i>'}${x.ret?` <span class="durum ret" title="${x.ret==='IPTAL'?'İptal edilmiş':'Reddedilmiş'} fatura — fişe alınmaz">${x.ret==='IPTAL'?'İPTAL':'RET'}</span>`:''}${ilk?`<div class="dosya-adi">${esc(f.dosya)}${fl.length>1?` · ${fl.length} fatura`:''}</div>`:''}</td>
         <td>${x.tarih?esc(x.tarih.split('-').reverse().join('.')):'<i>?</i>'}</td>
         <td>${esc(x.cari_ad)||'<i>?</i>'}${yzNot}</td>
@@ -721,7 +724,21 @@ async function faturaPdfListele(){
   const okunuyor=d.filter(f=>f.durum==='yz_sirada'||f.durum==='yz_okunuyor').length;
   $('faturaPdfListe').innerHTML=`<details class="pdf-liste-detay" ${pdfListeAcik?'open':''} ontoggle="pdfListeAcik=this.open">
     <summary><b>${d.length} PDF dosyası · ${tumF} fatura</b>${eksikF?` · <span style="color:#8a6d1a">${eksikF} faturada eksik alan</span>`:' · tümü okundu'}${okunuyor?` · ${okunuyor} okunuyor`:''} <span class="hint">(aç / kapat)</span></summary>
+    <div class="pdf-toplu">
+      <button class="btn btn-kucuk" id="pdfSeciliSil" onclick="faturaPdfTopluSil(false)" disabled>🗑 Seçilenleri sil</button>
+      <button class="btn btn-kucuk" onclick="faturaPdfTopluSil(true)" title="Bu sekmedeki bütün PDF/XML dosyalarını siler">🗑 Tümünü sil (${d.length})</button>
+    </div>
     <div style="overflow-x:auto;margin-top:6px">${h}</div></details>`;
+  // önceki seçimden artık listede olmayanları at
+  const varolan=new Set(d.map(f=>f.dosya)); [...pdfSecili].forEach(x=>{ if(!varolan.has(x)) pdfSecili.delete(x); });
+  const secSay=()=>{ const b=$('pdfSeciliSil'); if(!b) return; b.disabled=!pdfSecili.size;
+    b.textContent=pdfSecili.size?`🗑 Seçilenleri sil (${pdfSecili.size})`:'🗑 Seçilenleri sil';
+    const t=$('pdfTumSec'); if(t){ t.checked=pdfSecili.size===d.length; t.indeterminate=pdfSecili.size>0&&pdfSecili.size<d.length; } };
+  $('faturaPdfListe').querySelectorAll('.pdf-sec').forEach(c=>c.onchange=()=>{
+    c.checked?pdfSecili.add(c.dataset.dosya):pdfSecili.delete(c.dataset.dosya); secSay(); });
+  $('pdfTumSec').onchange=e=>{ $('faturaPdfListe').querySelectorAll('.pdf-sec').forEach(c=>{
+    c.checked=e.target.checked; e.target.checked?pdfSecili.add(c.dataset.dosya):pdfSecili.delete(c.dataset.dosya); }); secSay(); };
+  secSay();
   $('faturaPdfListe').querySelectorAll('[data-sil]').forEach(b=>b.onclick=()=>faturaPdfSil(b.dataset.sil));
   $('faturaPdfListe').querySelectorAll('[data-yz]').forEach(b=>b.onclick=()=>faturaPdfYz(b.dataset.yz));
   // yapay zekâ işi sürüyorsa birkaç saniyede bir yenile
@@ -764,6 +781,19 @@ async function kuralKaldir(){
   if(!firmaKod || !confirm('Bu firmanın fatura kuralları silinsin mi? (yalnız genel kurallar kalır)')) return;
   $('kuralMetin').value='';
   await kuralKaydet();
+}
+async function faturaPdfTopluSil(tumu){
+  const n=tumu?null:[...pdfSecili];
+  if(!tumu && !n.length) return;
+  const soru=tumu?'Bu sekmedeki BÜTÜN fatura PDF/XML dosyaları silinsin mi?':`Seçilen ${n.length} dosya silinsin mi?`;
+  if(!confirm(soru)) return;
+  const r=await fetch(`/api/firma/${firmaKod}/fatura-pdf/${aktifYon()}/toplu-sil`,{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(tumu?{tumu:true}:{dosyalar:n})});
+  const v=await r.json().catch(()=>({}));
+  if(!r.ok){ toast(v.detail||'Silinemedi',false); return; }
+  pdfSecili.clear();
+  toast(`${v.silinen} dosya silindi`,true);
+  faturaPdfListele();
 }
 async function faturaPdfSil(dosya){
   if(!confirm('Bu PDF silinsin mi?\n'+dosya)) return;

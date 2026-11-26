@@ -639,6 +639,27 @@ def fatura_pdf_sil(kod: str, yon: str, fname: str):
     return {"ok": True}
 
 
+class TopluSilBody(BaseModel):
+    dosyalar: list[str] = []
+    tumu: bool = False
+
+
+@app.post("/api/firma/{kod}/fatura-pdf/{yon}/toplu-sil")
+def fatura_pdf_toplu_sil(kod: str, yon: str, body: TopluSilBody):
+    """Seçilen (ya da tümü=true ise bütün) fatura PDF/XML dosyalarını siler."""
+    _yon_kontrol(yon)
+    d = firma_dir(kod)
+    k = fatura_pdf.klasor(d, yon)
+    adlar = [x["dosya"] for x in fatura_pdf.liste(k, yon)] if body.tumu else body.dosyalar
+    adlar = [_guvenli_ad(ad) for ad in adlar]          # geçersiz ad varsa hiçbir şey silinmeden 400
+    silinen = 0
+    for ad in adlar:
+        if (k / ad).exists():
+            silinen += 1
+        fatura_pdf.sil(k, ad)
+    return {"ok": True, "silinen": silinen}
+
+
 @app.post("/api/firma/{kod}/fatura-pdf/{yon}/{fname}/yapay-zeka")
 def fatura_pdf_yz(kod: str, yon: str, fname: str):
     """Eksik kalan bir PDF'i yapay zekâya (yeniden) gönderir."""
