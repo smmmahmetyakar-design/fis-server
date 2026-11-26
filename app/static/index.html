@@ -984,8 +984,9 @@ function pdfLink(s){
     return `<div><label class="pdf-ac pdf-ekle" title="Bu faturanın PDF'ini ekle — KDV dağılımı ve eksikler PDF'ten tamamlanır">📎 PDF ekle<input type="file" accept=".pdf,.xml,.zip" style="display:none" onchange="satirPdfEkle(this)"></label></div>`;
   }
   const yol=s.pdf_yer==='belge'?`belge/${apiTip()}`:`fatura-pdf/${aktifYon()}`;
-  const u=`/api/firma/${firmaKod}/${yol}/${encodeURIComponent(s.pdf)}`+(s.pdf_sayfa?`#page=${s.pdf_sayfa}`:'');
-  return `<div><a class="pdf-ac" href="${u}" target="_blank" rel="noopener" title="${esc(s.pdf)} — faturayı sağda aç (Ctrl+tık: yeni sekmede)">📄 Faturayı aç</a></div>`;
+  // çok faturalı PDF'te sayfa: ?sayfa= adresi faturaya özgü yapar (yalnız #page değişince çerçeve yeniden yüklenmez)
+  const u=`/api/firma/${firmaKod}/${yol}/${encodeURIComponent(s.pdf)}`+(s.pdf_sayfa?`?sayfa=${s.pdf_sayfa}#page=${s.pdf_sayfa}`:'');
+  return `<div><a class="pdf-ac" href="${u}" target="_blank" rel="noopener" data-ad="${esc(s.evrak_no||'')}${s.pdf_sayfa?' · sayfa '+s.pdf_sayfa:''}" title="${esc(s.pdf)} — faturayı sağda aç (Ctrl+tık: yeni sekmede)">📄 Faturayı aç</a></div>`;
 }
 async function satirPdfEkle(inp){
   const f=inp.files[0]; if(!f) return;
@@ -1648,7 +1649,9 @@ loadFirmalar();
 // ---- fatura görüntüsü sağ panelde: "Faturayı aç" bağlantıları yeni sekme yerine burada açılır
 // (Ctrl/Cmd ya da orta tık yine yeni sekmede açar)
 function belgePanelAc(url, ad){
-  $('bpCerceve').src=url; $('bpYeni').href=url; $('bpAd').textContent=ad||'';
+  // aynı dosyanın başka sayfası da olsa çerçeveyi baştan yükle (PDF görüntüleyici yalnız # değişimini izlemez)
+  const c=$('bpCerceve'); if(c.src && c.src.split('#')[0]===url.split('#')[0] && c.src!==url) c.src='about:blank';
+  setTimeout(()=>{ c.src=url; },0); $('bpYeni').href=url; $('bpAd').textContent=ad||'';
   document.body.classList.add('bp-acik');
 }
 function belgePanelKapat(){
@@ -1661,8 +1664,7 @@ document.addEventListener('click',e=>{
   e.preventDefault();
   document.querySelectorAll('a.pdf-ac.acik').forEach(x=>x.classList.remove('acik'));
   a.classList.add('acik');
-  const tr=a.closest('tr'), no=tr?(tr.querySelector('td:nth-child(6)')||{}).textContent:'';
-  belgePanelAc(a.href, (a.title||'').split(' — ')[0] || no);
+  belgePanelAc(a.href, [a.dataset.ad, (a.title||'').split(' — ')[0]].filter(Boolean).join(' — '));
 });
 document.addEventListener('keydown',e=>{ if(e.key==='Escape' && document.body.classList.contains('bp-acik')) belgePanelKapat(); });
 (()=>{ // genişlik: sürükle-bırak, tarayıcıda hatırlanır

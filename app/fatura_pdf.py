@@ -481,8 +481,10 @@ def xml_oncelikli(out: list) -> list:
             ayni = [x for x in xmller.get(_fno(f.get("fatura_no")), [])
                     if ayni_taraf_genel(f.get("cari_ad", ""), x.get("cari_ad", "")) is not False]
             if ayni:
-                if str(f.get("dosya", "")).lower().endswith(".pdf"):
-                    ayni[0].setdefault("goruntu", f["dosya"])
+                if str(f.get("dosya", "")).lower().endswith(".pdf") and "goruntu" not in ayni[0]:
+                    ayni[0]["goruntu"] = f["dosya"]
+                    if f.get("sayfa"):          # çok faturalı PDF'te bu faturanın sayfası
+                        ayni[0]["goruntu_sayfa"] = f["sayfa"]
                 continue
         tekil.append(f)
     return tekil

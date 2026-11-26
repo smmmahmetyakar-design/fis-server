@@ -1833,7 +1833,8 @@ def _liste_pdf_birlestir(liste, pdfler):
             continue
         kullanilan.add(id(p))
         f["pdf"] = p.get("goruntu") or p.get("dosya", "")
-        f["pdf_sayfa"] = p.get("sayfa", 0)
+        # XML'e bağlanan PDF görüntüsünün sayfası (XML kaydının kendi 'sayfa'sı yok)
+        f["pdf_sayfa"] = p.get("goruntu_sayfa", 0) if p.get("goruntu") else p.get("sayfa", 0)
         f["pdf_yer"] = p.get("pdf_yer") or "alan"
         # PDF'teki RET / İPTAL damgası ve tevkifat kodu listede olmayabilir
         if p.get("durum") and not f.get("durum"):
@@ -2674,6 +2675,8 @@ def isle_fatura(hamlar, km, fis0, yon="alis", pdf_faturalar=None,
                     s["tevkifat_tahmin"] = True
             # faturanın PDF'i (arayüzde açıp bakmak için)
             # (e-Fatura XML'inden gelen faturada da: ZIP'teki GİB görüntüsü ya da aynı numaralı PDF açılır)
+            if not f.get("pdf") and f.get("goruntu") and f.get("goruntu_sayfa"):
+                f["pdf_sayfa"] = f["goruntu_sayfa"]
             pdf_ad = f.get("pdf") or f.get("goruntu") or (
                 f.get("dosya", "") if (f.get("kaynak") in ("pdf", "xml") or f.get("pdf_yer")) else "")
             if pdf_ad:
