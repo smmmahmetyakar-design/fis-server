@@ -155,6 +155,23 @@
   .pdf-ac{display:inline-block;margin-top:3px;font-size:11px;padding:1px 6px;border:1px solid #c9d6e6;border-radius:3px;background:#f3f7fc;color:#24456b;text-decoration:none;white-space:nowrap}
   .pdf-ac:hover{background:#e3edf8}
   .pdf-ac.pdf-ekle{cursor:pointer;background:#fff;border-style:dashed;color:#5a6b7a}
+  /* fatura görüntüsü: sayfanın sağında açılan panel */
+  :root{--bp-gen:45vw}
+  body.bp-acik{margin-right:var(--bp-gen)}
+  .belge-panel{position:fixed;top:0;right:0;bottom:0;width:var(--bp-gen);background:#fff;border-left:1px solid #c9d0da;
+    box-shadow:-4px 0 16px rgba(0,0,0,.08);display:none;flex-direction:column;z-index:50}
+  body.bp-acik .belge-panel{display:flex}
+  .bp-ust{display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--ana);color:#fff;font-size:13px}
+  .bp-ust .bp-ad{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bp-ust a,.bp-ust button{color:#fff;background:rgba(255,255,255,.14);border:0;border-radius:4px;padding:3px 9px;font-size:12px;
+    cursor:pointer;text-decoration:none;font-family:inherit}
+  .bp-ust a:hover,.bp-ust button:hover{background:rgba(255,255,255,.28)}
+  .belge-panel iframe{flex:1;border:0;width:100%;background:#fff}
+  .bp-tutamac{position:absolute;left:-4px;top:0;bottom:0;width:8px;cursor:col-resize}
+  body.bp-surukle{user-select:none;cursor:col-resize}
+  body.bp-surukle iframe{pointer-events:none}
+  .pdf-ac.acik{background:#24456b;color:#fff;border-color:#24456b}
+  @media(max-width:900px){ body.bp-acik{margin-right:0} .belge-panel{width:100vw} }
   .gerekce{font-size:10.5px;color:#6a5a8a;margin-top:2px;line-height:1.3;max-width:260px}
   .kaynak.belge-pdf{background:#e0ecf7;color:#24456b}
   .kaynak.belge-yz{background:#e7defa;color:#4b2f86}
@@ -968,7 +985,7 @@ function pdfLink(s){
   }
   const yol=s.pdf_yer==='belge'?`belge/${apiTip()}`:`fatura-pdf/${aktifYon()}`;
   const u=`/api/firma/${firmaKod}/${yol}/${encodeURIComponent(s.pdf)}`+(s.pdf_sayfa?`#page=${s.pdf_sayfa}`:'');
-  return `<div><a class="pdf-ac" href="${u}" target="_blank" rel="noopener" title="${esc(s.pdf)} — faturayı yeni sekmede aç">📄 Faturayı aç</a></div>`;
+  return `<div><a class="pdf-ac" href="${u}" target="_blank" rel="noopener" title="${esc(s.pdf)} — faturayı sağda aç (Ctrl+tık: yeni sekmede)">📄 Faturayı aç</a></div>`;
 }
 async function satirPdfEkle(inp){
   const f=inp.files[0]; if(!f) return;
@@ -1627,5 +1644,47 @@ if(yukleKutu){
 
 loadFirmalar();
 </script>
+<script>
+// ---- fatura görüntüsü sağ panelde: "Faturayı aç" bağlantıları yeni sekme yerine burada açılır
+// (Ctrl/Cmd ya da orta tık yine yeni sekmede açar)
+function belgePanelAc(url, ad){
+  $('bpCerceve').src=url; $('bpYeni').href=url; $('bpAd').textContent=ad||'';
+  document.body.classList.add('bp-acik');
+}
+function belgePanelKapat(){
+  document.body.classList.remove('bp-acik'); $('bpCerceve').src='about:blank';
+  document.querySelectorAll('a.pdf-ac.acik').forEach(a=>a.classList.remove('acik'));
+}
+document.addEventListener('click',e=>{
+  const a=e.target.closest&&e.target.closest('a.pdf-ac[href]');
+  if(!a || e.ctrlKey || e.metaKey || e.shiftKey || e.button!==0) return;
+  e.preventDefault();
+  document.querySelectorAll('a.pdf-ac.acik').forEach(x=>x.classList.remove('acik'));
+  a.classList.add('acik');
+  const tr=a.closest('tr'), no=tr?(tr.querySelector('td:nth-child(6)')||{}).textContent:'';
+  belgePanelAc(a.href, (a.title||'').split(' — ')[0] || no);
+});
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && document.body.classList.contains('bp-acik')) belgePanelKapat(); });
+(()=>{ // genişlik: sürükle-bırak, tarayıcıda hatırlanır
+  try{ const g=localStorage.getItem('bpGen'); if(g) document.documentElement.style.setProperty('--bp-gen',g); }catch(e){}
+  const t=document.querySelector('.bp-tutamac'); if(!t) return;
+  t.addEventListener('mousedown',e=>{
+    e.preventDefault(); document.body.classList.add('bp-surukle');
+    const hareket=ev=>{ const px=Math.min(Math.max(window.innerWidth-ev.clientX,320),window.innerWidth-360);
+      document.documentElement.style.setProperty('--bp-gen',px+'px'); };
+    const bitir=()=>{ document.body.classList.remove('bp-surukle');
+      removeEventListener('mousemove',hareket); removeEventListener('mouseup',bitir);
+      try{ localStorage.setItem('bpGen',getComputedStyle(document.documentElement).getPropertyValue('--bp-gen').trim()); }catch(e){} };
+    addEventListener('mousemove',hareket); addEventListener('mouseup',bitir);
+  });
+})();
+</script>
+<div id="belgePanel" class="belge-panel" aria-label="Fatura görüntüsü">
+  <div class="bp-tutamac" title="Sürükleyerek genişlet / daralt"></div>
+  <div class="bp-ust"><span class="bp-ad" id="bpAd"></span>
+    <a id="bpYeni" target="_blank" rel="noopener" title="Yeni sekmede aç">↗ Yeni sekme</a>
+    <button onclick="belgePanelKapat()" title="Kapat (Esc)">✕</button></div>
+  <iframe id="bpCerceve" title="Fatura görüntüsü"></iframe>
+</div>
 </body>
 </html>
