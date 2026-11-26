@@ -124,11 +124,6 @@
   .pdf-liste-detay[open]>summary{border-bottom-left-radius:0;border-bottom-right-radius:0}
   .yz-durum{font-size:12px;margin-top:10px;padding:6px 10px;border-radius:6px;background:#f4f4f4;color:#555}
   .yz-durum.acik{background:#eef3fb;color:#24456b}
-  .yz-sinav{font-size:12px;margin-top:8px}
-  .yz-sinav table{border-collapse:collapse;width:100%;margin-top:6px;font-size:11.5px}
-  .yz-sinav td,.yz-sinav th{border-bottom:1px solid #e3e3e3;padding:3px 6px;text-align:left;vertical-align:top}
-  .yz-sinav .s-dogru{color:#1e7d3a;font-weight:600} .yz-sinav .s-kabul{color:#8a6d1a;font-weight:600} .yz-sinav .s-yanlis{color:#b0322a;font-weight:600}
-  .yz-sinav .skor{font-size:14px;font-weight:700}
   .pdf-tablo{width:100%;border-collapse:collapse;font-size:12.5px}
   .pdf-tablo th,.pdf-tablo td{border:none;border-bottom:1px solid #efe9dc;padding:6px 6px;text-align:left;vertical-align:top}
   .pdf-tablo th{background:none;color:var(--muted);font-weight:600;font-size:11.5px}
@@ -246,7 +241,6 @@
         <div class="hint" style="margin-top:6px">Birden çok PDF seçebilir ya da buraya sürükleyebilirsin. Birden çok fatura içeren tek PDF de olur. e-Fatura XML'i (ya da GİB'den indirilen .zip) en güvenilir kaynaktır: tutar ve KDV dağılımı ondan kesin okunur, aynı numaralı PDF'in önüne geçer.</div>
       </div>
       <div id="yzDurum" class="yz-durum"></div>
-      <div id="yzSinav" class="yz-sinav"></div>
       <div id="faturaPdfListe" style="margin-top:8px"></div>
       <details id="kuralAlani" class="kural-alani">
         <summary><b>Fatura kuralları (bu firma)</b> <span id="kuralOzet" class="hint">yükleniyor…</span></summary>
@@ -403,7 +397,7 @@ function sekmeSec(tip){
   $('faturaPdfAlani').style.display = faturaMod ? '' : 'none';
   $('karsBtn3').style.display = faturaMod ? '' : 'none';
   $('faturaPdfYon').textContent = tip==='fatura_satis' ? 'satış' : 'alış';
-  $('faturaPdfListe').innerHTML=''; $('yzDurum').innerHTML=''; $('yzSinav').innerHTML='';
+  $('faturaPdfListe').innerHTML=''; $('yzDurum').innerHTML='';
   clearTimeout(pdfIzleZamanlayici);
   satirlar=[]; duzenleMod=false; $('onizle').innerHTML=''; $('duzenleBtn').style.display='none';
   if(firmaKod) firmaDurum();
@@ -695,7 +689,6 @@ async function faturaPdfListele(){
         :`PDF'lerde okunamayan alanlar otomatik gönderilmez; gerekirse satırdaki "Yapay zekâ ile oku" düğmesini kullan.`)+
       `${yz.not?`<br><b>Not:</b> ${esc(yz.not)}`:''}`
     : `Yapay zekâ kapalı (${esc(yz.hata||'ayarlı değil')}). PDF'ler yine metinden okunur; okunamayan alanları önizlemede elle düzeltebilirsin.`;
-  sinavGoster(yz.etkin);
   const d=v.dosyalar||[];
   if(!d.length){ $('faturaPdfListe').innerHTML='<div class="hint">Henüz PDF yok.</div>'; return; }
   let h='<table class="pdf-tablo"><thead><tr><th>Fatura no</th><th>Tarih</th><th>Cari</th><th style="text-align:right">Toplam</th><th>Durum</th><th></th></tr></thead><tbody>';
@@ -734,42 +727,6 @@ async function faturaPdfListele(){
   // yapay zekâ işi sürüyorsa birkaç saniyede bir yenile
   if(d.some(f=>f.durum==='yz_sirada'||f.durum==='yz_okunuyor'))
     pdfIzleZamanlayici=setTimeout(faturaPdfListele, 4000);
-}
-
-let sinavZamanlayici=null;
-async function sinavGoster(etkin){
-  clearTimeout(sinavZamanlayici);
-  if(!firmaKod || !aktifTip.startsWith('fatura')){ $('yzSinav').innerHTML=''; return; }
-  const yon=aktifYon(), firma=firmaKod;
-  let v={durum:'yok'}; try{ v=await (await fetch(`/api/firma/${firma}/yz-sinav/${yon}`)).json(); }catch(e){}
-  if(firma!==firmaKod || aktifYon()!==yon) return;
-  const calisiyor=v.durum==='sirada'||v.durum==='calisiyor';
-  let h=`<button class="btn btn-kucuk" onclick="sinavBaslat()" ${(!etkin||calisiyor)?'disabled':''} title="Muavindeki her cariyi sırayla yokmuş gibi saklayıp yapay zekâya sorar; cevapları muavindeki gerçek kayıtla karşılaştırır">🎓 Yapay zekâyı muavinle sına</button>`;
-  if(v.durum==='yok'){ $('yzSinav').innerHTML=h+' <span class="hint">Yapay zekânın bu firmada ne kadar doğru bildiğini ölçer.</span>'; return; }
-  const n=v.yapilan||0, yuz=x=>n?Math.round(100*x/n):0;
-  h+=` <span class="hint">${esc(v.model||'')} · ${(v.baslangic||'').replace('T',' ').slice(0,16)}</span><div style="margin-top:6px">`;
-  if(calisiyor) h+=`<b>Sınav sürüyor:</b> ${n}/${v.toplam} soru… `;
-  else if(v.durum==='hata') h+=`<b style="color:#b0322a">Sınav yarıda kaldı:</b> ${esc(v.hata||'')} `;
-  if(n) h+=`<span class="skor">Tam doğru: ${v.dogru}/${n} (%${yuz(v.dogru)})</span> · firmanın bu caride kullandığı başka bir hesap: ${v.kabul-v.dogru} · <span class="s-yanlis">yanlış: ${n-v.kabul}</span>`;
-  h+='</div>';
-  const sonuc=v.sonuclar||[], yanlis=sonuc.filter(x=>x.sonuc!=='dogru');
-  const SON={dogru:'doğru',kabul:'kabul',yanlis:'yanlış'};
-  const tablo=list=>`<table><thead><tr><th>Cari</th><th>Muavinde</th><th>Yapay zekâ</th><th></th></tr></thead><tbody>${list.map(x=>`<tr>
-    <td>${esc(x.ad)}<div class="hint">${x.sayi} fatura</div></td>
-    <td>${esc(x.dogru)} ${esc((x.dogru_ad||'').slice(0,28))}${x.kabul.length>1?`<div class="hint">ayrıca: ${esc(x.kabul.filter(k=>k!==x.dogru).join(', '))}</div>`:''}</td>
-    <td>${esc(x.cevap||'—')} ${esc((x.cevap_ad||'').slice(0,28))}${x.gerekce?`<div class="hint">${esc(x.gerekce)}</div>`:''}${x.hata?`<div class="hint">${esc(x.hata)}</div>`:''}</td>
-    <td class="s-${x.sonuc}">${SON[x.sonuc]}</td></tr>`).join('')}</tbody></table>`;
-  if(yanlis.length) h+=`<details ${calisiyor?'':'open'}><summary>Doğru bilemedikleri (${yanlis.length})</summary>${tablo(yanlis)}</details>`;
-  if(sonuc.length) h+=`<details><summary>Tüm sorular (${sonuc.length})</summary>${tablo(sonuc)}</details>`;
-  $('yzSinav').innerHTML=h;
-  if(calisiyor) sinavZamanlayici=setTimeout(()=>sinavGoster(etkin),5000);
-}
-async function sinavBaslat(){
-  const r=await fetch(`/api/firma/${firmaKod}/yz-sinav/${aktifYon()}`,{method:'POST'});
-  if(!r.ok){ toast((await r.json().catch(()=>({}))).detail||'Sınav başlatılamadı',false); return; }
-  const v=await r.json();
-  toast(`Sınav başladı: ${v.toplam} cari sorulacak (her biri birkaç saniye sürer)`,true);
-  sinavGoster(true);
 }
 
 // ---- firma fatura kuralları (data/<firma>/fatura_kurallari.yaml)
