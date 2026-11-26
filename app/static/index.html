@@ -143,6 +143,7 @@
   .kontrol-rozet{display:inline-block;background:#ffd84d;color:#5a4500;font-size:10.5px;font-weight:600;border-radius:3px;padding:0 5px;margin-left:4px;cursor:help}
   .kontrol-onay{font-size:10.5px;padding:0 5px;margin-left:3px;border:1px solid #b9a24a;background:#fffbe6;color:#5a4500;border-radius:3px;cursor:pointer}
   tr.kontrol-satir td{background:#fffbe0}
+  tr.grup-son td{border-bottom:2.5px solid #4a4a4a}
   .fat-ic{font-size:11.5px;min-width:240px;max-width:380px;color:#333}
   .fat-kalem div{line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:370px}
   .kalem-kod{font-weight:600;font-family:ui-monospace,Consolas,monospace;font-size:11px;cursor:help}
@@ -1199,6 +1200,11 @@ function render(r){
     return `<td class="l fat-ic">${kalHTML}${tutar}${tevk}</td>`;
   };
   const ilkSatir=new Set(); { const g=new Set(); gosterilecek.forEach(x=>{ if(!g.has(x.fisno)){ g.add(x.fisno); ilkSatir.add(x._idx); } }); }
+  // faturada her fatura (fiş no + evrak no) bitişinde kalın ayırıcı çizgi
+  const grupSon=new Set();
+  if(fatSut){ const anahtar=x=>`${x.fisno}|${x.evrak_no||''}`;
+    gosterilecek.forEach((x,k)=>{ const y=gosterilecek[k+1]; if(!y || anahtar(y)!==anahtar(x)) grupSon.add(x._idx); }); }
+  const satirSinif=s=>`${s.hesap?'':'warn'}${s.kontrol&&s.kontrol.length?' kontrol-satir':''}${grupSon.has(s._idx)?' grup-son':''}`;
   h+=gosterilecek.map(s=>{
     const i=s._idx;
     if(dz){
@@ -1213,7 +1219,7 @@ function render(r){
         <span style="position:absolute;right:4px;top:50%;transform:translateY(-50%);pointer-events:none;font-size:10px;color:#888">▼</span>
       </div>
       ${hesapAdi?`<div class="hint" style="font-size:10px;margin-top:1px">${hesapAdi.slice(0,32)}</div>`:''}${kontrolHTML(s)}`;
-      return `<tr class="${s.hesap?'':'warn'}${s.kontrol&&s.kontrol.length?' kontrol-satir':''}">
+      return `<tr class="${satirSinif(s)}">
         <td><input type="checkbox" ${s.secili?'checked':''} onchange="edit(${i},'secili',this.checked)"></td>
         <td><input value="${s.fisno||''}" onchange="edit(${i},'fisno',this.value)" style="width:70px"></td>
         <td><input value="${s.fis_tarih||''}" onchange="edit(${i},'fis_tarih',this.value)" style="width:96px"></td>
@@ -1228,7 +1234,7 @@ function render(r){
         </td>
       </tr>`;
     }
-    return `<tr class="${s.hesap?'':'warn'}${s.kontrol&&s.kontrol.length?' kontrol-satir':''}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td style="white-space:nowrap">${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'}${kontrolHTML(s)}${hesapAd(s.hesap)?`<div class="hesap-ad">${esc(hesapAd(s.hesap).slice(0,45))}</div>`:(s.hesap&&hesaplar.length?'<div class="hesap-ad yok">mizanda yok</div>':'')} ${s.kaynak?`<span class="kaynak ${s.kaynak}"${s.not?` title="${esc(s.not)}"`:''}>${KAYNAK_AD[s.kaynak]||s.kaynak}</span>`:''}${s.not?`<div class="gerekce">${esc(s.not)}</div>`:''}${s.belge?` <span class="kaynak belge-${s.belge}" title="${s.belge==='yz'?'Bu faturanın bir kısmı yapay zekâ ile okundu — kontrol et':'Bu faturanın bilgisi PDF\'ten geldi ya da tamamlandı'}">${s.belge==='yz'?'yapay zekâ':'PDF'}</span>`:''}</td>${fatHucre(s,ilkSatir.has(s._idx))}<td style="font-size:11.5px;white-space:nowrap">${s.evrak_no||''}${ilkSatir.has(s._idx)?pdfLink(s):''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
+    return `<tr class="${satirSinif(s)}"><td><input type="checkbox" ${s.secili?'checked':''} onchange="satirlar[${s._idx}].secili=this.checked"></td><td>${s.fisno}</td><td style="white-space:nowrap">${s.fis_tarih}</td><td class="l">${s.hesap||'<i>?</i>'}${kontrolHTML(s)}${hesapAd(s.hesap)?`<div class="hesap-ad">${esc(hesapAd(s.hesap).slice(0,45))}</div>`:(s.hesap&&hesaplar.length?'<div class="hesap-ad yok">mizanda yok</div>':'')} ${s.kaynak?`<span class="kaynak ${s.kaynak}"${s.not?` title="${esc(s.not)}"`:''}>${KAYNAK_AD[s.kaynak]||s.kaynak}</span>`:''}${s.not?`<div class="gerekce">${esc(s.not)}</div>`:''}${s.belge?` <span class="kaynak belge-${s.belge}" title="${s.belge==='yz'?'Bu faturanın bir kısmı yapay zekâ ile okundu — kontrol et':'Bu faturanın bilgisi PDF\'ten geldi ya da tamamlandı'}">${s.belge==='yz'?'yapay zekâ':'PDF'}</span>`:''}</td>${fatHucre(s,ilkSatir.has(s._idx))}<td style="font-size:11.5px;white-space:nowrap">${s.evrak_no||''}${ilkSatir.has(s._idx)?pdfLink(s):''}</td><td>${s.borc?nf(s.borc):''}</td><td>${s.alacak?nf(s.alacak):''}</td><td class="l"><div class="detay-hucre">${(s.detay||'').replace(/</g,'&lt;')}</div></td></tr>`;
   }).join('');
   h+=`</tbody><tfoot style="position:sticky;bottom:0;z-index:1"><tr class="tot"><td colspan="${fatSut?6:5}" class="l">TOPLAM (${gosterilecek.length} satır${bankaSuzgec!=='hepsi'?' · '+bankaSuzgec.slice(0,20):''})</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.borc)||0),0))}</td><td>${nf(gosterilecek.reduce((a,s)=>a+(parseFloat(s.alacak)||0),0))}</td><td class="l">${t.dengeli?'✓ DENGELİ':'⚠ FARK: '+nf(t.b-t.al)}</td>${dz?'<td></td>':''}</tr></tfoot></table></div>`;
   if(r&&r.uyarilar&&r.uyarilar.length) h+='<ul class="uyari uyari-liste">'+r.uyarilar.slice(0,12).map(u=>`<li>${esc(u)}</li>`).join('')+(r.uyarilar.length>12?`<li>… ${r.uyarilar.length-12} uyarı daha</li>`:'')+'</ul>';
